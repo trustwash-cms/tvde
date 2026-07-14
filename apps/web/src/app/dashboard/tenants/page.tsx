@@ -353,7 +353,7 @@ export default function TenantsPage() {
           <input
             className="input md:col-span-2 lg:col-span-1"
             type="email"
-            placeholder="Email do cliente (superadmin)"
+            placeholder="Email do Gestor de Frota"
             name="tenant-admin-email"
             autoComplete="off"
             value={form.adminEmail}
@@ -361,7 +361,7 @@ export default function TenantsPage() {
           />
           <button type="submit" className="btn-primary md:col-span-2 lg:col-span-1">Criar</button>
           <p className="text-xs text-slate-500 md:col-span-2 lg:col-span-3">
-            Se indicar email, é criado um superadmin no workspace principal e enviada uma password
+            Se indicar email, é criado um Gestor de Frota no workspace principal e enviada uma password
             temporária por email (válida 24 horas). No primeiro acesso terá de definir uma nova password.
           </p>
         </form>
@@ -459,7 +459,7 @@ export default function TenantsPage() {
                 {t.provisionedAdmin && (
                   <div className="mb-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
                     <p>
-                      Superadmin pendente: <strong>{t.provisionedAdmin.email}</strong>
+                      Gestor de Frota pendente: <strong>{t.provisionedAdmin.email}</strong>
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
                       {t.provisionedAdmin.tempPasswordExpired

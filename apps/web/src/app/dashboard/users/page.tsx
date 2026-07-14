@@ -211,7 +211,7 @@ export default function UsersPage() {
       <h1 className="mb-2 text-2xl font-bold">Utilizadores</h1>
       <p className="mb-8 text-slate-500">
         {isMaster
-          ? 'Crie superadmins, admins e staff para cada tenant (cliente).'
+          ? 'Crie gestores de frota, motoristas e staff para cada tenant (cliente).'
           : 'Gestão de utilizadores do tenant — cada role só cria/gere níveis inferiores.'}
       </p>
 

@@ -188,7 +188,7 @@ export function SettingsCalendarWhatsappNotification({
           )}
           {!canEdit && (
             <span className="mt-1 block text-xs text-amber-700">
-              Apenas superadmin pode alterar esta definição.
+              Apenas Gestor de Frota pode alterar esta definição.
             </span>
           )}
         </span>

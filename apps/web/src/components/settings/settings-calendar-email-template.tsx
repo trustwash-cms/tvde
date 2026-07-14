@@ -144,7 +144,7 @@ export function SettingsCalendarEmailTemplate({ userRole }: { userRole: Role | n
           </p>
           {!canEdit && (
             <p className="mt-2 text-xs text-amber-700">
-              Apenas superadmin pode alterar o template de email.
+              Apenas Gestor de Frota pode alterar o template de email.
             </p>
           )}
         </div>

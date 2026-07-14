@@ -15,8 +15,8 @@ Projecto independente do CMS, copiado e adaptado para gestão TVDE.
 | Role interna | Etiqueta UI |
 |--------------|-------------|
 | `master` | MASTER |
-| `superadmin` | Superadmin (Gestor de Frota) |
-| `admin` | Admin (Motorista) |
+| `superadmin` | Gestor de Frota |
+| `admin` | Motorista |
 | `staff` | Staff |
 
 ## Arranque local

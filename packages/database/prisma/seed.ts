@@ -33,12 +33,7 @@ const BUSINESS_MODULES = [
 async function main() {
   const masterEmail = envOr('SEED_MASTER_EMAIL', 'master@tvde.local');
   const masterPassword = requireEnv('SEED_MASTER_PASSWORD');
-  const demoSiteId = envOr('SEED_DEMO_SITE_ID', 'frota-demo');
-  const demoTenantName = envOr('SEED_DEMO_TENANT_NAME', 'Frota Demo');
-  const fleetManagerEmail = envOr('SEED_DEMO_FLEET_MANAGER_EMAIL', 'gestor@frota-demo.local');
-  const fleetManagerPassword = requireEnv('SEED_DEMO_FLEET_MANAGER_PASSWORD');
-  const driverEmail = envOr('SEED_DEMO_DRIVER_EMAIL', 'motorista@frota-demo.local');
-  const driverPassword = requireEnv('SEED_DEMO_DRIVER_PASSWORD');
+  const seedDemo = process.env.SEED_DEMO === 'true';
 
   console.log('Seeding TVDE database...');
 
@@ -101,7 +96,15 @@ async function main() {
     });
   }
 
-  const tenant = await prisma.tenant.upsert({
+  if (seedDemo) {
+    const demoSiteId = envOr('SEED_DEMO_SITE_ID', 'frota-demo');
+    const demoTenantName = envOr('SEED_DEMO_TENANT_NAME', 'Frota Demo');
+    const fleetManagerEmail = envOr('SEED_DEMO_FLEET_MANAGER_EMAIL', 'gestor@frota-demo.local');
+    const fleetManagerPassword = requireEnv('SEED_DEMO_FLEET_MANAGER_PASSWORD');
+    const driverEmail = envOr('SEED_DEMO_DRIVER_EMAIL', 'motorista@frota-demo.local');
+    const driverPassword = requireEnv('SEED_DEMO_DRIVER_PASSWORD');
+
+    const tenant = await prisma.tenant.upsert({
     where: { siteId: demoSiteId },
     update: {},
     create: {
@@ -191,19 +194,24 @@ async function main() {
     },
   });
 
-  await prisma.auditLog.create({
-    data: {
-      tenantId: tenant.id,
-      action: 'seed.completed',
-      entityType: 'system',
-      afterJson: { message: 'TVDE initial seed completed' },
-    },
-  });
+    await prisma.auditLog.create({
+      data: {
+        tenantId: tenant.id,
+        action: 'seed.completed',
+        entityType: 'system',
+        afterJson: { message: 'TVDE demo seed completed' },
+      },
+    });
 
-  console.log('Seed completed.');
-  console.log(`  MASTER: ${masterEmail}`);
-  console.log(`  Gestor de Frota (${demoSiteId}): ${fleetManagerEmail}`);
-  console.log(`  Motorista (${demoSiteId}): ${driverEmail}`);
+    console.log('Seed completed.');
+    console.log(`  MASTER: ${masterEmail}`);
+    console.log(`  Gestor de Frota (${demoSiteId}): ${fleetManagerEmail}`);
+    console.log(`  Motorista (${demoSiteId}): ${driverEmail}`);
+  } else {
+    console.log('Seed completed.');
+    console.log(`  MASTER: ${masterEmail}`);
+    console.log('  Demo tenant: omitido (SEED_DEMO não está true no .env)');
+  }
 }
 
 main()

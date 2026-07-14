@@ -113,7 +113,7 @@ function OrganizationHierarchyView({ data }: { data: HierarchyData }) {
                   {node.superadmin ? (
                     <span className="block truncate">{node.superadmin.email}</span>
                   ) : (
-                    <span className="text-amber-600">Sem superadmin</span>
+                    <span className="text-amber-600">Sem gestor de frota</span>
                   )}
                   <span>{teamCount} utilizador(es)</span>
                 </div>
@@ -453,8 +453,8 @@ export default function ClientsPage() {
 
   const appCardDescriptions: Record<string, string> = {
     master:
-      'Clientes da plataforma (tenants) e respetivas equipas — superadmins, admins e staff. Não são clientes fiscais.',
-    superadmin: 'Equipa do seu tenant: admins e staff com acesso ao CMS.',
+      'Clientes da plataforma (tenants) e respetivas equipas — gestores de frota, motoristas e staff. Não são clientes fiscais.',
+    superadmin: 'Equipa do seu tenant: motoristas e staff com acesso à plataforma.',
     admin: 'Staff da sua equipa com acesso ao workspace.',
     staff: 'Contactos e relações no CRM do workspace — leads, parceiros, histórico da app.',
   };

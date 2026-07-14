@@ -12,8 +12,8 @@ export const ROLE_HIERARCHY: Record<Role, number> = {
 /** Etiquetas visíveis no TVDE — semântica diferente do CMS. */
 export const ROLE_LABELS: Record<Role, string> = {
   master: 'MASTER',
-  superadmin: 'Superadmin (Gestor de Frota)',
-  admin: 'Admin (Motorista)',
+  superadmin: 'Gestor de Frota',
+  admin: 'Motorista',
   staff: 'Staff',
 };
 
