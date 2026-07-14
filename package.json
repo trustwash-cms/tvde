@@ -1,0 +1,26 @@
+{
+  "name": "tvde",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build -w @tvde/shared && concurrently \"npm run dev -w @tvde/api\" \"npm run dev -w @tvde/web\"",
+    "dev:api": "npm run build -w @tvde/shared && npm run db:generate && npm run dev -w @tvde/api",
+    "dev:web": "npm run dev -w @tvde/web",
+    "build": "npm run build -w @tvde/shared && npm run build -w @tvde/billing && npm run db:generate && npm run build -w @tvde/database && npm run build -w @tvde/api && npm run build -w @tvde/web",
+    "db:generate": "npm run generate -w @tvde/database",
+    "db:migrate": "set -a && . ./.env && set +a && npm run migrate -w @tvde/database",
+    "db:migrate:deploy": "set -a && . ./.env && set +a && npm run migrate:deploy -w @tvde/database",
+    "db:seed": "set -a && . ./.env && set +a && npm run seed -w @tvde/database",
+    "db:push": "set -a && . ./.env && set +a && npm run push -w @tvde/database",
+    "db:rls": "docker exec -i tvde_postgres psql -U tvde -d tvde < packages/database/prisma/rls.sql",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.7.3"
+  }
+}

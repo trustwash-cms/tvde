@@ -1,0 +1,28 @@
+{
+  "name": "@tvde/billing",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Módulo de facturação portável — provider Moloni (PT) e núcleo local",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "require": "./dist/index.js",
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./moloni": {
+      "types": "./src/providers/moloni/index.ts",
+      "require": "./dist/providers/moloni/index.js",
+      "import": "./src/providers/moloni/index.ts",
+      "default": "./src/providers/moloni/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

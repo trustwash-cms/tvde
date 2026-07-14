@@ -1,0 +1,7 @@
+'use client';
+
+import { BillingDocumentPanel } from '@/components/billing/billing-document-panel';
+
+export default function BillingFaturasReciboPage() {
+  return <BillingDocumentPanel documentType="invoice_receipt" />;
+}

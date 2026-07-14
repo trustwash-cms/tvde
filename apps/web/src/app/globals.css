@@ -1,0 +1,66 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --sidebar-width: 260px;
+  --color-primary: #534AB7;
+  --color-primary-light: #EEEDFE;
+  --color-teal: #0F6E56;
+  --color-blue: #185FA5;
+}
+
+body {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center rounded-lg bg-[var(--color-primary)] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#433aa0] disabled:opacity-50;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50;
+  }
+  .btn-danger {
+    @apply inline-flex items-center justify-center rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-red-700 disabled:opacity-50;
+  }
+  .input {
+    @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary-light)];
+  }
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white p-6 shadow-sm;
+  }
+
+  /* Pré-visualização editor produto (alinhado com loja ARC) */
+  .product-rich-content {
+    font-family: Inter, system-ui, sans-serif;
+    font-size: 0.875rem;
+    line-height: 1.625;
+    color: #4b535d;
+  }
+  .product-rich-content p {
+    margin: 0 0 0.75rem;
+  }
+  .product-rich-content h3,
+  .product-rich-content h4 {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #14171b;
+    margin: 1rem 0 0.5rem;
+  }
+  .product-rich-content strong,
+  .product-rich-content b {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #717986;
+  }
+}
