@@ -72,6 +72,11 @@ model Tenant {
   adminMgmtFaturas          AdminMgmtFatura[]
   adminMgmtLancamentos      AdminMgmtLancamento[]
   adminMgmtImportacoes      AdminMgmtImportacao[]
+  boltConnections           BoltConnection[]
+  boltOrders                BoltOrder[]
+  boltDrivers               BoltDriver[]
+  boltVehicles              BoltVehicle[]
+  boltSyncLogs              BoltSyncLog[]
 
   @@map("tenants")
 }
@@ -139,6 +144,11 @@ model Workspace {
   adminMgmtFaturas        AdminMgmtFatura[]
   adminMgmtLancamentos    AdminMgmtLancamento[]
   adminMgmtImportacoes    AdminMgmtImportacao[]
+  boltConnection          BoltConnection?
+  boltOrders              BoltOrder[]
+  boltDrivers             BoltDriver[]
+  boltVehicles            BoltVehicle[]
+  boltSyncLogs            BoltSyncLog[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -2097,4 +2107,147 @@ model AuditLog {
 
   @@index([tenantId, createdAt])
   @@map("audit_logs")
+}
+
+// ─── Bolt (integração frota) ───
+
+model BoltConnection {
+  id                    String    @id @default(uuid()) @db.Uuid
+  workspaceId           String    @unique @map("workspace_id") @db.Uuid
+  tenantId              String    @map("tenant_id") @db.Uuid
+  clientId              String    @map("client_id")
+  encryptedClientSecret String    @map("encrypted_client_secret")
+  encryptedAccessToken  String?   @map("encrypted_access_token")
+  tokenExpiresAt        DateTime? @map("token_expires_at")
+  boltCompanyId         Int?      @map("bolt_company_id")
+  isActive              Boolean   @default(true) @map("is_active")
+  lastSyncAtOrders      DateTime? @map("last_sync_at_orders")
+  lastSyncAtDrivers     DateTime? @map("last_sync_at_drivers")
+  lastSyncAtVehicles    DateTime? @map("last_sync_at_vehicles")
+  lastError             String?   @map("last_error") @db.Text
+  connectedAt           DateTime? @map("connected_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("bolt_connections")
+}
+
+model BoltOrder {
+  id                     String   @id @default(uuid()) @db.Uuid
+  workspaceId            String   @map("workspace_id") @db.Uuid
+  tenantId               String   @map("tenant_id") @db.Uuid
+  orderReference         String   @map("order_reference")
+  boltCompanyId          Int?     @map("bolt_company_id")
+  driverName             String?  @map("driver_name")
+  driverUuid             String?  @map("driver_uuid")
+  driverPhone            String?  @map("driver_phone")
+  orderStatus            String?  @map("order_status")
+  vehicleModel           String?  @map("vehicle_model")
+  vehicleLicensePlate    String?  @map("vehicle_license_plate")
+  orderCreatedTimestamp  DateTime? @map("order_created_timestamp")
+  ridePrice              Decimal? @map("ride_price") @db.Decimal(12, 2)
+  bookingFee             Decimal? @map("booking_fee") @db.Decimal(12, 2)
+  tollFee                Decimal? @map("toll_fee") @db.Decimal(12, 2)
+  rawJson                Json?    @map("raw_json")
+  syncedAt               DateTime @default(now()) @map("synced_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  stops     BoltOrderStop[]
+
+  @@unique([workspaceId, orderReference])
+  @@index([workspaceId, orderCreatedTimestamp])
+  @@index([tenantId])
+  @@map("bolt_orders")
+}
+
+model BoltOrderStop {
+  id             String   @id @default(uuid()) @db.Uuid
+  orderId        String   @map("order_id") @db.Uuid
+  stopType       String   @map("stop_type")
+  lat            Decimal? @db.Decimal(10, 6)
+  lng            Decimal? @db.Decimal(10, 6)
+  realLat        Decimal? @map("real_lat") @db.Decimal(10, 6)
+  realLng        Decimal? @map("real_lng") @db.Decimal(10, 6)
+  stopOrder      Int      @default(0) @map("stop_order")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  order BoltOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("bolt_order_stops")
+}
+
+model BoltDriver {
+  id                  String    @id @default(uuid()) @db.Uuid
+  workspaceId         String    @map("workspace_id") @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  driverUuid          String    @map("driver_uuid")
+  partnerUuid         String?   @map("partner_uuid")
+  boltCompanyId       Int?      @map("bolt_company_id")
+  name                String?
+  phone               String?
+  email               String?
+  portalStatus        String?   @map("portal_status")
+  createdAtTimestamp  DateTime? @map("created_at_timestamp")
+  syncedAt            DateTime  @default(now()) @map("synced_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, driverUuid])
+  @@index([tenantId])
+  @@map("bolt_drivers")
+}
+
+model BoltVehicle {
+  id            String   @id @default(uuid()) @db.Uuid
+  workspaceId   String   @map("workspace_id") @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  vehicleId     String   @map("vehicle_id")
+  boltCompanyId Int?     @map("bolt_company_id")
+  model         String?
+  year          Int?
+  regNumber     String?  @map("reg_number")
+  vin           String?
+  uuid          String?
+  state         String?
+  portalStatus  String?  @map("portal_status")
+  syncedAt      DateTime @default(now()) @map("synced_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, vehicleId])
+  @@index([tenantId])
+  @@map("bolt_vehicles")
+}
+
+model BoltSyncLog {
+  id              String    @id @default(uuid()) @db.Uuid
+  workspaceId     String    @map("workspace_id") @db.Uuid
+  tenantId        String    @map("tenant_id") @db.Uuid
+  syncType        String    @map("sync_type")
+  status          String
+  recordsSynced   Int       @default(0) @map("records_synced")
+  recordsCreated  Int       @default(0) @map("records_created")
+  recordsUpdated  Int       @default(0) @map("records_updated")
+  errorMessage    String?   @map("error_message") @db.Text
+  startedAt       DateTime  @map("started_at")
+  completedAt     DateTime? @map("completed_at")
+  durationSeconds Int?      @map("duration_seconds")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, startedAt])
+  @@index([tenantId])
+  @@map("bolt_sync_logs")
 }

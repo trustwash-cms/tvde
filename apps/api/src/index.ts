@@ -4,6 +4,7 @@ import { buildApp } from './app';
 import { env } from './config/env';
 import { disconnectRedis, getRedis } from './lib/redis';
 import { startCalendarScheduledInvoiceWorker } from './workers/calendar-scheduled-invoice.worker';
+import { startBoltDailySyncWorker } from './workers/bolt-daily-sync.worker';
 
 let shuttingDown = false;
 
@@ -36,6 +37,7 @@ async function main() {
   await app.listen({ port: env.port, host: env.host });
   console.log(`TVDE API running at http://${env.host}:${env.port}`);
   startCalendarScheduledInvoiceWorker();
+  startBoltDailySyncWorker();
 
   const stop = (signal: string) => {
     void shutdown(app, signal, redisConnected);

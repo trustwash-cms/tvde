@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@tvde/billing": "*",
+    "@tvde/bolt": "*",
     "@tvde/database": "*",
     "@tvde/shared": "*",
     "@fastify/cors": "^10.0.2",

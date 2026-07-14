@@ -7,6 +7,7 @@ import {
   CalendarDays,
   ChevronRight,
   Receipt,
+  Zap,
   UserCircle,
 } from 'lucide-react';
 import {
@@ -52,6 +53,17 @@ const MODULE_CARDS: ModuleCardConfig[] = [
     iconClass: 'text-[var(--color-primary)]',
     iconBgClass: 'bg-[var(--color-primary-light)]',
     canShow: (role) => canAccessDashboardArea(role, 'billing'),
+  },
+  {
+    moduleKey: 'bolt',
+    area: 'bolt',
+    href: WEB_ROUTES.dashboard.bolt.root,
+    label: 'Bolt',
+    description: 'Pedidos, motoristas e veículos da API Bolt.',
+    icon: Zap,
+    iconClass: 'text-violet-700',
+    iconBgClass: 'bg-violet-50',
+    canShow: (role) => canAccessDashboardArea(role, 'bolt'),
   },
   {
     moduleKey: 'calendar',

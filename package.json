@@ -9,7 +9,7 @@
     "dev": "npm run build -w @tvde/shared && concurrently \"npm run dev -w @tvde/api\" \"npm run dev -w @tvde/web\"",
     "dev:api": "npm run build -w @tvde/shared && npm run db:generate && npm run dev -w @tvde/api",
     "dev:web": "npm run dev -w @tvde/web",
-    "build": "npm run build -w @tvde/shared && npm run build -w @tvde/billing && npm run db:generate && npm run build -w @tvde/database && npm run build -w @tvde/api && npm run build -w @tvde/web",
+    "build": "npm run build -w @tvde/shared && npm run build -w @tvde/billing && npm run build -w @tvde/bolt && npm run db:generate && npm run build -w @tvde/database && npm run build -w @tvde/api && npm run build -w @tvde/web",
     "db:generate": "npm run generate -w @tvde/database",
     "db:migrate": "set -a && . ./.env && set +a && npm run migrate -w @tvde/database",
     "db:migrate:deploy": "set -a && . ./.env && set +a && npm run migrate:deploy -w @tvde/database",

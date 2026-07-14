@@ -15,6 +15,7 @@ import {
   Menu,
   X,
   Briefcase,
+  Zap,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
@@ -29,6 +30,7 @@ const navItems = [
   { href: WEB_ROUTES.dashboard.workspaces, label: 'Workspaces', icon: Layers, area: 'workspaces' as const },
   { href: WEB_ROUTES.dashboard.clients, label: 'Clientes', icon: UserCircle, area: 'clients' as const, moduleKey: 'clients' },
   { href: WEB_ROUTES.dashboard.billing.root, label: 'Facturação', icon: Receipt, area: 'billing' as const, moduleKey: 'billing' },
+  { href: WEB_ROUTES.dashboard.bolt.root, label: 'Bolt', icon: Zap, area: 'bolt' as const, moduleKey: 'bolt' },
   { href: WEB_ROUTES.dashboard.calendar, label: 'Calendário', icon: CalendarDays, area: 'calendar' as const, moduleKey: 'calendar' },
   { href: WEB_ROUTES.dashboard.adminMgmt.root, label: ADMIN_MGMT_MODULE_NAME, icon: Briefcase, area: 'admin_mgmt' as const, moduleKey: 'admin_mgmt' },
   { href: WEB_ROUTES.dashboard.users, label: 'Utilizadores', icon: Users, area: 'users' as const },
@@ -59,6 +61,7 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (pathname === href) return true;
   if (area === 'settings' && pathname.startsWith('/dashboard/settings')) return true;
   if (area === 'billing' && pathname.startsWith('/dashboard/billing')) return true;
+  if (area === 'bolt' && pathname.startsWith('/dashboard/bolt')) return true;
   if (area === 'calendar' && pathname.startsWith('/dashboard/calendar')) return true;
   if (area === 'admin_mgmt' && pathname.startsWith('/dashboard/admin-mgmt')) return true;
   return false;

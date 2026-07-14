@@ -42,6 +42,7 @@ export const DASHBOARD_ACCESS: Record<string, Role> = {
   workspaces: 'superadmin',
   clients: 'staff',
   billing: 'staff',
+  bolt: 'staff',
   calendar: 'staff',
   admin_mgmt: 'staff',
   users: 'admin',

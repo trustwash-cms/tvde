@@ -3,6 +3,7 @@ import type { Role } from '@tvde/shared';
 import { filterTvdeModules } from '@tvde/shared';
 import { getMoloniPublicStatus } from './billing.service';
 import { getSmsPublicInfo } from './sms.service';
+import { getBoltPublicStatus } from './bolt.service';
 import { getModuleCapabilities } from './tenant-modules.service';
 
 export type ModuleHealthStatus = 'core' | 'ok' | 'warning' | 'error' | 'inactive';
@@ -84,6 +85,26 @@ async function healthForIntegration(
     };
   }
 
+  if (moduleKey === 'bolt') {
+    if (!workspaceId || !tenantId) {
+      return { status: 'warning', label: 'Sem workspace', detail: 'Seleccione um workspace' };
+    }
+    const bolt = await getBoltPublicStatus(workspaceId, tenantId);
+    if (bolt.moduleAuthorized === false) {
+      return { status: 'inactive', label: 'Não autorizado', detail: 'Autorize Bolt no tenant' };
+    }
+    if (bolt.moduleActive === false) {
+      return { status: 'warning', label: 'Inactivo', detail: 'Active Bolt no workspace' };
+    }
+    if (!bolt.configured) {
+      return { status: 'error', label: 'Não configurado', detail: 'Configure Bolt API' };
+    }
+    if (!bolt.connected) {
+      return { status: 'error', label: 'Sem ligação', detail: bolt.statusMessage };
+    }
+    return { status: 'ok', label: 'Operacional', detail: bolt.statusMessage };
+  }
+
   if (moduleKey === 'admin_mgmt') {
     if (!workspaceId) {
       return { status: 'warning', label: 'Sem workspace', detail: 'Seleccione um workspace' };
@@ -94,7 +115,7 @@ async function healthForIntegration(
   return { status: 'ok', label: 'Activo' };
 }
 
-const INTEGRATION_KEYS = new Set(['sms', 'billing', 'calendar', 'admin_mgmt']);
+const INTEGRATION_KEYS = new Set(['sms', 'billing', 'calendar', 'bolt', 'admin_mgmt']);
 
 export async function getModulesHealth(
   role: Role,

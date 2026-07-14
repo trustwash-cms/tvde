@@ -1,0 +1,77 @@
+import { prisma } from '@tvde/database';
+import { BoltFleetClient } from '@tvde/bolt';
+import { decrypt, encrypt } from '../lib/crypto';
+
+export async function getBoltConnection(workspaceId: string) {
+  return prisma.boltConnection.findUnique({ where: { workspaceId } });
+}
+
+export async function ensureBoltClient(workspaceId: string) {
+  const row = await getBoltConnection(workspaceId);
+  if (!row?.encryptedClientSecret) {
+    throw new Error('Bolt API não configurada — defina credenciais em Configurações → Bolt API');
+  }
+  if (!row.isActive) {
+    throw new Error('Integração Bolt desactivada para este workspace');
+  }
+  if (!row.boltCompanyId) {
+    throw new Error('Bolt sem company_id — teste a ligação nas configurações');
+  }
+
+  const client = new BoltFleetClient({
+    clientId: row.clientId,
+    clientSecret: decrypt(row.encryptedClientSecret),
+  });
+
+  return { row, client };
+}
+
+export async function upsertBoltConnection(input: {
+  workspaceId: string;
+  tenantId: string;
+  clientId: string;
+  clientSecret?: string;
+  boltCompanyId?: number;
+}) {
+  const existing = await getBoltConnection(input.workspaceId);
+  const encryptedClientSecret =
+    input.clientSecret?.trim()
+      ? encrypt(input.clientSecret.trim())
+      : existing?.encryptedClientSecret;
+
+  if (!encryptedClientSecret) {
+    throw new Error('Client Secret é obrigatório na primeira configuração');
+  }
+
+  return prisma.boltConnection.upsert({
+    where: { workspaceId: input.workspaceId },
+    update: {
+      clientId: input.clientId.trim(),
+      encryptedClientSecret,
+      ...(input.boltCompanyId !== undefined ? { boltCompanyId: input.boltCompanyId } : {}),
+      isActive: true,
+      lastError: null,
+      connectedAt: existing?.connectedAt ?? new Date(),
+    },
+    create: {
+      workspaceId: input.workspaceId,
+      tenantId: input.tenantId,
+      clientId: input.clientId.trim(),
+      encryptedClientSecret,
+      boltCompanyId: input.boltCompanyId ?? null,
+      isActive: true,
+      connectedAt: new Date(),
+    },
+  });
+}
+
+export async function testBoltCredentials(
+  clientId: string,
+  clientSecret: string,
+  boltCompanyId?: number
+) {
+  const client = new BoltFleetClient({ clientId: clientId.trim(), clientSecret: clientSecret.trim() });
+  return client.testConnection(
+    boltCompanyId != null && Number.isFinite(boltCompanyId) ? { companyId: boltCompanyId } : undefined
+  );
+}

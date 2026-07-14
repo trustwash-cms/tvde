@@ -24,6 +24,8 @@ import {
 } from './routes/business.routes';
 import { calendarPublicRoutes, calendarRoutes } from './routes/calendar.routes';
 import { adminMgmtRoutes } from './routes/admin-mgmt.routes';
+import { boltRoutes } from './routes/bolt.routes';
+import { boltSyncCronRoutes } from './routes/bolt-sync-cron.routes';
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
 import { formatFastifyValidation, formatZodError } from './lib/validation-errors';
@@ -96,9 +98,11 @@ export async function buildApp() {
     await api.register(billingPublicRoutes);
     await api.register(billingMoloniCallbackRoutes);
     await api.register(billingSyncCronRoutes);
+    await api.register(boltSyncCronRoutes);
     await api.register(calendarSyncCronRoutes);
     await api.register(calendarPublicRoutes);
     await api.register(calendarRoutes);
+    await api.register(boltRoutes);
     await api.register(adminMgmtRoutes);
   }, { prefix: getApiPrefix() });
 

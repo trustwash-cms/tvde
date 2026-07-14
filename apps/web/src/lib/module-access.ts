@@ -10,6 +10,7 @@ const MODULE_LABELS: Record<string, string> = {
   clients: 'Clientes',
   sms: 'SMS',
   calendar: 'Calendário',
+  bolt: 'Bolt',
   admin_mgmt: 'Gestão Administrativa',
 };
 

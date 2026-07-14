@@ -17,6 +17,7 @@ const CORE_MODULES = [
 const BUSINESS_MODULES = [
   { key: 'clients', name: 'Clientes', description: 'CRM básico' },
   { key: 'billing', name: 'Facturação', description: 'Faturas Moloni e documentos' },
+  { key: 'bolt', name: 'Bolt', description: 'Integração API Bolt — pedidos, motoristas e veículos' },
   { key: 'calendar', name: 'Calendário', description: 'Agenda partilhada, lembretes e anexos' },
   {
     key: 'admin_mgmt',
