@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { TenantStorageQuotaError } from '../services/tenant-storage.service';
 import { z } from 'zod';
 import { resolveWorkspaceTenantScope } from '../lib/workspace-scope';
 import { createAuditLog } from '../services/audit.service';
@@ -108,6 +109,9 @@ const scheduledInvoiceSchema = z
 function handleCalendarError(err: unknown) {
   if (err instanceof CalendarAccessError) {
     return { status: 403, message: err.message };
+  }
+  if (err instanceof TenantStorageQuotaError) {
+    return { status: 413, message: err.message };
   }
   if (err instanceof Error) {
     return { status: 400, message: err.message };

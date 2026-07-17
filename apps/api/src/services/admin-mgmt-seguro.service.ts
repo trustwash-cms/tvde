@@ -12,6 +12,7 @@ import {
   saveAdminMgmtAttachmentFile,
   buildAdminMgmtStorageKey,
 } from './admin-mgmt-attachment-storage.service';
+import { assertTenantStorageQuota } from './tenant-storage.service';
 import {
   deleteAdminMgmtVencimentoByOrigem,
   upsertAdminMgmtVencimento,
@@ -268,6 +269,7 @@ export async function uploadSeguroApolice(
     `apolices/${apoliceId}-${safeName}`
   );
 
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length);
   await saveAdminMgmtAttachmentFile(storageKey, input.buffer);
 
   const apolice: AdminMgmtApoliceFile = {

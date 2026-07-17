@@ -35,6 +35,7 @@ import {
   parseCalendarOccurrenceId,
 } from '@tvde/shared';
 import { env } from '../../config/env';
+import { assertTenantStorageQuota } from '../tenant-storage.service';
 import {
   buildCalendarStorageKey,
   deleteCalendarAttachmentFile,
@@ -933,6 +934,8 @@ export async function uploadEventAttachment(
     where: { id: masterId, tenantId },
   });
   if (!event) throw new CalendarAccessError('Evento não encontrado');
+
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length);
 
   const storageKey = buildCalendarStorageKey(tenantId, masterId, input.fileName);
   await saveCalendarAttachmentFile(storageKey, input.buffer);

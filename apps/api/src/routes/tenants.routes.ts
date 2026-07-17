@@ -14,6 +14,9 @@ import {
   sendTenantDeleteConfirmationCode,
   verifyTenantDeleteConfirmationCode,
 } from '../services/action-confirmation.service';
+import {
+  getTenantVehicleLimits,
+} from '../services/tenant-vehicle-limits.service';
 
 export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -81,6 +84,17 @@ export async function tenantRoutes(fastify: FastifyInstance) {
       },
     });
     return reply.send({ success: true, data: tenant });
+  });
+
+  fastify.get('/tenants/current/vehicle-limits', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    if (!request.user.tenantId) {
+      return reply.status(404).send({ success: false, error: 'Sem tenant associado' });
+    }
+
+    const data = await getTenantVehicleLimits(fastify.db, request.user.tenantId);
+    return reply.send({ success: true, data });
   });
 
   fastify.post('/tenants', {

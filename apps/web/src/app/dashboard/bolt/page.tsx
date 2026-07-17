@@ -48,7 +48,7 @@ export default function BoltDashboardPage() {
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: 'Pedidos sincronizados', value: data?.ordersCount ?? 0, icon: ShoppingCart },
+          { label: 'Corridas concluídas', value: data?.ordersCount ?? 0, icon: ShoppingCart },
           { label: 'Motoristas', value: data?.driversCount ?? 0, icon: Smartphone },
           { label: 'Veículos na frota', value: data?.vehiclesCount ?? 0, icon: Car },
           { label: 'Receita total', value: formatMoney(data?.totalRevenue ?? '0'), icon: Euro },
@@ -70,7 +70,7 @@ export default function BoltDashboardPage() {
 
       <div className="card overflow-hidden p-0">
         <div className="border-b px-6 py-4">
-          <h2 className="font-semibold text-slate-900">Pedidos recentes</h2>
+          <h2 className="font-semibold text-slate-900">Corridas recentes (finished)</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

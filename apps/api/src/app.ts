@@ -26,6 +26,14 @@ import { calendarPublicRoutes, calendarRoutes } from './routes/calendar.routes';
 import { adminMgmtRoutes } from './routes/admin-mgmt.routes';
 import { boltRoutes } from './routes/bolt.routes';
 import { boltSyncCronRoutes } from './routes/bolt-sync-cron.routes';
+import { userProfileRoutes } from './routes/user-profile.routes';
+import { userVehicleRoutes } from './routes/user-vehicle.routes';
+import { tvdeSettingsRoutes } from './routes/tvde-settings.routes';
+import { viaVerdeRoutes } from './routes/via-verde.routes';
+import { electricityRoutes } from './routes/electricity.routes';
+import { combustivelRoutes } from './routes/combustivel.routes';
+import { uberRoutes } from './routes/uber.routes';
+import { portalConnectionRoutes } from './routes/portal-connection.routes';
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
 import { formatFastifyValidation, formatZodError } from './lib/validation-errors';
@@ -88,6 +96,9 @@ export async function buildApp() {
     await api.register(moduleRoutes);
     await api.register(clientRoutes);
     await api.register(userRoutes);
+    await api.register(userProfileRoutes);
+    await api.register(userVehicleRoutes);
+    await api.register(tvdeSettingsRoutes);
     await api.register(auditRoutes);
     await api.register(searchRoutes);
     await api.register(smtpRoutes);
@@ -103,6 +114,11 @@ export async function buildApp() {
     await api.register(calendarPublicRoutes);
     await api.register(calendarRoutes);
     await api.register(boltRoutes);
+    await api.register(viaVerdeRoutes);
+    await api.register(electricityRoutes);
+    await api.register(combustivelRoutes);
+    await api.register(uberRoutes);
+    await api.register(portalConnectionRoutes);
     await api.register(adminMgmtRoutes);
   }, { prefix: getApiPrefix() });
 

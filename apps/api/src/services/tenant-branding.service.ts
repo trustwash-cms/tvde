@@ -19,6 +19,7 @@ import {
   openTenantLogoStream,
   saveTenantLogoFile,
 } from './tenant-branding-storage.service';
+import { assertTenantStorageQuota } from './tenant-storage.service';
 
 function parseBrandingFileMeta<T extends { storageKey: string }>(
   value: string | null | undefined
@@ -101,6 +102,9 @@ export async function uploadTenantLogo(
   }
 
   const existing = await readLogoMeta(tenantId);
+  const replaceBytes = existing?.sizeBytes ?? 0;
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length, replaceBytes);
+
   if (existing?.storageKey) {
     await deleteTenantLogoFile(existing.storageKey).catch(() => undefined);
   }
@@ -134,6 +138,9 @@ export async function uploadTenantLoginWallpaper(
   }
 
   const existing = await readWallpaperMeta(tenantId);
+  const replaceBytes = existing?.sizeBytes ?? 0;
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length, replaceBytes);
+
   if (existing?.storageKey) {
     await deleteTenantLogoFile(existing.storageKey).catch(() => undefined);
   }

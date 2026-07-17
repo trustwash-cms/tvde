@@ -52,6 +52,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
   stripe_payment: 'Stripe — link de pagamento',
   tenant_delete_confirmation: 'Eliminar tenant (código)',
   tenant_welcome: 'Novo tenant (credenciais)',
+  user_welcome: 'Novo utilizador (credenciais)',
   two_fa_email: 'Código 2FA por email',
 };
 
@@ -63,6 +64,7 @@ const TEMPLATE_HINTS: Record<string, string> = {
   stripe_payment: 'Email com botão para pagar via Stripe (links isolados ou gerados na FO).',
   tenant_delete_confirmation: 'Código enviado ao MASTER para confirmar eliminação permanente de um tenant.',
   tenant_welcome: 'Credenciais de primeiro acesso enviadas ao superadmin quando um tenant é criado ou reenviadas pelo MASTER.',
+  user_welcome: 'Credenciais enviadas quando um utilizador é criado com password gerada automaticamente.',
   two_fa_email: 'Código de verificação para autenticação de dois fatores por email.',
 };
 

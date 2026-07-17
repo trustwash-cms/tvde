@@ -6,7 +6,21 @@ import {
   type BoltSyncCounters,
   type BoltSyncType,
 } from '@tvde/bolt';
+import { textOr } from './search.service';
 import { ensureBoltClient, getBoltConnection } from './bolt-connection.service';
+
+/** Corridas concluídas com valor — usado em listagens e dashboard. */
+export function boltBillableOrderWhere(
+  workspaceId: string,
+  extra?: Prisma.BoltOrderWhereInput
+): Prisma.BoltOrderWhereInput {
+  return {
+    workspaceId,
+    orderStatus: 'finished',
+    ridePrice: { not: null, gt: 0 },
+    ...extra,
+  };
+}
 
 function toDecimal(value: unknown): Prisma.Decimal | null {
   if (value == null || value === '') return null;
@@ -326,17 +340,53 @@ export async function syncAllBoltWorkspaces(type: BoltSyncType = 'all') {
   return summary;
 }
 
+export async function listBoltOrders(
+  workspaceId: string,
+  input: { q?: string; page?: number; limit?: number }
+) {
+  const page = Math.max(0, input.page ?? 0);
+  const limit = Math.min(100, Math.max(1, input.limit ?? 50));
+  const where = boltBillableOrderWhere(
+    workspaceId,
+    input.q ? textOr(input.q, ['orderReference', 'driverName', 'vehicleModel', 'vehicleLicensePlate']) : undefined
+  );
+
+  const [total, orders] = await Promise.all([
+    prisma.boltOrder.count({ where }),
+    prisma.boltOrder.findMany({
+      where,
+      orderBy: { orderCreatedTimestamp: 'desc' },
+      skip: page * limit,
+      take: limit,
+      include: { _count: { select: { stops: true } } },
+    }),
+  ]);
+
+  return {
+    items: orders.map((o) => ({
+      ...o,
+      ridePrice: o.ridePrice?.toString() ?? null,
+      stopsCount: o._count.stops,
+    })),
+    total,
+    page,
+    limit,
+  };
+}
+
 export async function getBoltDashboardStats(workspaceId: string) {
+  const billableWhere = boltBillableOrderWhere(workspaceId);
+
   const [ordersCount, driversCount, vehiclesCount, revenueAgg, recentOrders] = await Promise.all([
-    prisma.boltOrder.count({ where: { workspaceId } }),
+    prisma.boltOrder.count({ where: billableWhere }),
     prisma.boltDriver.count({ where: { workspaceId } }),
     prisma.boltVehicle.count({ where: { workspaceId } }),
     prisma.boltOrder.aggregate({
-      where: { workspaceId },
+      where: billableWhere,
       _sum: { ridePrice: true },
     }),
     prisma.boltOrder.findMany({
-      where: { workspaceId },
+      where: billableWhere,
       orderBy: { orderCreatedTimestamp: 'desc' },
       take: 10,
       select: {

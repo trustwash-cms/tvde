@@ -12,6 +12,7 @@ import {
   deleteAdminMgmtAttachmentFile,
   saveAdminMgmtAttachmentFile,
 } from './admin-mgmt-attachment-storage.service';
+import { assertTenantStorageQuota } from './tenant-storage.service';
 import {
   deleteAdminMgmtVencimentoByOrigem,
   resolveAdminMgmtVencimentoByOrigem,
@@ -342,6 +343,7 @@ export async function uploadFaturaAnexo(
     `anexos/${anexoId}-${safeName}`
   );
 
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length);
   await saveAdminMgmtAttachmentFile(storageKey, input.buffer);
 
   const anexo: AdminMgmtFaturaAnexo = {

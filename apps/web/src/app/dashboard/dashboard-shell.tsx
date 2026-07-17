@@ -16,6 +16,11 @@ import {
   X,
   Briefcase,
   Zap,
+  Car,
+  Nfc,
+  Plug,
+  Fuel,
+  Wallet,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
@@ -31,6 +36,29 @@ const navItems = [
   { href: WEB_ROUTES.dashboard.clients, label: 'Clientes', icon: UserCircle, area: 'clients' as const, moduleKey: 'clients' },
   { href: WEB_ROUTES.dashboard.billing.root, label: 'Facturação', icon: Receipt, area: 'billing' as const, moduleKey: 'billing' },
   { href: WEB_ROUTES.dashboard.bolt.root, label: 'Bolt', icon: Zap, area: 'bolt' as const, moduleKey: 'bolt' },
+  { href: WEB_ROUTES.dashboard.uber.root, label: 'Uber', icon: Car, area: 'uber' as const, moduleKey: 'uber' },
+  { href: WEB_ROUTES.dashboard.viaVerde.root, label: 'Via Verde', icon: Nfc, area: 'via_verde' as const, moduleKey: 'via_verde' },
+  {
+    href: WEB_ROUTES.dashboard.eletricidade.root,
+    label: 'Eletricidade',
+    icon: Plug,
+    area: 'eletricidade' as const,
+    moduleKey: 'eletricidade',
+  },
+  {
+    href: WEB_ROUTES.dashboard.combustivel.root,
+    label: 'Combustível',
+    icon: Fuel,
+    area: 'combustivel' as const,
+    moduleKey: 'combustivel',
+  },
+  {
+    href: WEB_ROUTES.dashboard.pagamentos.root,
+    label: 'Pagamentos',
+    icon: Wallet,
+    area: 'pagamentos' as const,
+    moduleKey: 'pagamentos',
+  },
   { href: WEB_ROUTES.dashboard.calendar, label: 'Calendário', icon: CalendarDays, area: 'calendar' as const, moduleKey: 'calendar' },
   { href: WEB_ROUTES.dashboard.adminMgmt.root, label: ADMIN_MGMT_MODULE_NAME, icon: Briefcase, area: 'admin_mgmt' as const, moduleKey: 'admin_mgmt' },
   { href: WEB_ROUTES.dashboard.users, label: 'Utilizadores', icon: Users, area: 'users' as const },
@@ -62,6 +90,11 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (area === 'settings' && pathname.startsWith('/dashboard/settings')) return true;
   if (area === 'billing' && pathname.startsWith('/dashboard/billing')) return true;
   if (area === 'bolt' && pathname.startsWith('/dashboard/bolt')) return true;
+  if (area === 'uber' && pathname.startsWith('/dashboard/uber')) return true;
+  if (area === 'via_verde' && pathname.startsWith('/dashboard/via-verde')) return true;
+  if (area === 'eletricidade' && pathname.startsWith('/dashboard/eletricidade')) return true;
+  if (area === 'combustivel' && pathname.startsWith('/dashboard/combustivel')) return true;
+  if (area === 'pagamentos' && pathname.startsWith('/dashboard/pagamentos')) return true;
   if (area === 'calendar' && pathname.startsWith('/dashboard/calendar')) return true;
   if (area === 'admin_mgmt' && pathname.startsWith('/dashboard/admin-mgmt')) return true;
   return false;
@@ -250,6 +283,13 @@ export default function DashboardShell({ children }: { children: React.ReactNode
               </div>
             </div>
           )}
+          <Link
+            href={WEB_ROUTES.dashboard.me}
+            className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+          >
+            <UserCircle size={16} />
+            Meu Perfil
+          </Link>
           <button
             onClick={logout}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-red-50 hover:text-red-600"

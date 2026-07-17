@@ -28,6 +28,8 @@ docker compose up -d
 npm install
 npm run db:migrate
 npm run db:seed
+# Opcional — sync real Via Verde / MyPRIO / Uber (não mock):
+npm run playwright:install
 npm run dev
 ```
 
@@ -36,6 +38,7 @@ npm run dev
 - Postgres: porta **5433** (base `tvde`)
 - Redis: porta **6380**
 
+Documentação Portal RPA: [`docs/PORTAL_RPA.md`](docs/PORTAL_RPA.md)
 ## Credenciais seed (`.env.example`)
 
 | Utilizador | Email | Password |

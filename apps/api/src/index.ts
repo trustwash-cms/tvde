@@ -5,6 +5,8 @@ import { env } from './config/env';
 import { disconnectRedis, getRedis } from './lib/redis';
 import { startCalendarScheduledInvoiceWorker } from './workers/calendar-scheduled-invoice.worker';
 import { startBoltDailySyncWorker } from './workers/bolt-daily-sync.worker';
+import { startPortalSessionRefreshWorker } from './workers/portal-session-refresh.worker';
+import { disposeAllLiveOtpSessions } from './services/portal-rpa/types';
 
 let shuttingDown = false;
 
@@ -13,6 +15,7 @@ async function shutdown(app: FastifyInstance, signal: string, redisConnected: bo
   shuttingDown = true;
 
   try {
+    await disposeAllLiveOtpSessions();
     await app.close();
     if (redisConnected) await disconnectRedis();
   } catch (err) {
@@ -38,6 +41,7 @@ async function main() {
   console.log(`TVDE API running at http://${env.host}:${env.port}`);
   startCalendarScheduledInvoiceWorker();
   startBoltDailySyncWorker();
+  startPortalSessionRefreshWorker();
 
   const stop = (signal: string) => {
     void shutdown(app, signal, redisConnected);

@@ -5,6 +5,7 @@ import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/a
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { WorkspaceSelector } from '@/components/workspace-selector';
+import { AntiAutofillInput, AutofillDecoys } from '@/components/anti-autofill';
 
 interface BoltStatus {
   configured: boolean;
@@ -165,10 +166,13 @@ export function BoltSettingsPanel({
         </div>
       )}
 
-      <form onSubmit={saveConfig} className="card grid gap-4 md:grid-cols-2">
+      <form onSubmit={saveConfig} className="card relative grid gap-4 md:grid-cols-2" autoComplete="off">
+        <AutofillDecoys />
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Client ID *</label>
-          <input
+          <AntiAutofillInput
+            id="bolt-client-id"
+            name="bolt-client-id"
             className="input w-full"
             value={form.clientId}
             onChange={(e) => setForm({ ...form, clientId: e.target.value })}
@@ -177,12 +181,15 @@ export function BoltSettingsPanel({
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Client Secret *</label>
-          <input
+          <AntiAutofillInput
+            id="bolt-client-secret"
+            name="bolt-client-secret"
             className="input w-full"
-            type="password"
+            maskAsPassword
             value={form.clientSecret}
             onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
             placeholder="Deixe em branco para manter o actual"
+            autoComplete="new-password"
           />
         </div>
         <div className="md:col-span-2">

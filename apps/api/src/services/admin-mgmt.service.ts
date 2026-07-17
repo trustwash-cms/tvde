@@ -3,6 +3,7 @@ import {
   deleteAdminMgmtAttachmentFile,
   saveAdminMgmtAttachmentFile,
 } from './admin-mgmt-attachment-storage.service';
+import { assertTenantStorageQuota } from './tenant-storage.service';
 import {
   deleteAdminMgmtVencimentoByOrigem,
   upsertAdminMgmtVencimento,
@@ -593,6 +594,8 @@ export async function uploadAdminMgmtAttachment(
   tenantId: string,
   input: { fileName: string; buffer: Buffer }
 ) {
+  await assertTenantStorageQuota(prisma, tenantId, input.buffer.length);
+
   const storageKey = `${tenantId}/${entityType}/${id}/${input.fileName.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
   await saveAdminMgmtAttachmentFile(storageKey, input.buffer);
 

@@ -11,6 +11,7 @@ import {
 } from '../services/bolt.service';
 import {
   getBoltDashboardStats,
+  listBoltOrders,
   syncBoltData,
 } from '../services/bolt-sync.service';
 
@@ -133,7 +134,15 @@ export async function boltRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/bolt/orders', async (request, reply) => {
-    const query = request.query as { workspaceId?: string; q?: string; status?: string };
+    const query = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        q: z.string().optional(),
+        page: z.coerce.number().int().min(0).optional(),
+        limit: z.coerce.number().int().min(1).max(100).optional(),
+      })
+      .parse(request.query);
+
     const q = parseSearchQuery(query.q);
     const { workspaceId } = await resolveWorkspaceTenantScope(
       fastify,
@@ -141,26 +150,13 @@ export async function boltRoutes(fastify: FastifyInstance) {
       query.workspaceId
     );
 
-    const orders = await fastify.db.boltOrder.findMany({
-      where: {
-        workspaceId,
-        ...(query.status ? { orderStatus: query.status } : {}),
-        ...(q
-          ? textOr(q, ['orderReference', 'driverName', 'vehicleModel', 'vehicleLicensePlate'])
-          : {}),
-      },
-      orderBy: { orderCreatedTimestamp: 'desc' },
-      include: { _count: { select: { stops: true } } },
+    const data = await listBoltOrders(workspaceId, {
+      q,
+      page: query.page,
+      limit: query.limit ?? 50,
     });
 
-    return reply.send({
-      success: true,
-      data: orders.map((o) => ({
-        ...o,
-        ridePrice: o.ridePrice?.toString() ?? null,
-        stopsCount: o._count.stops,
-      })),
-    });
+    return reply.send({ success: true, data });
   });
 
   fastify.get('/bolt/orders/:id', async (request, reply) => {

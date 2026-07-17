@@ -11,6 +11,11 @@ const MODULE_LABELS: Record<string, string> = {
   sms: 'SMS',
   calendar: 'Calendário',
   bolt: 'Bolt',
+  uber: 'Uber',
+  via_verde: 'Via Verde',
+  eletricidade: 'Eletricidade',
+  combustivel: 'Combustível',
+  pagamentos: 'Pagamentos',
   admin_mgmt: 'Gestão Administrativa',
 };
 
