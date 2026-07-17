@@ -8,6 +8,8 @@ import {
   sendTenantDeleteConfirmationEmail,
   sendCarwashActionConfirmationEmail,
   sendCarwashActionRequestEmail,
+  sendUserDeleteConfirmationEmail,
+  sendUserWelcomeEmail,
 } from './email.service';
 
 const OTP_EXPIRY_MS = 10 * 60_000;
@@ -236,6 +238,68 @@ export async function requestCarwashActionAuthorization(input: {
   );
 
   return { requested: true as const, notified: superadmins.length };
+}
+
+function userDeleteMethod(actorUserId: string, targetUserId: string) {
+  return `user_delete:${actorUserId}:${targetUserId}`;
+}
+
+async function assertActorEmailAvailable(role: Role, tenantId: string | null) {
+  if (role === 'master') {
+    await assertPlatformEmailAvailable();
+    return;
+  }
+  if (!tenantId) {
+    throw new Error('Tenant não definido');
+  }
+  await assertTenantEmailAvailable(tenantId);
+}
+
+export async function sendUserDeleteConfirmationCode(input: {
+  actorUserId: string;
+  actorRole: Role;
+  actorTenantId: string | null;
+  targetUser: { id: string; email: string; username: string | null };
+}) {
+  const user = await prisma.user.findUnique({
+    where: { id: input.actorUserId },
+    select: { email: true, role: true },
+  });
+  if (!user || !hasMinRole(user.role as Role, 'admin')) {
+    throw new Error('Permissões insuficientes para eliminar utilizadores');
+  }
+
+  await assertActorEmailAvailable(input.actorRole, input.actorTenantId);
+
+  const code = generateOtpCode();
+  await createScopedOtp(
+    input.actorUserId,
+    userDeleteMethod(input.actorUserId, input.targetUser.id),
+    code
+  );
+
+  await sendUserDeleteConfirmationEmail({
+    tenantId: input.actorRole === 'master' ? null : input.actorTenantId,
+    to: user.email,
+    targetUsername: input.targetUser.username ?? input.targetUser.email,
+    targetEmail: input.targetUser.email,
+    confirmationCode: code,
+    expiresInMinutes: 10,
+  });
+
+  return {
+    sent: true as const,
+    maskedEmail: maskEmail(user.email),
+    expiresInMinutes: 10,
+  };
+}
+
+export async function verifyUserDeleteConfirmationCode(
+  actorUserId: string,
+  targetUserId: string,
+  code: string
+) {
+  await verifyScopedOtp(actorUserId, userDeleteMethod(actorUserId, targetUserId), code);
 }
 
 function carwashCashSheetEditMethod(userId: string, cashSheetId: string) {

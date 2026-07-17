@@ -15,6 +15,8 @@ import {
   CARWASH_ACTION_REQUEST_EMAIL_TEMPLATE,
 } from './carwash-authorization-email-template';
 import { TENANT_WELCOME_EMAIL_TEMPLATE } from './tenant-welcome-email-template';
+import { USER_WELCOME_EMAIL_TEMPLATE } from './user-welcome-email-template';
+import { USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE } from './user-delete-confirmation-email-template';
 import { TWO_FA_EMAIL_TEMPLATE } from './two-fa-email-template';
 import { STRIPE_PAYMENT_EMAIL_TEMPLATE } from './stripe-payment-email-template';
 import { buildBaseEmailVariables } from './email-design-tokens';
@@ -30,6 +32,8 @@ export const EMAIL_TEMPLATE_KEYS = {
   carwashActionConfirmation: 'carwash_action_confirmation',
   carwashActionRequest: 'carwash_action_request',
   tenantWelcome: 'tenant_welcome',
+  userWelcome: 'user_welcome',
+  userDeleteConfirmation: 'user_delete_confirmation',
   twoFaEmail: 'two_fa_email',
   bookingConfirmation: 'booking_confirmation',
   ecommerceOrderConfirmation: 'ecommerce_order_confirmation',
@@ -151,6 +155,16 @@ const DEFAULT_TEMPLATES: Record<
     subject: TENANT_WELCOME_EMAIL_TEMPLATE.subject,
     htmlBody: TENANT_WELCOME_EMAIL_TEMPLATE.htmlBody,
     variables: [...TENANT_WELCOME_EMAIL_TEMPLATE.variables],
+  },
+  user_welcome: {
+    subject: USER_WELCOME_EMAIL_TEMPLATE.subject,
+    htmlBody: USER_WELCOME_EMAIL_TEMPLATE.htmlBody,
+    variables: [...USER_WELCOME_EMAIL_TEMPLATE.variables],
+  },
+  user_delete_confirmation: {
+    subject: USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE.subject,
+    htmlBody: USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE.htmlBody,
+    variables: [...USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE.variables],
   },
   two_fa_email: {
     subject: TWO_FA_EMAIL_TEMPLATE.subject,
@@ -555,6 +569,63 @@ export async function sendTenantWelcomeEmail(input: {
       temporaryPassword: input.temporaryPassword,
       loginUrl,
       expiresIn: '24 horas',
+    },
+  });
+}
+
+export async function sendUserWelcomeEmail(input: {
+  tenantId: string;
+  to: string;
+  tenantName: string;
+  tenantSiteId: string;
+  userEmail: string;
+  username: string;
+  roleLabel: string;
+  temporaryPassword: string;
+}) {
+  const { appName, webPublicUrl } = getServerConfig();
+  const smtp = await resolveSmtpConnection(input.tenantId);
+  const loginUrl = webPublicUrl ? `${webPublicUrl.replace(/\/$/, '')}/login` : '/login';
+
+  return sendTemplateEmail({
+    tenantId: input.tenantId,
+    to: input.to,
+    templateKey: EMAIL_TEMPLATE_KEYS.userWelcome,
+    variables: {
+      ...buildBaseEmailVariables({ appName, supportEmail: smtp.from }),
+      tenantName: input.tenantName,
+      tenantSiteId: input.tenantSiteId,
+      userEmail: input.userEmail,
+      username: input.username,
+      roleLabel: input.roleLabel,
+      temporaryPassword: input.temporaryPassword,
+      loginUrl,
+      expiresIn: '24 horas',
+    },
+  });
+}
+
+export async function sendUserDeleteConfirmationEmail(input: {
+  tenantId: string | null;
+  to: string;
+  targetUsername: string;
+  targetEmail: string;
+  confirmationCode: string;
+  expiresInMinutes: number;
+}) {
+  const { appName } = getServerConfig();
+  const smtp = await resolveSmtpConnection(input.tenantId);
+
+  return sendTemplateEmail({
+    tenantId: input.tenantId,
+    to: input.to,
+    templateKey: EMAIL_TEMPLATE_KEYS.userDeleteConfirmation,
+    variables: {
+      ...buildBaseEmailVariables({ appName, supportEmail: smtp.from }),
+      targetUsername: input.targetUsername,
+      targetEmail: input.targetEmail,
+      confirmationCode: input.confirmationCode,
+      expiresInMinutes: String(input.expiresInMinutes),
     },
   });
 }
