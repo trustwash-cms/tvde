@@ -102,5 +102,16 @@ export function getServerConfig() {
       envOr('ECOMMERCE_MAX_PRODUCT_IMAGE_BYTES', '5242880'),
       10
     ),
+    portalRpaEnabled: envOr('PORTAL_RPA_ENABLED', 'true') === 'true',
+    // Default: mock em dev para não exigir Chromium; em produção sync real
+    portalRpaMock: (process.env.PORTAL_RPA_MOCK ?? (isProd ? 'false' : 'true')) === 'true',
+    portalRpaHeadless: envOr('PORTAL_RPA_HEADLESS', 'true') === 'true',
+    /** Intervalo do worker que renova cookies (horas). */
+    portalRpaRefreshIntervalHours: Math.max(
+      1,
+      parseInt(envOr('PORTAL_RPA_REFRESH_INTERVAL_HOURS', '3'), 10) || 3
+    ),
+    userDocumentsUploadDir: envOr('USER_DOCUMENTS_UPLOAD_DIR', 'uploads/user-documents'),
+    userDocumentsMaxBytes: parseInt(envOr('USER_DOCUMENTS_MAX_BYTES', '5242880'), 10),
   };
 }

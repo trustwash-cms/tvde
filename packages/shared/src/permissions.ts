@@ -36,6 +36,16 @@ export function canManageUser(actor: Role, targetRole: Role): boolean {
   return false;
 }
 
+/** Apenas MASTER e Gestor de Frota podem criar utilizadores. */
+export function canCreateUsers(actor: Role): boolean {
+  return actor === 'master' || actor === 'superadmin';
+}
+
+/** Apenas MASTER e Gestor de Frota podem activar/desactivar utilizadores. */
+export function canToggleUserStatus(actor: Role): boolean {
+  return actor === 'master' || actor === 'superadmin';
+}
+
 export const DASHBOARD_ACCESS: Record<string, Role> = {
   dashboard: 'staff',
   tenants: 'master',
@@ -43,6 +53,11 @@ export const DASHBOARD_ACCESS: Record<string, Role> = {
   clients: 'staff',
   billing: 'staff',
   bolt: 'staff',
+  uber: 'staff',
+  via_verde: 'staff',
+  eletricidade: 'staff',
+  combustivel: 'staff',
+  pagamentos: 'staff',
   calendar: 'staff',
   admin_mgmt: 'staff',
   users: 'admin',

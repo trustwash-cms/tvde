@@ -77,6 +77,14 @@ model Tenant {
   boltDrivers               BoltDriver[]
   boltVehicles              BoltVehicle[]
   boltSyncLogs              BoltSyncLog[]
+  userDocuments             UserDocument[]
+  userVehicles              UserVehicle[]
+  viaVerdeMovements         ViaVerdeMovement[]
+  electricityCharges        ElectricityCharge[]
+  fuelTransactions          FuelTransaction[]
+  uberPayments              UberPayment[]
+  portalConnections         PortalConnection[]
+  portalSyncJobs            PortalSyncJob[]
 
   @@map("tenants")
 }
@@ -209,6 +217,8 @@ model User {
   tenantId     String?     @map("tenant_id") @db.Uuid
   workspaceId  String?     @map("workspace_id") @db.Uuid
   email        String      @unique
+  username     String?     @unique
+  fullName     String?     @map("full_name")
   passwordHash String      @map("password_hash")
   role         UserRole    @default(staff)
   status       UserStatus  @default(pending)
@@ -244,10 +254,190 @@ model User {
   calendarScheduledInvoicesCreated CalendarScheduledInvoice[]
   ownedBookingProfiles             BookingProfile[] @relation("BookingProfileOwner")
   carwashDailyCashSheetsClosed     CarwashDailyCashSheet[] @relation("CarwashDailyCashSheetClosedBy")
+  profile                          UserProfile?
+  documents                        UserDocument[] @relation("UserDocuments")
+  documentsUploaded                UserDocument[] @relation("UserDocumentsUploaded")
+  vehicles                         UserVehicle[]
+  viaVerdeMovements                ViaVerdeMovement[] @relation("ViaVerdeMovementUser")
+  viaVerdeMovementsImported        ViaVerdeMovement[] @relation("ViaVerdeMovementImportedBy")
+  electricityCharges               ElectricityCharge[] @relation("ElectricityChargeUser")
+  electricityChargesImported       ElectricityCharge[] @relation("ElectricityChargeImportedBy")
+  fuelTransactions                 FuelTransaction[] @relation("FuelTransactionUser")
+  fuelTransactionsImported         FuelTransaction[] @relation("FuelTransactionImportedBy")
+  uberPayments                     UberPayment[] @relation("UberPaymentUser")
+  uberPaymentsImported             UberPayment[] @relation("UberPaymentImportedBy")
 
   @@index([tenantId])
   @@index([workspaceId])
   @@map("users")
+}
+
+enum UserDocumentType {
+  comprovativo_morada
+  cc_autorizacao_residencia
+  licenca_tvde
+  carta_conducao
+  contrato_motorista
+}
+
+enum UserDocumentVisibility {
+  private
+  public
+}
+
+model UserProfile {
+  userId                  String   @id @map("user_id") @db.Uuid
+  nif                     String?
+  ccAutorizacaoResidencia String?  @map("cc_autorizacao_residencia")
+  numeroOperadorTvde      String?  @map("numero_operador_tvde")
+  distrito                String?
+  concelho                String?
+  localidade              String?
+  arruamento              String?
+  numeroPorta             String?  @map("numero_porta")
+  codigoPostal            String?  @map("codigo_postal")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserDocument {
+  id               String                 @id @default(uuid()) @db.Uuid
+  userId           String                 @map("user_id") @db.Uuid
+  tenantId         String                 @map("tenant_id") @db.Uuid
+  documentType     UserDocumentType       @map("document_type")
+  visibility       UserDocumentVisibility @default(private)
+  fileName         String                 @map("file_name")
+  mimeType         String                 @map("mime_type")
+  sizeBytes        Int                    @map("size_bytes")
+  storageKey       String                 @map("storage_key")
+  uploadedByUserId String                 @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime               @default(now()) @map("created_at")
+
+  user       User   @relation("UserDocuments", fields: [userId], references: [id], onDelete: Cascade)
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  uploadedBy User   @relation("UserDocumentsUploaded", fields: [uploadedByUserId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([tenantId])
+  @@map("user_documents")
+}
+
+enum VehicleCommissionType {
+  fixa
+  percentagem
+  slot
+}
+
+model UserVehicle {
+  id                                 String                 @id @default(uuid()) @db.Uuid
+  userId                             String                 @map("user_id") @db.Uuid
+  tenantId                           String                 @map("tenant_id") @db.Uuid
+  matricula                          String
+  matriculaForeign                   Boolean                @default(false) @map("matricula_foreign")
+  matriculaCountry                   String                 @default("PT") @map("matricula_country")
+  dataInicio                         DateTime               @map("data_inicio") @db.Date
+  dataFim                            DateTime?              @map("data_fim") @db.Date
+  uuidUber                           String?                @map("uuid_uber")
+  uuidBolt                           String?                @map("uuid_bolt")
+  numCartaoPrio                      String?                @map("num_cartao_prio")
+  nomeCompleto                       String?                @map("nome_completo")
+  marca                              String?
+  modelo                             String?
+  ano                                Int?
+  aluguelViatura                     Decimal?               @map("aluguel_viatura") @db.Decimal(10, 2)
+  comissaoTipo                       VehicleCommissionType? @map("comissao_tipo")
+  comissaoValor                      Decimal?               @map("comissao_valor") @db.Decimal(10, 2)
+  comissaoIva6                       Boolean                @default(false) @map("comissao_iva_6")
+  slotIncluirViaVerde                Boolean                @default(false) @map("slot_incluir_via_verde")
+  slotIncluirEletricidadeCombustivel Boolean                @default(false) @map("slot_incluir_eletricidade_combustivel")
+  createdAt                          DateTime               @default(now()) @map("created_at")
+  updatedAt                          DateTime               @updatedAt @map("updated_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  viaVerdeMovements ViaVerdeMovement[]
+  electricityCharges ElectricityCharge[]
+  fuelTransactions FuelTransaction[]
+
+  @@index([userId])
+  @@index([tenantId])
+  @@index([tenantId, matricula])
+  @@map("user_vehicles")
+}
+
+model ViaVerdeMovement {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  userId             String?   @map("user_id") @db.Uuid
+  userVehicleId      String?   @map("user_vehicle_id") @db.Uuid
+  licensePlate       String    @map("license_plate")
+  iai                String?
+  obu                String
+  serviceCode        String?   @map("service_code")
+  serviceDescription String?   @map("service_description")
+  marketCode         String?   @map("market_code")
+  marketDescription  String?   @map("market_description")
+  entryDate          DateTime? @map("entry_date")
+  exitDate           DateTime? @map("exit_date")
+  entryPoint         String?   @map("entry_point")
+  exitPoint          String?   @map("exit_point")
+  value              Decimal   @db.Decimal(12, 2)
+  isPaid             Boolean   @default(false) @map("is_paid")
+  paymentDate        DateTime? @map("payment_date")
+  contractNumber     String?   @map("contract_number")
+  liquidValue        Decimal?  @map("liquid_value") @db.Decimal(12, 2)
+  discountBalance    Decimal?  @map("discount_balance") @db.Decimal(12, 2)
+  mobilityAccount    String?   @map("mobility_account")
+  paymentMethod      String?   @map("payment_method")
+  systemEntryDate    DateTime? @map("system_entry_date")
+  importedByUserId   String?   @map("imported_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user         User?        @relation("ViaVerdeMovementUser", fields: [userId], references: [id], onDelete: SetNull)
+  userVehicle  UserVehicle? @relation(fields: [userVehicleId], references: [id], onDelete: SetNull)
+  importedBy   User?        @relation("ViaVerdeMovementImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, obu])
+  @@index([tenantId, licensePlate])
+  @@index([tenantId, isPaid])
+  @@index([tenantId, entryDate])
+  @@map("via_verde_movements")
+}
+
+model ElectricityCharge {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  userId             String?   @map("user_id") @db.Uuid
+  userVehicleId      String?   @map("user_vehicle_id") @db.Uuid
+  chargeExternalId   String?   @map("charge_external_id")
+  chargeDate         DateTime  @map("charge_date") @db.Date
+  cardNumber         String?   @map("card_number")
+  name               String?
+  licensePlate       String?   @map("license_plate")
+  station            String?
+  energyKwh          Decimal?  @map("energy_kwh") @db.Decimal(12, 3)
+  duration           String?
+  totalWithVat       Decimal   @map("total_with_vat") @db.Decimal(12, 2)
+  isPaid             Boolean   @default(false) @map("is_paid")
+  paymentDate        DateTime? @map("payment_date")
+  importedByUserId   String?   @map("imported_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User?        @relation("ElectricityChargeUser", fields: [userId], references: [id], onDelete: SetNull)
+  userVehicle UserVehicle? @relation(fields: [userVehicleId], references: [id], onDelete: SetNull)
+  importedBy  User?        @relation("ElectricityChargeImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, chargeDate])
+  @@index([tenantId, isPaid])
+  @@index([tenantId, cardNumber])
+  @@index([tenantId, chargeExternalId])
+  @@map("electricity_charges")
 }
 
 // ─── Auth & Sessions ────────────────────────────────────────────────────────
@@ -2250,4 +2440,138 @@ model BoltSyncLog {
   @@index([workspaceId, startedAt])
   @@index([tenantId])
   @@map("bolt_sync_logs")
+}
+
+enum PortalKind {
+  via_verde
+  myprio
+  uber
+}
+
+enum PortalConnectionStatus {
+  disconnected
+  connected
+  awaiting_otp
+  expired
+  error
+}
+
+enum PortalJobStatus {
+  pending
+  running
+  awaiting_otp
+  completed
+  failed
+}
+
+enum PortalJobType {
+  connect
+  sync
+  refresh
+}
+
+model PortalConnection {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  tenantId               String                 @map("tenant_id") @db.Uuid
+  portal                 PortalKind
+  usernameEncrypted      String?                @map("username_encrypted") @db.Text
+  passwordEncrypted      String?                @map("password_encrypted") @db.Text
+  sessionStateEncrypted  String?                @map("session_state_encrypted") @db.Text
+  status                 PortalConnectionStatus @default(disconnected)
+  lastLoginAt            DateTime?              @map("last_login_at")
+  lastSyncAt             DateTime?              @map("last_sync_at")
+  lastError              String?                @map("last_error") @db.Text
+  activeJobId            String?                @map("active_job_id") @db.Uuid
+  isEnabled              Boolean                @default(true) @map("is_enabled")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  updatedAt              DateTime               @updatedAt @map("updated_at")
+
+  tenant Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  jobs   PortalSyncJob[]
+
+  @@unique([tenantId, portal])
+  @@index([tenantId])
+  @@index([status])
+  @@map("portal_connections")
+}
+
+model PortalSyncJob {
+  id           String          @id @default(uuid()) @db.Uuid
+  tenantId     String          @map("tenant_id") @db.Uuid
+  connectionId String          @map("connection_id") @db.Uuid
+  portal       PortalKind
+  type         PortalJobType
+  status       PortalJobStatus @default(pending)
+  message      String?         @db.Text
+  resultJson   Json?           @map("result_json")
+  otpHint      String?         @map("otp_hint")
+  startedAt    DateTime?       @map("started_at")
+  completedAt  DateTime?       @map("completed_at")
+  createdAt    DateTime        @default(now()) @map("created_at")
+  updatedAt    DateTime        @updatedAt @map("updated_at")
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  connection PortalConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, portal])
+  @@index([connectionId, status])
+  @@map("portal_sync_jobs")
+}
+
+model FuelTransaction {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  userId             String?   @map("user_id") @db.Uuid
+  userVehicleId      String?   @map("user_vehicle_id") @db.Uuid
+  station            String?
+  chargeDate         DateTime  @map("charge_date")
+  cardNumber         String?   @map("card_number")
+  cardDescription    String?   @map("card_description")
+  liters             Decimal?  @db.Decimal(12, 3)
+  fuelType           String?   @map("fuel_type")
+  receiptNumber      String?   @map("receipt_number")
+  totalWithVat       Decimal   @map("total_with_vat") @db.Decimal(12, 2)
+  clientName         String?   @map("client_name")
+  isPaid             Boolean   @default(false) @map("is_paid")
+  paymentDate        DateTime? @map("payment_date")
+  importedByUserId   String?   @map("imported_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User?        @relation("FuelTransactionUser", fields: [userId], references: [id], onDelete: SetNull)
+  userVehicle UserVehicle? @relation(fields: [userVehicleId], references: [id], onDelete: SetNull)
+  importedBy  User?        @relation("FuelTransactionImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, chargeDate])
+  @@index([tenantId, isPaid])
+  @@index([tenantId, cardNumber])
+  @@index([tenantId, receiptNumber])
+  @@map("fuel_transactions")
+}
+
+model UberPayment {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  userId             String?   @map("user_id") @db.Uuid
+  driverUuid         String    @map("driver_uuid")
+  firstName          String?   @map("first_name")
+  lastName           String?   @map("last_name")
+  reportDate         DateTime  @map("report_date")
+  amount             Decimal   @db.Decimal(12, 2)
+  transactionUuid    String?   @map("transaction_uuid")
+  description        String?
+  isPaid             Boolean   @default(false) @map("is_paid")
+  paymentDate        DateTime? @map("payment_date")
+  importedByUserId   String?   @map("imported_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user       User?  @relation("UberPaymentUser", fields: [userId], references: [id], onDelete: SetNull)
+  importedBy User?  @relation("UberPaymentImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, reportDate])
+  @@index([tenantId, driverUuid])
+  @@index([tenantId, isPaid])
+  @@unique([tenantId, driverUuid, reportDate, amount])
+  @@map("uber_payments")
 }

@@ -106,10 +106,11 @@ function splitCsvLines(text: string): string[] {
     const char = text[i];
     if (char === '"') {
       if (inQuotes && text[i + 1] === '"') {
-        current += '"';
+        current += '""';
         i += 1;
       } else {
         inQuotes = !inQuotes;
+        current += '"';
       }
       continue;
     }

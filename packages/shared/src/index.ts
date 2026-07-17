@@ -4,6 +4,8 @@ export {
   canAssignRole,
   getAssignableRoles,
   canManageUser,
+  canCreateUsers,
+  canToggleUserStatus,
   DASHBOARD_ACCESS,
   canAccessDashboardArea,
   canAccessClientsDashboard,
@@ -39,6 +41,7 @@ export const DEFAULT_LIMITS = {
   max_users: 10,
   max_products: 100,
   max_workspaces: 1,
+  max_vehicles: 3,
   api_calls_month: 1000,
 };
 
@@ -201,6 +204,68 @@ export {
   whatsappPhonesMatch,
 } from './whatsapp-phone';
 export {
+  USERNAME_PATTERN,
+  USER_STATUS_OPTIONS,
+  buildUserPhone,
+  getPasswordRequirementChecks,
+  isPasswordStrong,
+  isValidUserPhone,
+  isValidUsername,
+  normalizeUsername,
+  roleRequiresPhone,
+  splitUserPhone,
+  type PasswordRequirementCheck,
+} from './user-validation';
+export {
+  USER_DOCUMENT_TYPES,
+  USER_DOCUMENT_TYPE_LABELS,
+  USER_DOCUMENT_VISIBILITIES,
+  USER_DOCUMENT_VISIBILITY_LABELS,
+  USER_DOCUMENT_MIME_TYPES,
+  USER_DOCUMENT_MAX_BYTES,
+  canViewUserProfile,
+  canEditUserProfile,
+  isAllowedUserDocumentMime,
+  type UserDocumentType,
+  type UserDocumentVisibility,
+  type UserProfileFields,
+  type UserDocumentItem,
+  type UserProfileDetail,
+  type UserProfileDetailUser,
+} from './user-profile';
+export {
+  VEHICLE_COMMISSION_TYPES,
+  VEHICLE_COMMISSION_TYPE_LABELS,
+  normalizeUserVehicleMatricula,
+  formatUserVehicleMatricula,
+  parseOptionalDecimal,
+  parseOptionalYear,
+  parseDateOnlyInput,
+  formatDateOnlyInput,
+  type VehicleCommissionType,
+  type UserVehicleRecord,
+  type TenantVehicleLimits,
+} from './user-vehicle';
+export {
+  STORAGE_GB_BYTES,
+  gbToStorageBytes,
+  storageBytesToGb,
+  formatStorageBytes,
+  storageUsagePercent,
+  storageLimitAlertLevel,
+  type TenantStorageBreakdown,
+  type TenantStorageSummary,
+} from './storage';
+export {
+  overlapDays,
+  isUserVehicleActive,
+  pickBestUserVehicleForPeriod,
+  vehicleLimitUsagePercent,
+  vehicleLimitAlertLevel,
+  toDateOnlyUtc,
+  type UserVehiclePeriodRecord,
+} from './user-vehicle-overlap';
+export {
   CARWASH_LICENSE_COUNTRIES,
   formatLicensePlateDisplay,
   formatPortugueseLicensePlate,
@@ -209,6 +274,79 @@ export {
   validatePortugueseLicensePlate,
   type CarwashLicenseCountry,
 } from './carwash-license-plate';
+export {
+  PORTAL_KINDS,
+  PORTAL_KIND_LABELS,
+  PORTAL_CONNECTION_STATUSES,
+  PORTAL_CONNECTION_STATUS_LABELS,
+  MYPRIO_SYNC_SCOPES,
+  MYPRIO_SYNC_SCOPE_LABELS,
+  type PortalKind,
+  type PortalConnectionStatus,
+  type PortalConnectionPublic,
+  type PortalConnectInput,
+  type PortalOtpInput,
+  type PortalSyncResultSummary,
+  type MyPrioSyncScope,
+} from './portal-rpa';
+export {
+  PT_MONTH_LABELS,
+  currentMonthKey,
+  parseMonthKey,
+  getMonthUtcRange,
+  currentYearMonthOptions,
+} from './month-filter';
+export {
+  SPREADSHEET_IMPORT_EXTENSIONS,
+  cellToImportString,
+  normalizeSpreadsheetRows,
+  parseCsvTextToRows,
+  parseSpreadsheetDateValue,
+  findSpreadsheetHeaderRowIndex,
+  isSpreadsheetImportFilename,
+} from './spreadsheet-rows';
+export {
+  VIA_VERDE_PAGE_SIZE,
+  parseViaVerdeRows,
+  parseViaVerdeCsv,
+  parseViaVerdeImportFileName,
+  type ViaVerdeMovementItem,
+  type ViaVerdeDashboardStats,
+  type ViaVerdeImportRowError,
+  type ViaVerdeParsedMovement,
+  type ViaVerdeImportResult,
+} from './via-verde';
+export {
+  ELECTRICITY_PAGE_SIZE,
+  ELECTRICITY_IMPORT_FIELDS,
+  guessElectricityFieldMapping,
+  parseElectricityRows,
+  parseElectricityCsv,
+  parseElectricityImportFileName,
+  type ElectricityImportField,
+  type ElectricityChargeItem,
+  type ElectricityDashboardStats,
+  type ElectricityImportRowError,
+  type ElectricityParsedCharge,
+  type ElectricityImportResult,
+} from './electricity';
+export {
+  COMBUSTIVEL_PAGE_SIZE,
+  parseCombustivelRows,
+  parseCombustivelCsv,
+  parseCombustivelImportFileName,
+  type CombustivelImportRowError,
+  type CombustivelParsedTransaction,
+  type CombustivelImportResult,
+} from './combustivel';
+export {
+  UBER_CSV_REQUIRED_COLUMNS,
+  parseUberCsv,
+  parseUberImportFileName,
+  type UberImportRowError,
+  type UberParsedPayment,
+  type UberImportResult,
+} from './uber-import';
 export {
   RECIBOS_VERDES_CSV_MAX_ROWS,
   parseRecibosVerdesCsv,
