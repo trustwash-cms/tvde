@@ -114,18 +114,27 @@ export async function viaVerdeRoutes(fastify: FastifyInstance) {
     try {
       const tenantId = requireTenant(request);
       const { id } = request.params as { id: string };
-      const data = await markViaVerdeMovementPaid(fastify.db, tenantId, id);
+      const body = z
+        .object({ isPaid: z.boolean().optional() })
+        .optional()
+        .parse(request.body);
+      const isPaid = body?.isPaid ?? true;
+      const data = await markViaVerdeMovementPaid(fastify.db, tenantId, id, isPaid);
 
       await createAuditLog({
         tenantId,
         userId: request.user.sub,
-        action: 'via_verde.mark_paid',
+        action: isPaid ? 'via_verde.mark_paid' : 'via_verde.mark_unpaid',
         entityType: 'via_verde_movement',
         entityId: id,
         ipAddress: request.ip,
       });
 
-      return reply.send({ success: true, data, message: 'Movimento marcado como pago' });
+      return reply.send({
+        success: true,
+        data,
+        message: isPaid ? 'Movimento marcado como pago' : 'Movimento marcado como não pago',
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro';
       return reply.status(400).send({ success: false, error: message });

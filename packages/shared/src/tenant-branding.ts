@@ -12,12 +12,22 @@ export function parseTenantLoginLogoScale(value: string | null | undefined): Ten
 }
 
 export const TENANT_BRANDING_MAX_LOGO_BYTES = 2 * 1024 * 1024;
-export const TENANT_BRANDING_MAX_WALLPAPER_BYTES = 5 * 1024 * 1024;
+/** Wallpaper pode ser GIF animado — limite um pouco maior que o logo. */
+export const TENANT_BRANDING_MAX_WALLPAPER_BYTES = 8 * 1024 * 1024;
 
 export const TENANT_BRANDING_LOGO_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
-export const TENANT_BRANDING_WALLPAPER_MIME_TYPES = TENANT_BRANDING_LOGO_MIME_TYPES;
+export const TENANT_BRANDING_WALLPAPER_MIME_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+] as const;
+
+/** Wallpaper por defeito no ecrã de login (apps/web/public). */
+export const DEFAULT_LOGIN_WALLPAPER_PATH = '/default_login_wallpaper.gif';
 
 export type TenantBrandingLogoMimeType = (typeof TENANT_BRANDING_LOGO_MIME_TYPES)[number];
+export type TenantBrandingWallpaperMimeType = (typeof TENANT_BRANDING_WALLPAPER_MIME_TYPES)[number];
 
 export interface TenantCompanyLogoMeta {
   storageKey: string;

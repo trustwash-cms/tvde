@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, Trash2, Upload } from 'lucide-react';
+import { Check, Trash2, Upload, X } from 'lucide-react';
 import {
   VIA_VERDE_PAGE_SIZE,
   currentMonthKey,
@@ -152,16 +152,19 @@ export function ViaVerdePanel() {
     await loadData();
   }
 
-  async function markPaid(id: string) {
+  async function markPaid(id: string, isPaid: boolean) {
     setBusyId(id);
     const res = await apiFetch<ViaVerdeMovementItem>(
       API_PATHS.viaVerde.movementPaid(id),
-      { method: 'PATCH' },
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ isPaid }),
+      },
       getStoredToken()
     );
     setBusyId(null);
     if (!res.success) {
-      setError(res.error ?? 'Falha ao marcar como pago');
+      setError(res.error ?? (isPaid ? 'Falha ao marcar como pago' : 'Falha ao desmarcar'));
       return;
     }
     await loadData();
@@ -381,11 +384,21 @@ export function ViaVerdePanel() {
                             className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
                             title="Marcar como pago"
                             disabled={busyId === item.id}
-                            onClick={() => void markPaid(item.id)}
+                            onClick={() => void markPaid(item.id, true)}
                           >
                             <Check size={16} />
                           </button>
-                        ) : null}
+                        ) : (
+                          <button
+                            type="button"
+                            className="rounded p-1 text-slate-600 hover:bg-slate-100"
+                            title="Desmarcar pago"
+                            disabled={busyId === item.id}
+                            onClick={() => void markPaid(item.id, false)}
+                          >
+                            <X size={16} />
+                          </button>
+                        )}
                         <button
                           type="button"
                           className="rounded p-1 text-red-700 hover:bg-red-100"

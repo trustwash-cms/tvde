@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { STORAGE_KEYS, WEB_ROUTES } from '@tvde/shared';
+import { STORAGE_KEYS, WEB_ROUTES, DEFAULT_LOGIN_WALLPAPER_PATH } from '@tvde/shared';
 import type { TenantLoginLogoScale } from '@tvde/shared';
 import { apiFetch, storeTokens, showDemoHint, appName, turnstileSiteKey, API_PATHS, getApiUrl } from '@/lib/api';
 import { LOGIN_LOGO_SCALE_CLASSES } from '@/lib/login-logo-scale';
@@ -92,7 +92,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [branding, setBranding] = useState<TenantBrandingPreview | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
-  const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(null);
+  const [wallpaperUrl, setWallpaperUrl] = useState<string | null>(DEFAULT_LOGIN_WALLPAPER_PATH);
 
   const turnstileEnabled = mounted && Boolean(turnstileSiteKey);
 
@@ -122,7 +122,7 @@ export default function LoginPage() {
         else {
           setBranding(null);
           setLogoUrl(null);
-          setWallpaperUrl(null);
+          setWallpaperUrl(DEFAULT_LOGIN_WALLPAPER_PATH);
         }
       });
     }, 350);
@@ -159,7 +159,7 @@ export default function LoginPage() {
   useEffect(() => {
     const trimmed = siteId.trim();
     if (!trimmed || !branding?.wallpaper.hasWallpaper) {
-      setWallpaperUrl(null);
+      setWallpaperUrl(DEFAULT_LOGIN_WALLPAPER_PATH);
       return;
     }
 
@@ -173,9 +173,11 @@ export default function LoginPage() {
         if (blob) {
           objectUrl = URL.createObjectURL(blob);
           setWallpaperUrl(objectUrl);
+        } else {
+          setWallpaperUrl(DEFAULT_LOGIN_WALLPAPER_PATH);
         }
       })
-      .catch(() => setWallpaperUrl(null));
+      .catch(() => setWallpaperUrl(DEFAULT_LOGIN_WALLPAPER_PATH));
 
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);

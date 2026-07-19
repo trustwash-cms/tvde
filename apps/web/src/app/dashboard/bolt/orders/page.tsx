@@ -17,6 +17,7 @@ interface BoltOrderRow {
   orderCreatedTimestamp: string | null;
   stopsCount: number;
   boltCompanyId: number | null;
+  isPaid: boolean;
 }
 
 interface OrdersResponse {
@@ -76,7 +77,9 @@ export default function BoltOrdersPage() {
   return (
     <div className="space-y-6">
       <p className="text-sm text-slate-500">
-        Apenas corridas <strong>finished</strong> com valor registado.
+        Corridas <strong>finished</strong> com valor. Coluna «Preço» ={' '}
+        <code className="text-xs">ride_price</code> da Fleet API (valor da corrida para a
+        frota/motorista — não o total bruto ao passageiro com comissão Bolt).
       </p>
 
       <form onSubmit={onFilter} className="card flex flex-wrap items-end gap-3">
@@ -106,13 +109,17 @@ export default function BoltOrdersPage() {
               <th className="px-6 py-3">Status</th>
               <th className="px-6 py-3">Veículo</th>
               <th className="px-6 py-3">Preço</th>
+              <th className="px-6 py-3">Pago</th>
               <th className="px-6 py-3">Data</th>
               <th className="px-6 py-3">Paradas</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.id} className="border-t">
+              <tr
+                key={row.id}
+                className={`border-t ${row.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/40'}`}
+              >
                 <td className="px-6 py-3">{row.boltCompanyId ?? '—'}</td>
                 <td className="px-6 py-3">{row.driverName ?? '—'}</td>
                 <td className="px-6 py-3">
@@ -122,6 +129,17 @@ export default function BoltOrdersPage() {
                 </td>
                 <td className="px-6 py-3">{row.vehicleModel ?? '—'}</td>
                 <td className="px-6 py-3">{row.ridePrice ? `${Number(row.ridePrice).toFixed(2)}€` : '—'}</td>
+                <td className="px-6 py-3">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      row.isPaid
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {row.isPaid ? 'Sim' : 'Não'}
+                  </span>
+                </td>
                 <td className="px-6 py-3 text-slate-500">
                   {row.orderCreatedTimestamp ? new Date(row.orderCreatedTimestamp).toLocaleString('pt-PT') : '—'}
                 </td>
@@ -134,7 +152,7 @@ export default function BoltOrdersPage() {
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={7} className="px-6 py-8 text-center text-slate-400">
+                <td colSpan={8} className="px-6 py-8 text-center text-slate-400">
                   Sem corridas concluídas com valor
                 </td>
               </tr>

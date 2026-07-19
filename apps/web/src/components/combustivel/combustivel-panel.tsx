@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, Trash2, Upload } from 'lucide-react';
-import { currentMonthKey, hasMinRole, type Role } from '@tvde/shared';
+import { COMBUSTIVEL_PAGE_SIZE, currentMonthKey, hasMinRole, type Role } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { MonthTotalCard } from '@/components/month-total-card';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
@@ -51,6 +51,9 @@ export function CombustivelPanel() {
   const [role, setRole] = useState<Role | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
   const [error, setError] = useState('');
   const [importMsg, setImportMsg] = useState('');
@@ -62,12 +65,20 @@ export function CombustivelPanel() {
     const token = getStoredToken();
     const [dash, list] = await Promise.all([
       apiFetch<Dashboard>(`${API_PATHS.combustivel.dashboard}?month=${selectedMonth}`, {}, token),
-      apiFetch<{ items: Item[] }>(API_PATHS.combustivel.transactions, {}, token),
+      apiFetch<{ items: Item[]; total: number; totalPages: number }>(
+        `${API_PATHS.combustivel.transactions}?page=${page}`,
+        {},
+        token
+      ),
     ]);
     if (dash.data) setDashboard(dash.data);
-    if (list.data) setItems(list.data.items);
+    if (list.data) {
+      setItems(list.data.items);
+      setTotal(list.data.total ?? list.data.items.length);
+      setTotalPages(list.data.totalPages ?? 1);
+    }
     if (!dash.success) setError(dash.error ?? 'Erro');
-  }, [selectedMonth]);
+  }, [selectedMonth, page]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -94,6 +105,7 @@ export function CombustivelPanel() {
       return;
     }
     setImportMsg(`Inseridos: ${raw.data.inserted} · Ignorados: ${raw.data.skipped}`);
+    setPage(1);
     await load();
   }
 
@@ -158,7 +170,10 @@ export function CombustivelPanel() {
           selectId="combustivel-month"
           value={formatMoney(dashboard?.monthTotal ?? 0)}
           monthKey={selectedMonth}
-          onMonthChange={setSelectedMonth}
+          onMonthChange={(m) => {
+            setSelectedMonth(m);
+            setPage(1);
+          }}
         />
         {canManage ? (
           <div className="card flex flex-col justify-center gap-2">
@@ -270,6 +285,30 @@ export function CombustivelPanel() {
             ) : null}
           </tbody>
         </table>
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <p className="text-sm text-slate-500">
+            Página {page} de {totalPages}
+            {total ? ` · ${total} registo(s)` : ''} · {COMBUSTIVEL_PAGE_SIZE}/página
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              «
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              »
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

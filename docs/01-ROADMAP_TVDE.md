@@ -2,8 +2,8 @@
 
 Documento de referência para migrar e evoluir funcionalidades do projeto PHP legado para o monorepo TVDE (Next.js + Fastify + PostgreSQL + Prisma).
 
-**Última actualização:** Julho 2026  
-**Estado actual:** Bolt + utilizadores; Via Verde / Eletricidade / Combustível / Uber com import; **Portal RPA** (ligar conta + OTP + sync + keep-alive sessões) — ver [`docs/03-PORTAL_RPA.md`](./03-PORTAL_RPA.md).
+**Última actualização:** 19 Julho 2026  
+**Estado actual:** Bolt + utilizadores; Via Verde / Eletricidade / Combustível / Uber com import + Portal RPA; **Pagamentos** (calculadora + massa + mark/unmark pagos) — ver [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md).
 
 ---
 
@@ -71,9 +71,18 @@ staff        → Staff operacional
 
 ### 2.4 Navegação e settings (shell)
 
-- [x] Nav: Uber, Via Verde, Eletricidade, Combustível, Pagamentos (placeholders)
-- [x] Settings → TVDE submenu: Sessions, Storage, Limite viaturas, Contratos, Métodos pagamento, Conta corrente (placeholders)
+- [x] Nav: Uber, Via Verde, Eletricidade, Combustível, **Pagamentos** (módulo activo)
+- [x] Settings → TVDE submenu: Sessions, Storage, Limite viaturas; Contratos / Métodos / Conta corrente (placeholders)
 - [x] 2FA self-service: `/dashboard/settings/two-fa`
+
+### 2.4b Pagamentos (Sprint E — parcial)
+
+- [x] Calculadora manual + confirmar → `payment_reports`
+- [x] Pagamentos em massa + sync plataformas (Uber→Bolt→VV→Prio)
+- [x] Mark/unmark fidedigno VV / elec / fuel / Uber / Bolt (`is_paid`)
+- [x] Listagem + detalhe tipo calculadora
+- [ ] Conta corrente, email/WhatsApp, anexos ZIP
+- Doc: [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md)
 
 ### 2.5 O que falta na UI de utilizadores (stubs)
 
@@ -97,7 +106,7 @@ staff        → Staff operacional
 | `user_documents` | — | Upload + model `UserDocument` |
 | `viaverdemov` | Placeholder | Importador + API |
 | `priomov` (eletricidade) | Placeholder | Importador PRIO |
-| `payment_reports` | — | Serviço PaymentCalculator |
+| `payment_reports` | `PaymentReport` + mark paid nas fontes | [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md) |
 | `site_storage_limits` | `Tenant.limitsJson` | Formalizar quotas |
 | Módulos por site | `TenantModule` | Já existe |
 | Impersonate | — | MASTER only + audit |
@@ -256,7 +265,7 @@ Padrão de implementação: **copiar Bolt** (package → API routes → sync →
 | **Via Verde** | shell | — | `VIAVERDE.md`, `AREA_VIA_VERDE.md` | `user_vehicles.matricula` |
 | **Eletricidade** | shell | — | `AREA_ELETRICIDADE.md` | PRIO + `numCartaoPrio` |
 | **Combustível** | shell | — | (PRIO partilhado) | `numCartaoPrio` |
-| **Pagamentos** | shell | — | `PAYMENT_CALCULATOR.md`, `RELATORIOS_MOTORISTAS.md` | Todos acima |
+| **Pagamentos** | calc + gravar | [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md) | `PAYMENT_CALCULATOR.md`, `RELATORIOS_MOTORISTAS.md` | Todos acima |
 | **Viaturas** | (futuro) | — | `viaturas.md` | FleetVehicle |
 
 ### 6.1 Via Verde — resumo funcional
@@ -400,7 +409,7 @@ Ref: `PAYMENT_CALCULATOR.md`, `AREA_PAGAMENTOS_EMAIL.md`
 | D6 | Dashboard cards (totais pendentes) | ambos |
 | D7 | Ligação `user_vehicles` para matching | ambos |
 
-**Docs:** [`04-VIAVERDE.md`](./04-VIAVERDE.md), [`05-PRIO.md`](./05-PRIO.md), [`06-UBER.md`](./06-UBER.md), **[`03-PORTAL_RPA.md`](./03-PORTAL_RPA.md)** (ligar conta + keep-alive)
+**Docs:** [`04-VIAVERDE.md`](./04-VIAVERDE.md), [`05-PRIO.md`](./05-PRIO.md), [`06-UBER.md`](./06-UBER.md), [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md), **[`03-PORTAL_RPA.md`](./03-PORTAL_RPA.md)** (ligar conta + keep-alive)
 
 ---
 

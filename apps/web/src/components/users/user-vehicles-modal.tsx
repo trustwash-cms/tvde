@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   API_PATHS,
   VEHICLE_COMMISSION_TYPES,
@@ -16,6 +16,69 @@ import { apiFetch, getApiErrorMessage } from '@/lib/api';
 import type { UserListItem } from '@/components/users/user-list-card';
 import clsx from 'clsx';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
+
+type PlatformDriverOption = { uuid: string; label: string };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Só aceita UUIDs reais — ignora textos placeholder guardados por engano. */
+function sanitizePlatformUuid(value: string | null | undefined): string {
+  const t = (value ?? '').trim();
+  return UUID_RE.test(t) ? t : '';
+}
+
+function shortUuid(uuid: string) {
+  const t = uuid.trim();
+  if (t.length <= 12) return t;
+  return `${t.slice(0, 8)}…${t.slice(-4)}`;
+}
+
+function DriverUuidSelect({
+  label,
+  value,
+  options,
+  loading,
+  emptyHint,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: PlatformDriverOption[];
+  loading: boolean;
+  emptyHint: string;
+  onChange: (uuid: string) => void;
+}) {
+  const safeValue = sanitizePlatformUuid(value);
+  const optionsWithCurrent = useMemo(() => {
+    if (!safeValue) return options;
+    const exists = options.some((o) => o.uuid.toLowerCase() === safeValue.toLowerCase());
+    if (exists) return options;
+    return [{ uuid: safeValue, label: `${shortUuid(safeValue)} (actual)` }, ...options];
+  }, [options, safeValue]);
+
+  return (
+    <div>
+      <label className="mb-1 block text-sm font-medium text-slate-700">{label}</label>
+      <select
+        className="input"
+        value={safeValue}
+        disabled={loading}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">— Nenhum —</option>
+        {optionsWithCurrent.map((opt) => (
+          <option key={opt.uuid} value={opt.uuid}>
+            {opt.label} · {shortUuid(opt.uuid)}
+          </option>
+        ))}
+      </select>
+      {!loading && !options.length ? (
+        <p className="mt-1 text-xs text-slate-500">{emptyHint}</p>
+      ) : null}
+    </div>
+  );
+}
 
 function emptyForm(): Record<string, string | boolean> {
   return {
@@ -47,8 +110,8 @@ function vehicleToForm(vehicle: UserVehicleRecord): Record<string, string | bool
     matriculaCountry: vehicle.matriculaCountry,
     dataInicio: vehicle.dataInicio,
     dataFim: vehicle.dataFim ?? '',
-    uuidUber: vehicle.uuidUber ?? '',
-    uuidBolt: vehicle.uuidBolt ?? '',
+    uuidUber: sanitizePlatformUuid(vehicle.uuidUber),
+    uuidBolt: sanitizePlatformUuid(vehicle.uuidBolt),
     numCartaoPrio: vehicle.numCartaoPrio ?? '',
     nomeCompleto: vehicle.nomeCompleto ?? '',
     marca: vehicle.marca ?? '',
@@ -70,8 +133,8 @@ function buildPayload(form: Record<string, string | boolean>) {
     matriculaCountry: String(form.matriculaCountry || 'PT'),
     dataInicio: String(form.dataInicio),
     dataFim: String(form.dataFim).trim() ? String(form.dataFim) : null,
-    uuidUber: String(form.uuidUber).trim() || null,
-    uuidBolt: String(form.uuidBolt).trim() || null,
+    uuidUber: sanitizePlatformUuid(String(form.uuidUber)) || null,
+    uuidBolt: sanitizePlatformUuid(String(form.uuidBolt)) || null,
     numCartaoPrio: String(form.numCartaoPrio).trim() || null,
     nomeCompleto: String(form.nomeCompleto).trim() || null,
     marca: String(form.marca).trim() || null,
@@ -102,6 +165,9 @@ export function UserVehiclesModal({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyForm());
+  const [uberDrivers, setUberDrivers] = useState<PlatformDriverOption[]>([]);
+  const [boltDrivers, setBoltDrivers] = useState<PlatformDriverOption[]>([]);
+  const [loadingDrivers, setLoadingDrivers] = useState(false);
 
   const comissaoTipo = String(form.comissaoTipo) as VehicleCommissionType | '';
   const showCommissionOptions = comissaoTipo === 'percentagem' || comissaoTipo === 'slot';
@@ -120,12 +186,26 @@ export function UserVehiclesModal({
     });
   }
 
+  function loadPlatformDrivers() {
+    setLoadingDrivers(true);
+    apiFetch<{ uber: PlatformDriverOption[]; bolt: PlatformDriverOption[] }>(
+      API_PATHS.users.vehiclePlatformDrivers
+    ).then((res) => {
+      setLoadingDrivers(false);
+      if (res.success && res.data) {
+        setUberDrivers(res.data.uber);
+        setBoltDrivers(res.data.bolt);
+      }
+    });
+  }
+
   useEffect(() => {
     if (!open || !user) return;
     setEditingId(null);
     setShowForm(false);
     setForm(emptyForm());
     loadVehicles();
+    loadPlatformDrivers();
   }, [open, user]);
 
   function openCreateForm() {
@@ -291,22 +371,22 @@ export function UserVehiclesModal({
               />
               <p className="mt-1 text-xs text-slate-500">Vazio = activa</p>
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">UUID Uber</label>
-              <input
-                className="input"
-                value={String(form.uuidUber)}
-                onChange={(e) => setForm({ ...form, uuidUber: e.target.value })}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">UUID Bolt</label>
-              <input
-                className="input"
-                value={String(form.uuidBolt)}
-                onChange={(e) => setForm({ ...form, uuidBolt: e.target.value })}
-              />
-            </div>
+            <DriverUuidSelect
+              label="UUID Uber"
+              value={String(form.uuidUber)}
+              options={uberDrivers}
+              loading={loadingDrivers}
+              emptyHint="Sem motoristas Uber — importe/sincronize pagamentos Uber primeiro."
+              onChange={(uuid) => setForm({ ...form, uuidUber: uuid })}
+            />
+            <DriverUuidSelect
+              label="UUID Bolt"
+              value={String(form.uuidBolt)}
+              options={boltDrivers}
+              loading={loadingDrivers}
+              emptyHint="Sem motoristas Bolt — sincronize a frota Bolt primeiro."
+              onChange={(uuid) => setForm({ ...form, uuidBolt: uuid })}
+            />
             <div>
               <label className="mb-1 block text-sm font-medium text-slate-700">Cartão PRIO</label>
               <input
@@ -384,7 +464,7 @@ export function UserVehiclesModal({
                     required
                   />
                 </div>
-                <div className="flex items-end pb-1">
+                <div className="flex flex-col justify-end gap-1 pb-1">
                   <label className="inline-flex items-center gap-2 text-sm text-slate-700">
                     <input
                       type="checkbox"
@@ -393,6 +473,10 @@ export function UserVehiclesModal({
                     />
                     IVA 6%
                   </label>
+                  <p className="text-xs text-slate-500">
+                    6% sobre receitas Uber e Bolt (linhas separadas no relatório). Não aumenta a
+                    comissão.
+                  </p>
                 </div>
               </div>
             ) : null}

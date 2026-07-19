@@ -176,7 +176,7 @@ export async function tenantBrandingRoutes(fastify: FastifyInstance) {
         if (!TENANT_BRANDING_WALLPAPER_MIME_TYPES.includes(mimeType as never)) {
           return reply.status(400).send({
             success: false,
-            error: 'Formato inválido — use JPEG, PNG ou WebP',
+            error: 'Formato inválido — use JPEG, PNG, WebP ou GIF',
           });
         }
 

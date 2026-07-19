@@ -96,7 +96,7 @@ export function getServerConfig() {
     invoiceDownloadTokenExpiresMs: parseDurationMs(envOr('INVOICE_DOWNLOAD_TOKEN_EXPIRES', '90d')),
     brandingUploadDir: envOr('BRANDING_UPLOAD_DIR', 'uploads/branding'),
     brandingMaxLogoBytes: parseInt(envOr('BRANDING_MAX_LOGO_BYTES', '2097152'), 10),
-    brandingMaxWallpaperBytes: parseInt(envOr('BRANDING_MAX_WALLPAPER_BYTES', '5242880'), 10),
+    brandingMaxWallpaperBytes: parseInt(envOr('BRANDING_MAX_WALLPAPER_BYTES', '8388608'), 10),
     ecommerceUploadDir: envOr('ECOMMERCE_UPLOAD_DIR', 'uploads/ecommerce'),
     ecommerceMaxProductImageBytes: parseInt(
       envOr('ECOMMERCE_MAX_PRODUCT_IMAGE_BYTES', '5242880'),
@@ -106,6 +106,11 @@ export function getServerConfig() {
     // Default: mock em dev para não exigir Chromium; em produção sync real
     portalRpaMock: (process.env.PORTAL_RPA_MOCK ?? (isProd ? 'false' : 'true')) === 'true',
     portalRpaHeadless: envOr('PORTAL_RPA_HEADLESS', 'true') === 'true',
+    /**
+     * Uber Ligar conta com Chromium visível (debug). Default false — fluxo automático
+     * SMS → OTP (modal TVDE) → palavra-passe.
+     */
+    portalRpaUberInteractive: envOr('PORTAL_RPA_UBER_INTERACTIVE', 'false') === 'true',
     /** Intervalo do worker que renova cookies (horas). */
     portalRpaRefreshIntervalHours: Math.max(
       1,

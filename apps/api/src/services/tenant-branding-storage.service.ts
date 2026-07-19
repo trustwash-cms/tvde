@@ -10,10 +10,11 @@ function resolveUploadRoot(): string {
 
 function safeExt(fileName: string, mimeType: string): string {
   const ext = path.extname(fileName).toLowerCase();
-  if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) return ext === '.jpeg' ? '.jpg' : ext;
+  if (['.jpg', '.jpeg', '.png', '.webp', '.gif'].includes(ext)) return ext === '.jpeg' ? '.jpg' : ext;
   if (mimeType === 'image/jpeg') return '.jpg';
   if (mimeType === 'image/png') return '.png';
   if (mimeType === 'image/webp') return '.webp';
+  if (mimeType === 'image/gif') return '.gif';
   return '.png';
 }
 

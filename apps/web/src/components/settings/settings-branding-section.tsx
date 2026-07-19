@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ImagePlus, Trash2 } from 'lucide-react';
 import {
+  DEFAULT_LOGIN_WALLPAPER_PATH,
   TENANT_BRANDING_MAX_LOGO_BYTES,
   TENANT_BRANDING_MAX_WALLPAPER_BYTES,
   type TenantLoginLogoScale,
@@ -65,6 +66,9 @@ function BrandingFileUpload({
   onUpload,
   onRemove,
   previewObjectFit = 'cover',
+  accept = 'image/jpeg,image/png,image/webp',
+  formatsHint = 'PNG, JPEG ou WebP',
+  emptyLabel = 'Sem imagem',
 }: {
   label: string;
   hint: string;
@@ -75,6 +79,9 @@ function BrandingFileUpload({
   onUpload: (file: File) => void;
   onRemove: () => void;
   previewObjectFit?: 'cover' | 'contain';
+  accept?: string;
+  formatsHint?: string;
+  emptyLabel?: string;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const maxMb = Math.round(maxBytes / (1024 * 1024));
@@ -95,14 +102,14 @@ function BrandingFileUpload({
               className={`max-h-full max-w-full ${previewObjectFit === 'contain' ? 'object-contain' : 'object-cover'}`}
             />
           ) : (
-            <span className="px-2 text-center text-xs text-slate-400">Sem imagem</span>
+            <span className="px-2 text-center text-xs text-slate-400">{emptyLabel}</span>
           )}
         </div>
         <div className="flex flex-col gap-2">
           <input
             ref={inputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp"
+            accept={accept}
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -130,7 +137,9 @@ function BrandingFileUpload({
               Remover
             </button>
           )}
-          <p className="text-xs text-slate-400">PNG, JPEG ou WebP · máx. {maxMb} MB</p>
+          <p className="text-xs text-slate-400">
+            {formatsHint} · máx. {maxMb} MB
+          </p>
         </div>
       </div>
     </div>
@@ -264,7 +273,7 @@ export function SettingsBrandingSection() {
 
   useEffect(() => {
     if (!info?.wallpaper.hasWallpaper) {
-      setWallpaperPreviewUrl(null);
+      setWallpaperPreviewUrl(DEFAULT_LOGIN_WALLPAPER_PATH);
       return;
     }
     const token = getStoredToken();
@@ -280,9 +289,11 @@ export function SettingsBrandingSection() {
         if (blob) {
           objectUrl = URL.createObjectURL(blob);
           setWallpaperPreviewUrl(objectUrl);
+        } else {
+          setWallpaperPreviewUrl(DEFAULT_LOGIN_WALLPAPER_PATH);
         }
       })
-      .catch(() => setWallpaperPreviewUrl(null));
+      .catch(() => setWallpaperPreviewUrl(DEFAULT_LOGIN_WALLPAPER_PATH));
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
@@ -354,7 +365,7 @@ export function SettingsBrandingSection() {
 
   async function uploadWallpaper(file: File) {
     if (file.size > TENANT_BRANDING_MAX_WALLPAPER_BYTES) {
-      setError('Wallpaper demasiado grande (máx. 5 MB)');
+      setError('Wallpaper demasiado grande (máx. 8 MB)');
       return;
     }
     setBusy(true);
@@ -427,13 +438,16 @@ export function SettingsBrandingSection() {
           />
           <BrandingFileUpload
             label="Wallpaper do login"
-            hint="Imagem de fundo no painel esquerdo do ecrã de login. Sem wallpaper, usa-se a cor principal."
+            hint="Imagem de fundo no painel esquerdo do ecrã de login. Sem wallpaper personalizado, usa-se o wallpaper por defeito da app (GIF animado suportado)."
             maxBytes={TENANT_BRANDING_MAX_WALLPAPER_BYTES}
             previewUrl={wallpaperPreviewUrl}
             hasFile={Boolean(info?.wallpaper.hasWallpaper)}
             busy={busy}
             onUpload={(file) => void uploadWallpaper(file)}
             onRemove={() => void removeWallpaper()}
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            formatsHint="PNG, JPEG, WebP ou GIF"
+            emptyLabel="Wallpaper por defeito"
           />
         </div>
       )}

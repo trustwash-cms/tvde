@@ -1,10 +1,18 @@
 import { existsSync } from 'fs';
 import type { Browser, BrowserContext, Page, LaunchOptions } from 'playwright';
-import type { MyPrioSyncScope, PortalKind } from '@tvde/shared';
+import type { MyPrioSyncScope, PortalKind, UberSyncOptions } from '@tvde/shared';
 
 export type PortalLoginPhase =
   | { status: 'connected'; storageState: string }
   | { status: 'awaiting_otp'; otpHint?: string; storageState?: string }
+  /** Uber passkey: QR/screenshot para o gestor digitalizar no telemóvel; browser fica vivo. */
+  | {
+      status: 'awaiting_passkey';
+      hint?: string;
+      /** PNG base64 (sem prefixo data:) */
+      challengeImageBase64: string;
+      storageState?: string;
+    }
   | { status: 'failed'; message: string };
 
 export type PortalSyncPhase =
@@ -15,6 +23,10 @@ export type PortalSyncPhase =
 export type PortalSyncOptions = {
   /** MyPRIO: Electric e Frota são syncs independentes. */
   syncScope?: MyPrioSyncScope;
+  /** Uber: existing report vs generate with date range */
+  uberSync?: UberSyncOptions;
+  /** Progresso para actualizar mensagem do job (UI). */
+  onProgress?: (message: string) => void | Promise<void>;
 };
 
 export interface PortalAdapter {
@@ -148,7 +160,10 @@ async function launchChromium(headless: boolean): Promise<Browser> {
 
   const options: LaunchOptions = {
     headless,
-    args: ['--disable-dev-shm-usage'],
+    args: [
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+    ],
   };
 
   try {
@@ -193,8 +208,17 @@ export async function withPlaywrightPage<T>(
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },
       locale: 'pt-PT',
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     });
     const page = await context.newPage();
+    await page.addInitScript(() => {
+      try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      } catch {
+        // ignore
+      }
+    });
 
     const work = fn(browser, context, page);
     const result =

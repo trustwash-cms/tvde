@@ -33,6 +33,7 @@ import { viaVerdeRoutes } from './routes/via-verde.routes';
 import { electricityRoutes } from './routes/electricity.routes';
 import { combustivelRoutes } from './routes/combustivel.routes';
 import { uberRoutes } from './routes/uber.routes';
+import { paymentRoutes } from './routes/payment.routes';
 import { portalConnectionRoutes } from './routes/portal-connection.routes';
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
@@ -118,6 +119,7 @@ export async function buildApp() {
     await api.register(electricityRoutes);
     await api.register(combustivelRoutes);
     await api.register(uberRoutes);
+    await api.register(paymentRoutes);
     await api.register(portalConnectionRoutes);
     await api.register(adminMgmtRoutes);
   }, { prefix: getApiPrefix() });

@@ -338,6 +338,83 @@ export async function deleteUserVehicle(
   });
 }
 
+export type PlatformDriverOption = {
+  uuid: string;
+  label: string;
+};
+
+export async function listVehiclePlatformDrivers(
+  db: PrismaClient,
+  actorRole: Role,
+  actorTenantId: string | null
+): Promise<{ uber: PlatformDriverOption[]; bolt: PlatformDriverOption[] }> {
+  if (!actorTenantId && actorRole !== 'master') {
+    throw new UserVehicleAccessError('Tenant em falta');
+  }
+  // MASTER sem tenant: lista vazia (matrículas são por tenant)
+  if (!actorTenantId) {
+    return { uber: [], bolt: [] };
+  }
+
+  const tenantId = actorTenantId;
+
+  const uberRows = await db.uberPayment.findMany({
+    where: { tenantId },
+    select: { driverUuid: true, firstName: true, lastName: true },
+    orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }, { reportDate: 'desc' }],
+  });
+  const uberMap = new Map<string, PlatformDriverOption>();
+  for (const row of uberRows) {
+    const key = row.driverUuid.trim().toLowerCase();
+    if (!key || uberMap.has(key)) continue;
+    const name = [row.firstName, row.lastName].filter(Boolean).join(' ').trim();
+    uberMap.set(key, {
+      uuid: row.driverUuid.trim(),
+      label: name || row.driverUuid.trim(),
+    });
+  }
+
+  const boltMap = new Map<string, PlatformDriverOption>();
+  const boltDrivers = await db.boltDriver.findMany({
+    where: { tenantId },
+    select: { driverUuid: true, name: true, email: true },
+    orderBy: { name: 'asc' },
+  });
+  for (const row of boltDrivers) {
+    const key = row.driverUuid.trim().toLowerCase();
+    if (!key || boltMap.has(key)) continue;
+    boltMap.set(key, {
+      uuid: row.driverUuid.trim(),
+      label: row.name?.trim() || row.email?.trim() || row.driverUuid.trim(),
+    });
+  }
+
+  // Corridas podem ter motoristas ainda não presentes em bolt_drivers
+  const boltOrders = await db.boltOrder.findMany({
+    where: { tenantId, driverUuid: { not: null } },
+    select: { driverUuid: true, driverName: true },
+    orderBy: { orderCreatedTimestamp: 'desc' },
+  });
+  for (const row of boltOrders) {
+    const uuid = row.driverUuid?.trim();
+    if (!uuid) continue;
+    const key = uuid.toLowerCase();
+    if (boltMap.has(key)) continue;
+    boltMap.set(key, {
+      uuid,
+      label: row.driverName?.trim() || uuid,
+    });
+  }
+
+  const sortLabel = (a: PlatformDriverOption, b: PlatformDriverOption) =>
+    a.label.localeCompare(b.label, 'pt', { sensitivity: 'base' });
+
+  return {
+    uber: [...uberMap.values()].sort(sortLabel),
+    bolt: [...boltMap.values()].sort(sortLabel),
+  };
+}
+
 export function handleUserVehicleError(err: unknown): {
   status: number;
   message: string;

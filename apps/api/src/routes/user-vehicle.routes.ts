@@ -6,6 +6,7 @@ import {
   deleteUserVehicle,
   handleUserVehicleError,
   listUserVehicles,
+  listVehiclePlatformDrivers,
   updateUserVehicle,
 } from '../services/user-vehicle.service';
 
@@ -40,6 +41,23 @@ function actorContext(request: { user: { sub: string; role: string; tenantId: st
 
 export async function userVehicleRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
+
+  fastify.get('/users/vehicle-platform-drivers', {
+    preHandler: [fastify.requireRole('admin')],
+  }, async (request, reply) => {
+    const { actorRole, actorTenantId } = actorContext(request);
+    try {
+      const data = await listVehiclePlatformDrivers(
+        fastify.db,
+        actorRole,
+        actorTenantId
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const { status, message } = handleUserVehicleError(err);
+      return reply.status(status).send({ success: false, error: message });
+    }
+  });
 
   fastify.get('/users/:userId/vehicles', {
     preHandler: [fastify.requireRole('admin')],

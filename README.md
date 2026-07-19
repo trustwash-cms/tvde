@@ -38,7 +38,8 @@ npm run dev
 - Postgres: porta **5433** (base `tvde`)
 - Redis: porta **6380**
 
-Documentação Portal RPA: [`docs/PORTAL_RPA.md`](docs/PORTAL_RPA.md)
+Documentação Portal RPA: [`docs/03-PORTAL_RPA.md`](docs/03-PORTAL_RPA.md)  
+Pagamentos: [`docs/08-PAGAMENTOS.md`](docs/08-PAGAMENTOS.md) · Roadmap: [`docs/01-ROADMAP_TVDE.md`](docs/01-ROADMAP_TVDE.md)
 ## Credenciais seed (`.env.example`)
 
 | Utilizador | Email | Password |

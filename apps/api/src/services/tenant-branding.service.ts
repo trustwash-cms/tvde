@@ -134,7 +134,7 @@ export async function uploadTenantLoginWallpaper(
   input: { fileName: string; mimeType: string; buffer: Buffer }
 ) {
   if (input.buffer.length > TENANT_BRANDING_MAX_WALLPAPER_BYTES) {
-    throw new Error('Wallpaper demasiado grande (máx. 5 MB)');
+    throw new Error('Wallpaper demasiado grande (máx. 8 MB)');
   }
 
   const existing = await readWallpaperMeta(tenantId);

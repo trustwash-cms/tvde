@@ -175,7 +175,8 @@ export async function listViaVerdeMovements(
 export async function markViaVerdeMovementPaid(
   db: PrismaClient,
   tenantId: string,
-  movementId: string
+  movementId: string,
+  isPaid = true
 ) {
   const existing = await db.viaVerdeMovement.findFirst({
     where: { id: movementId, tenantId },
@@ -185,8 +186,8 @@ export async function markViaVerdeMovementPaid(
   const updated = await db.viaVerdeMovement.update({
     where: { id: movementId },
     data: {
-      isPaid: true,
-      paymentDate: new Date(),
+      isPaid,
+      paymentDate: isPaid ? new Date() : null,
     },
   });
 

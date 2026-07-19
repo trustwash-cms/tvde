@@ -188,45 +188,81 @@ export async function boltRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/bolt/drivers', async (request, reply) => {
-    const query = request.query as { workspaceId?: string; q?: string; status?: string };
+    const query = request.query as {
+      workspaceId?: string;
+      q?: string;
+      status?: string;
+      page?: string;
+      limit?: string;
+    };
     const q = parseSearchQuery(query.q);
+    const page = Math.max(0, Number(query.page) || 0);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
     const { workspaceId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
       query.workspaceId
     );
 
-    const drivers = await fastify.db.boltDriver.findMany({
-      where: {
-        workspaceId,
-        ...(query.status ? { portalStatus: query.status } : {}),
-        ...(q ? textOr(q, ['name', 'phone', 'email']) : {}),
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const where = {
+      workspaceId,
+      ...(query.status ? { portalStatus: query.status } : {}),
+      ...(q ? textOr(q, ['name', 'phone', 'email']) : {}),
+    };
 
-    return reply.send({ success: true, data: drivers });
+    const [total, drivers] = await Promise.all([
+      fastify.db.boltDriver.count({ where }),
+      fastify.db.boltDriver.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip: page * limit,
+        take: limit,
+      }),
+    ]);
+
+    return reply.send({
+      success: true,
+      data: { items: drivers, total, page, limit },
+    });
   });
 
   fastify.get('/bolt/vehicles', async (request, reply) => {
-    const query = request.query as { workspaceId?: string; q?: string; status?: string };
+    const query = request.query as {
+      workspaceId?: string;
+      q?: string;
+      status?: string;
+      page?: string;
+      limit?: string;
+    };
     const q = parseSearchQuery(query.q);
+    const page = Math.max(0, Number(query.page) || 0);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 50));
     const { workspaceId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
       query.workspaceId
     );
 
-    const vehicles = await fastify.db.boltVehicle.findMany({
-      where: {
-        workspaceId,
-        ...(query.status ? { portalStatus: query.status } : {}),
-        ...(q ? textOr(q, ['model', 'regNumber', 'vin']) : {}),
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+    const where = {
+      workspaceId,
+      ...(query.status ? { portalStatus: query.status } : {}),
+      ...(q ? textOr(q, ['model', 'regNumber', 'vin']) : {}),
+    };
 
-    return reply.send({ success: true, data: vehicles });
+    const [total, vehicles] = await Promise.all([
+      fastify.db.boltVehicle.count({ where }),
+      fastify.db.boltVehicle.findMany({
+        where,
+        orderBy: { updatedAt: 'desc' },
+        skip: page * limit,
+        take: limit,
+      }),
+    ]);
+
+    return reply.send({
+      success: true,
+      data: { items: vehicles, total, page, limit },
+    });
   });
 
   fastify.get('/bolt/sync-logs', {

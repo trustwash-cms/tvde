@@ -79,6 +79,7 @@ Fluxo:
 2. Se o portal pedir OTP → modal com input (timeout ~10 min no servidor)
 3. Estado passa a **Ligado** → **Sincronizar** descarrega export e corre os parsers existentes
 4. **Desligar** apaga credenciais + sessão do tenant
+5. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
 
 Estados: `Desligado` · `Ligado` · `OTP pendente` · `Sessão expirada` · `Erro`
 
@@ -96,7 +97,9 @@ Prefixo: `/api/v1` (superadmin + tenant na sessão)
 | GET | `/portal-connections/:portal` | Detalhe (`via_verde` \| `myprio` \| `uber`) |
 | POST | `/portal-connections/:portal/connect` | `{ username, password }` |
 | POST | `/portal-connections/:portal/otp` | `{ code }` |
-| POST | `/portal-connections/:portal/sync` | Dispara sync |
+| POST | `/portal-connections/:portal/sync` | Dispara sync (`uberSync` / `syncScope` opcionais) |
+| POST | `/portal-connections/:portal/reports` | Uber: listar relatórios Supplier (~45–60s) |
+| POST | `/portal-connections/:portal/clear-messages` | Limpa `lastError` + job falhado persistente |
 | DELETE | `/portal-connections/:portal` | Desliga |
 
 Jobs: `pending` → `running` → (`awaiting_otp`) → `completed` \| `failed`
@@ -127,7 +130,9 @@ Ficheiros principais:
 - `packages/shared/src/config.server.ts` (`portalRpaRefreshIntervalHours`)
 - Migration: `20260715120000_portal_rpa_sync`
 
-Docs por portal: [`04-VIAVERDE.md`](./04-VIAVERDE.md) · [`05-PRIO.md`](./05-PRIO.md) · [`06-UBER.md`](./06-UBER.md)
+Docs por portal: [`04-VIAVERDE.md`](./04-VIAVERDE.md) · [`05-PRIO.md`](./05-PRIO.md) · [`06-UBER.md`](./06-UBER.md) · [`07-UBER.md`](./07-UBER.md) (RPA Uber detalhado — sync generate / Em curso / selectors DevTools)
+
+**Timeouts sync:** Via Verde / MyPRIO ~55–90s · **Uber 15 min** (poll «Em curso» até ~12 min antes do download CSV).
 
 ---
 
@@ -148,8 +153,8 @@ API arranca
               cria PortalSyncJob type=refresh
               runPortalJob → adapter.refresh(cookies)
                   OK      → grava storageState renovado (cookies novos)
-                  expired  → Via Verde/Uber: attemptSilentPortalRelogin
-                            MyPRIO: status=expired (precisa OTP humano)
+                  expired  → Via Verde: attemptSilentPortalRelogin
+                            MyPRIO/Uber: status=expired (precisa OTP humano)
                   rede/DNS → job failed, status da conta NÃO muda (transitório)
 ```
 
@@ -167,8 +172,8 @@ API arranca
 |----------|-----------|
 | `status=connected` + tem `sessionStateEncrypted` | Sim |
 | `status=error` + tem sessão | Sim (recuperar após falha de sync/rede) |
-| `status=expired` **Via Verde / Uber** + tem user/password | Sim (tenta re-login automático) |
-| `status=expired` **MyPRIO** | Não — exige Ligar + OTP SMS |
+| `status=expired` **Via Verde** + tem user/password | Sim (tenta re-login automático) |
+| `status=expired` **MyPRIO / Uber** | Não — exige Ligar + OTP |
 | `activeJobId` preenchido (connect/sync a meio) | Não (evita conflito) |
 | `PORTAL_RPA_MOCK=true` ou RPA desactivado | Worker não corre refresh real |
 
@@ -177,7 +182,7 @@ API arranca
 | Portal | Refresh cookies | Re-login automático se expirar | Intervenção humana |
 |--------|-----------------|--------------------------------|--------------------|
 | **Via Verde** | Sim | **Sim** (email+password guardados) | Só se password mudar / CAPTCHA |
-| **Uber** | Sim | **Sim** (se login sem OTP extra) | OTP / Google-Apple = Ligar manual |
+| **Uber** | Sim | **Não** (OTP SMS / passkey) | **Ligar conta** + OTP quando `expired` |
 | **MyPRIO** | Sim (enquanto cookies vivos) | **Não** (OTP SMS obrigatório) | **Ligar conta** + código SMS quando `expired` |
 
 Expectativa prática:
@@ -196,8 +201,8 @@ Mensagens típicas em `PortalSyncJob` (`type=refresh`):
 | `message` | Significado |
 |-----------|-------------|
 | `Sessão renovada` | Cookies OK + storageState actualizado |
-| `Sessão renovada (re-login automático)` | Cookies mortos; login silencioso Via Verde/Uber OK |
-| `Sessão expirada` | Cookies mortos; MyPRIO (ou re-login falhou) |
+| `Sessão renovada (re-login automático)` | Cookies mortos; login silencioso Via Verde OK |
+| `Sessão expirada` | Cookies mortos; MyPRIO/Uber (ou re-login Via Verde falhou) |
 | `page.goto: net::ERR_NAME_NOT_RESOLVED …` | Rede/DNS — **não** deve marcar a conta como partida de forma permanente (erro transitório no job; ligação mantém-se / recupera no próximo tick) |
 
 ### Erros transitórios vs sessão morta
@@ -205,7 +210,7 @@ Mensagens típicas em `PortalSyncJob` (`type=refresh`):
 | Tipo | Exemplos | Efeito na `PortalConnection` |
 |------|----------|------------------------------|
 | Rede / DNS | `ERR_NAME_NOT_RESOLVED`, `ERR_CONNECTION`, `ECONNRESET` | Job `failed`; **não** forçar `expired`; próximo refresh tenta de novo |
-| Sessão inválida | Login page visível, `isSessionExpiredUi` | `status=expired` (+ re-login se Via Verde/Uber) |
+| Sessão inválida | Login page visível, `isSessionExpiredUi` | `status=expired` (+ re-login se Via Verde) |
 | Timeout Playwright em **sync** | `Timeout Playwright (…s)` | Mantém `connected` (sync abortado ≠ conta partida) |
 
 ### UI após sync

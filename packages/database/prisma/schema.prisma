@@ -83,6 +83,7 @@ model Tenant {
   electricityCharges        ElectricityCharge[]
   fuelTransactions          FuelTransaction[]
   uberPayments              UberPayment[]
+  paymentReports            PaymentReport[]
   portalConnections         PortalConnection[]
   portalSyncJobs            PortalSyncJob[]
 
@@ -266,6 +267,8 @@ model User {
   fuelTransactionsImported         FuelTransaction[] @relation("FuelTransactionImportedBy")
   uberPayments                     UberPayment[] @relation("UberPaymentUser")
   uberPaymentsImported             UberPayment[] @relation("UberPaymentImportedBy")
+  paymentReports                   PaymentReport[] @relation("PaymentReportUser")
+  paymentReportsCreated            PaymentReport[] @relation("PaymentReportCreatedBy")
 
   @@index([tenantId])
   @@index([workspaceId])
@@ -2342,6 +2345,9 @@ model BoltOrder {
   ridePrice              Decimal? @map("ride_price") @db.Decimal(12, 2)
   bookingFee             Decimal? @map("booking_fee") @db.Decimal(12, 2)
   tollFee                Decimal? @map("toll_fee") @db.Decimal(12, 2)
+  /** Incluído num payment_report (não voltar a somar até apagar o relatório). */
+  isPaid                 Boolean  @default(false) @map("is_paid")
+  paymentDate            DateTime? @map("payment_date")
   rawJson                Json?    @map("raw_json")
   syncedAt               DateTime @default(now()) @map("synced_at")
   updatedAt              DateTime @updatedAt @map("updated_at")
@@ -2353,6 +2359,7 @@ model BoltOrder {
   @@unique([workspaceId, orderReference])
   @@index([workspaceId, orderCreatedTimestamp])
   @@index([tenantId])
+  @@index([tenantId, isPaid])
   @@map("bolt_orders")
 }
 
@@ -2574,4 +2581,45 @@ model UberPayment {
   @@index([tenantId, isPaid])
   @@unique([tenantId, driverUuid, reportDate, amount])
   @@map("uber_payments")
+}
+
+model PaymentReport {
+  id                      String    @id @default(uuid()) @db.Uuid
+  tenantId                String    @map("tenant_id") @db.Uuid
+  userId                  String    @map("user_id") @db.Uuid
+  periodStart             DateTime  @map("period_start") @db.Date
+  periodEnd               DateTime  @map("period_end") @db.Date
+  receitasUber            Decimal   @map("receitas_uber") @db.Decimal(12, 2)
+  receitasBolt            Decimal   @map("receitas_bolt") @db.Decimal(12, 2)
+  despesasViaVerde        Decimal   @map("despesas_via_verde") @db.Decimal(12, 2)
+  despesasEletricidade    Decimal   @map("despesas_eletricidade") @db.Decimal(12, 2)
+  despesasCombustivel     Decimal   @map("despesas_combustivel") @db.Decimal(12, 2)
+  despesasComissao        Decimal   @map("despesas_comissao") @db.Decimal(12, 2)
+  despesasIva6            Decimal   @default(0) @map("despesas_iva6") @db.Decimal(12, 2)
+  despesasContaCorrente   Decimal   @default(0) @map("despesas_conta_corrente") @db.Decimal(12, 2)
+  resultadoFinal          Decimal   @map("resultado_final") @db.Decimal(12, 2)
+  isPaid                  Boolean   @default(false) @map("is_paid")
+  paymentMethod           String?   @map("payment_method") @db.VarChar(5)
+  viaVerdeMovementIds     Json      @default("[]") @map("via_verde_movement_ids")
+  electricityChargeIds    Json      @default("[]") @map("electricity_charge_ids")
+  fuelTransactionIds      Json      @default("[]") @map("fuel_transaction_ids")
+  uberPaymentIds          Json      @default("[]") @map("uber_payment_ids")
+  boltOrderIds            Json      @default("[]") @map("bolt_order_ids")
+  driverExpenseIds        Json      @default("[]") @map("driver_expense_ids")
+  detailsJson             Json?     @map("details_json")
+  warningsJson            Json?     @map("warnings_json")
+  reportHtml              String?   @map("report_html") @db.Text
+  createdByUserId         String?   @map("created_by_user_id") @db.Uuid
+  lastSentAt              DateTime? @map("last_sent_at")
+  createdAt               DateTime  @default(now()) @map("created_at")
+  updatedAt               DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User   @relation("PaymentReportUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User?  @relation("PaymentReportCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, userId, createdAt])
+  @@index([tenantId, periodStart, periodEnd])
+  @@index([tenantId, isPaid])
+  @@map("payment_reports")
 }

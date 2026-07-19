@@ -364,8 +364,16 @@ export async function listBoltOrders(
 
   return {
     items: orders.map((o) => ({
-      ...o,
+      id: o.id,
+      orderReference: o.orderReference,
+      driverName: o.driverName,
+      orderStatus: o.orderStatus,
+      vehicleModel: o.vehicleModel,
       ridePrice: o.ridePrice?.toString() ?? null,
+      orderCreatedTimestamp: o.orderCreatedTimestamp,
+      boltCompanyId: o.boltCompanyId,
+      isPaid: o.isPaid,
+      paymentDate: o.paymentDate?.toISOString() ?? null,
       stopsCount: o._count.stops,
     })),
     total,

@@ -365,9 +365,11 @@ API devolve:
 
 Colunas: Matrícula · Data entrada · Data cobrança (`systemEntryDate`) · Entrada · Saída · Valor · Pago · Ações
 
-Ações superadmin: check (marcar pago) · lixo (delete).
+Ações superadmin: ✓ marcar pago · ✕ desmarcar pago · lixo (delete).
 
-Paginação: Anterior / Seguinte.
+`PATCH /via-verde/movements/:id/paid` body opcional `{ isPaid: boolean }` (default `true`).
+
+Paginação: Anterior / Seguinte (50/página).
 
 ---
 
@@ -384,7 +386,7 @@ Paginação: Anterior / Seguinte.
 - `buildWhere` — filtros + fleet scope motorista
 - `getViaVerdeDashboard`
 - `listViaVerdeMovements` — inclui aggregate filtered
-- `markViaVerdeMovementPaid` / `deleteViaVerdeMovement`
+- `markViaVerdeMovementPaid(db, tenantId, id, isPaid?)` / `deleteViaVerdeMovement`
 
 ### API `via-verde-import.service.ts`
 

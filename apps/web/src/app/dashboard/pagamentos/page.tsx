@@ -1,5 +1,7 @@
-import { ModulePlaceholder } from '@/components/module-placeholder';
+'use client';
+
+import { PagamentosPanel } from '@/components/pagamentos/pagamentos-panel';
 
 export default function PagamentosPage() {
-  return <ModulePlaceholder title="Pagamentos" description="Módulo de pagamentos em preparação." />;
+  return <PagamentosPanel />;
 }

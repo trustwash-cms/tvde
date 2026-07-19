@@ -20,7 +20,10 @@ interface Item {
   reportDate: string;
   amount: string;
   description: string | null;
+  isPaid: boolean;
 }
+
+const PAGE_SIZE = 50;
 
 function formatMoney(value: string | number) {
   const n = Number(value);
@@ -32,6 +35,9 @@ export function UberPanel() {
   const [role, setRole] = useState<Role | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
   const [error, setError] = useState('');
   const [importMsg, setImportMsg] = useState('');
@@ -42,12 +48,20 @@ export function UberPanel() {
     const token = getStoredToken();
     const [dash, list] = await Promise.all([
       apiFetch<Dashboard>(`${API_PATHS.uber.dashboard}?month=${selectedMonth}`, {}, token),
-      apiFetch<{ items: Item[] }>(API_PATHS.uber.payments, {}, token),
+      apiFetch<{ items: Item[]; total: number; totalPages: number; page: number }>(
+        `${API_PATHS.uber.payments}?page=${page}`,
+        {},
+        token
+      ),
     ]);
     if (dash.data) setDashboard(dash.data);
-    if (list.data) setItems(list.data.items);
+    if (list.data) {
+      setItems(list.data.items);
+      setTotal(list.data.total ?? list.data.items.length);
+      setTotalPages(list.data.totalPages ?? 1);
+    }
     if (!dash.success) setError(dash.error ?? 'Erro');
-  }, [selectedMonth]);
+  }, [selectedMonth, page]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -74,6 +88,7 @@ export function UberPanel() {
       return;
     }
     setImportMsg(`Inseridos: ${raw.data.inserted} · Ignorados: ${raw.data.skipped}`);
+    setPage(1);
     await load();
   }
 
@@ -89,7 +104,10 @@ export function UberPanel() {
           label="Valor do mês (Pago a si)"
           value={formatMoney(dashboard?.monthTotal ?? 0)}
           monthKey={selectedMonth}
-          onMonthChange={setSelectedMonth}
+          onMonthChange={(m) => {
+            setSelectedMonth(m);
+            setPage(1);
+          }}
         />
         {canManage ? (
           <div className="card flex flex-col justify-center gap-2">
@@ -130,29 +148,68 @@ export function UberPanel() {
               <th className="px-4 py-3">Nome</th>
               <th className="px-4 py-3">Apelido</th>
               <th className="px-4 py-3">Valor</th>
+              <th className="px-4 py-3">Pago</th>
               <th className="px-4 py-3">Descrição</th>
             </tr>
           </thead>
           <tbody>
             {items.map((item) => (
-              <tr key={item.id} className="border-t">
+              <tr
+                key={item.id}
+                className={`border-t ${item.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/40'}`}
+              >
                 <td className="px-4 py-3">{new Date(item.reportDate).toLocaleString('pt-PT')}</td>
                 <td className="px-4 py-3 font-mono text-xs">{item.driverUuid.slice(0, 8)}…</td>
                 <td className="px-4 py-3">{item.firstName ?? '—'}</td>
                 <td className="px-4 py-3">{item.lastName ?? '—'}</td>
                 <td className="px-4 py-3">{formatMoney(item.amount)}</td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      item.isPaid
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-red-100 text-red-700'
+                    }`}
+                  >
+                    {item.isPaid ? 'Sim' : 'Não'}
+                  </span>
+                </td>
                 <td className="px-4 py-3">{item.description ?? '—'}</td>
               </tr>
             ))}
             {!items.length ? (
               <tr>
-                <td colSpan={6} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
                   Sem pagamentos — importe CSV (UUID, Nome, Apelido, Data, Valor) ou sincronize a conta Uber.
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
+        <div className="flex items-center justify-between border-t px-4 py-3">
+          <p className="text-sm text-slate-500">
+            Página {page} de {totalPages}
+            {total ? ` · ${total} registo(s)` : ''} · {PAGE_SIZE}/página
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={page <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              «
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              »
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

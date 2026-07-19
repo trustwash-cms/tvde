@@ -2,10 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { PORTAL_KINDS, type PortalKind } from '@tvde/shared';
 import {
+  clearPortalMessages,
   disconnectPortal,
   getPortalConnectionDetail,
   getPortalJob,
   listPortalConnections,
+  listUberPortalReports,
   startPortalConnect,
   startPortalSync,
   submitPortalOtp,
@@ -111,6 +113,15 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
       const body = z
         .object({
           syncScope: z.enum(['electric', 'fleet']).optional(),
+          uberSync: z
+            .object({
+              mode: z.enum(['existing', 'generate']),
+              reportName: z.string().min(1).optional(),
+              rangeStart: z.string().min(1).optional(),
+              rangeEnd: z.string().min(1).optional(),
+              organizationName: z.string().min(1).optional(),
+            })
+            .optional(),
         })
         .parse(request.body ?? {});
       const data = await startPortalSync(
@@ -118,9 +129,44 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
         tenantId,
         portal as PortalKind,
         request.user.sub,
-        { syncScope: body.syncScope }
+        { syncScope: body.syncScope, uberSync: body.uberSync }
       );
       return reply.send({ success: true, data, message: 'Sincronização iniciada' });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  /** Uber: listar relatórios no Supplier (sessão + Playwright ~45–60s). */
+  fastify.post('/portal-connections/:portal/reports', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { portal } = portalParam.parse(request.params);
+      if ((portal as PortalKind) !== 'uber') {
+        return reply.status(400).send({
+          success: false,
+          error: 'Listagem de relatórios só está disponível para Uber',
+        });
+      }
+      const data = await listUberPortalReports(fastify.db, tenantId);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  fastify.post('/portal-connections/:portal/clear-messages', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { portal } = portalParam.parse(request.params);
+      const data = await clearPortalMessages(fastify.db, tenantId, portal as PortalKind);
+      return reply.send({ success: true, data, message: 'Mensagens limpas' });
     } catch (err) {
       return reply.status(400).send({
         success: false,

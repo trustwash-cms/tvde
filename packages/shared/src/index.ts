@@ -112,6 +112,7 @@ export {
   TENANT_BRANDING_MAX_LOGO_BYTES,
   TENANT_BRANDING_MAX_WALLPAPER_BYTES,
   TENANT_BRANDING_WALLPAPER_MIME_TYPES,
+  DEFAULT_LOGIN_WALLPAPER_PATH,
   TENANT_COMPANY_LOGO_SETTING_KEY,
   TENANT_LOGIN_WALLPAPER_SETTING_KEY,
   TENANT_LOGIN_LOGO_SCALE_SETTING_KEY,
@@ -266,6 +267,15 @@ export {
   type UserVehiclePeriodRecord,
 } from './user-vehicle-overlap';
 export {
+  defaultPaymentWeekRange,
+  type PaymentMoneyLine,
+  type PaymentCalculationReceitas,
+  type PaymentCalculationDespesas,
+  type PaymentCalculationIds,
+  type PaymentCalculation,
+  type PaymentDriverOption,
+} from './payment-calculator';
+export {
   CARWASH_LICENSE_COUNTRIES,
   formatLicensePlateDisplay,
   formatPortugueseLicensePlate,
@@ -281,6 +291,14 @@ export {
   PORTAL_CONNECTION_STATUS_LABELS,
   MYPRIO_SYNC_SCOPES,
   MYPRIO_SYNC_SCOPE_LABELS,
+  UBER_SYNC_MODES,
+  defaultUberReportRange,
+  lisbonDatetimeLocalToIso,
+  isoToLisbonDatetimeLocal,
+  guessUberOrganizationsFromReports,
+  ymdToUberCompact,
+  uberReportMatchesPeriod,
+  pickLatestUberReportForPeriod,
   type PortalKind,
   type PortalConnectionStatus,
   type PortalConnectionPublic,
@@ -288,6 +306,9 @@ export {
   type PortalOtpInput,
   type PortalSyncResultSummary,
   type MyPrioSyncScope,
+  type UberSyncMode,
+  type UberSyncOptions,
+  type UberReportListItem,
 } from './portal-rpa';
 export {
   PT_MONTH_LABELS,

@@ -19,6 +19,7 @@ export interface UberPaymentItem {
   reportDate: string;
   amount: string;
   description: string | null;
+  isPaid: boolean;
 }
 
 export async function getUberDashboard(
@@ -83,6 +84,7 @@ export async function listUberPayments(
         reportDate: row.reportDate.toISOString(),
         amount: decimalToString(row.amount),
         description: row.description,
+        isPaid: row.isPaid,
       })
     ),
     total,

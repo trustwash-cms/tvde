@@ -7,7 +7,7 @@ export default function PagamentosLayout({ children }: { children: React.ReactNo
     <FleetModuleShell
       moduleKey="pagamentos"
       title="Pagamentos"
-      description="Pagamentos e tesouraria da frota."
+      description="Gestão de pagamentos dos motoristas"
     >
       {children}
     </FleetModuleShell>
