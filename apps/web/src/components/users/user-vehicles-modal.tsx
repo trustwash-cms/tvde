@@ -13,6 +13,7 @@ import {
 } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { apiFetch, getApiErrorMessage } from '@/lib/api';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import type { UserListItem } from '@/components/users/user-list-card';
 import clsx from 'clsx';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
@@ -158,6 +159,7 @@ export function UserVehiclesModal({
   user: UserListItem | null;
   onClose: () => void;
 }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -254,7 +256,14 @@ export function UserVehiclesModal({
 
   async function handleDelete(vehicle: UserVehicleRecord) {
     if (!user) return;
-    if (!window.confirm(`Eliminar matrícula ${formatUserVehicleMatricula(vehicle)}?`)) return;
+    const ok = await confirm({
+      title: 'Eliminar matrícula',
+      message: `Eliminar matrícula ${formatUserVehicleMatricula(vehicle)}?`,
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
 
     setSubmitting(true);
     setError('');
@@ -273,6 +282,8 @@ export function UserVehiclesModal({
   const displayName = user?.username ?? user?.email?.split('@')[0] ?? '';
 
   return (
+    <>
+    {confirmDialog}
     <Modal
       open={open}
       onClose={onClose}
@@ -576,5 +587,6 @@ export function UserVehiclesModal({
         </div>
       )}
     </Modal>
+    </>
   );
 }

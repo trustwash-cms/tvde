@@ -26,14 +26,21 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function isAwaitingOtp(data: Conn | null | undefined): boolean {
+  if (!data) return false;
+  return data.status === 'awaiting_otp' || data.activeJobStatus === 'awaiting_otp';
+}
+
 /**
  * Login rápido a um portal RPA (Via Verde / MyPRIO / Uber) a partir do sync de pagamentos.
+ * Se o portal já estiver à espera de OTP, abre directamente o formulário do código.
  */
 export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Props) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [awaitingOtp, setAwaitingOtp] = useState(false);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
@@ -41,7 +48,8 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
   const label = portal ? PORTAL_KIND_LABELS[portal] : 'Portal';
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !portal) return;
+    let cancelled = false;
     setUsername('');
     setPassword('');
     setOtp('');
@@ -49,6 +57,36 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     setAwaitingOtp(false);
     setError('');
     setHint('');
+    setChecking(true);
+
+    void (async () => {
+      const res = await apiFetch<Conn>(
+        API_PATHS.portalConnections.byPortal(portal),
+        {},
+        getStoredToken()
+      );
+      if (cancelled) return;
+      setChecking(false);
+      if (!res.success || !res.data) return;
+      if (isAwaitingOtp(res.data)) {
+        setAwaitingOtp(true);
+        setHint(
+          res.data.otpHint ||
+            (portal === 'myprio'
+              ? 'Introduza o código SMS de 6 dígitos recebido no telemóvel (válido ~2 min).'
+              : 'Introduza o código OTP enviado pelo portal.')
+        );
+      } else if (res.data.status === 'connected') {
+        onSuccess(portal);
+        onClose();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Só reagir a abrir/portal — callbacks do pai mudam a cada render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, portal]);
 
   async function pollUntilConnectedOrOtp(token: PortalKind) {
@@ -61,17 +99,21 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
         getStoredToken()
       );
       if (!res.success || !res.data) continue;
-      const s = res.data.status;
-      if (s === 'awaiting_otp') {
+      if (isAwaitingOtp(res.data)) {
         setAwaitingOtp(true);
         setBusy(false);
-        setHint(res.data.otpHint || 'Introduza o código OTP enviado pelo portal.');
+        setHint(
+          res.data.otpHint ||
+            (token === 'myprio'
+              ? 'Introduza o código SMS de 6 dígitos recebido no telemóvel (válido ~2 min).'
+              : 'Introduza o código OTP enviado pelo portal.')
+        );
         return 'otp';
       }
-      if (s === 'connected') {
+      if (res.data.status === 'connected') {
         return 'ok';
       }
-      if (s === 'error' || res.data.activeJobStatus === 'failed') {
+      if (res.data.status === 'error' || res.data.activeJobStatus === 'failed') {
         throw new Error(res.data.lastError || res.data.lastJobMessage || 'Login falhou');
       }
     }
@@ -84,6 +126,23 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     setBusy(true);
     setError('');
     setAwaitingOtp(false);
+
+    // Revalidar: se entretanto ficou à espera de OTP, não criar outro job
+    const pre = await apiFetch<Conn>(
+      API_PATHS.portalConnections.byPortal(portal),
+      {},
+      getStoredToken()
+    );
+    if (pre.success && isAwaitingOtp(pre.data)) {
+      setBusy(false);
+      setAwaitingOtp(true);
+      setHint(
+        pre.data?.otpHint ||
+          'Já há um desafio OTP activo — introduza o código (não inicie outro login).'
+      );
+      return;
+    }
+
     const res = await apiFetch(
       API_PATHS.portalConnections.connect(portal),
       {
@@ -93,6 +152,21 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       getStoredToken()
     );
     if (!res.success) {
+      // Job OTP já activo — mostrar formulário OTP em vez de erro seco
+      if (/espera de OTP|awaiting_otp|já existe um job|em curso/i.test(res.error || '')) {
+        const st = await apiFetch<Conn>(
+          API_PATHS.portalConnections.byPortal(portal),
+          {},
+          getStoredToken()
+        );
+        if (st.success && isAwaitingOtp(st.data)) {
+          setBusy(false);
+          setAwaitingOtp(true);
+          setHint(st.data?.otpHint || 'Introduza o código OTP — há um desafio activo.');
+          setError('');
+          return;
+        }
+      }
       setBusy(false);
       setError(res.error || 'Falha ao ligar');
       return;
@@ -155,19 +229,27 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     <Modal
       open={open && Boolean(portal)}
       onClose={() => {
-        if (busy) return;
+        if (busy || checking) return;
         onClose();
       }}
-      title={`Login · ${label}`}
-      showCloseButton={!busy}
-      closeOnBackdrop={!busy}
-      closeOnEscape={!busy}
+      title={awaitingOtp ? `Código SMS · ${label}` : `Login · ${label}`}
+      showCloseButton={!busy && !checking}
+      closeOnBackdrop={!busy && !checking}
+      closeOnEscape={!busy && !checking}
       panelClassName="max-w-md"
     >
-      {awaitingOtp ? (
+      {checking ? (
+        <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          A verificar estado do portal…
+        </div>
+      ) : awaitingOtp ? (
         <form onSubmit={(e) => void handleOtp(e)} className="relative space-y-3" autoComplete="off">
           <AutofillDecoys />
-          <p className="text-sm text-slate-600">{hint || 'Introduza o OTP.'}</p>
+          <p className="text-sm text-slate-600">
+            {hint ||
+              'Introduza o código SMS recebido no telemóvel. O browser no servidor mantém-se aberto à espera deste código.'}
+          </p>
           <label className="block text-sm">
             <span className="text-slate-600">Código OTP</span>
             <AntiAutofillInput
@@ -177,6 +259,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
               required
               inputMode="numeric"
               disabled={busy}
+              autoFocus
             />
           </label>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
@@ -186,7 +269,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
             </button>
             <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Validar OTP
+              Confirmar
             </button>
           </div>
         </form>

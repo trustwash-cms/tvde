@@ -81,6 +81,8 @@ Fluxo:
 4. **Desligar** apaga credenciais + sessão do tenant
 5. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
 
+No sync de **Pagamentos** (`portal-quick-login-modal.tsx`): se o estado já for `awaiting_otp`, o modal abre **directamente no formulário OTP** (não pede user/password de novo nem cria outro job). Comportamento alinhado com o painel Conta MyPRIO em Combustível/Eletricidade.
+
 Estados: `Desligado` · `Ligado` · `OTP pendente` · `Sessão expirada` · `Erro`
 
 Durante ligar / OTP / sync o UI mostra **loader** e faz poll do job até terminar.

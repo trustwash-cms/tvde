@@ -25,6 +25,7 @@ import {
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { Modal } from '@/components/modal';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { MassPagamentosModal } from '@/components/pagamentos/mass-pagamentos-modal';
 import { SyncPagamentosModal } from '@/components/pagamentos/sync-pagamentos-modal';
 
@@ -133,6 +134,7 @@ const EMPTY_FILTERS: Filters = {
 };
 
 export function PagamentosPanel() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [showCalc, setShowCalc] = useState(false);
   const [drivers, setDrivers] = useState<PaymentDriverOption[]>([]);
   const [methods, setMethods] = useState<PaymentMethod[]>([]);
@@ -293,7 +295,14 @@ export function PagamentosPanel() {
   }
 
   async function markPending(row: PaymentReportRow) {
-    if (!confirm(`Marcar como pendente o pagamento de ${row.userLabel}?`)) return;
+    const ok = await confirm({
+      title: 'Marcar como pendente',
+      message: `Marcar como pendente o pagamento de ${row.userLabel}?`,
+      confirmLabel: 'Marcar pendente',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setBusyId(row.id);
     const res = await apiFetch(
       API_PATHS.pagamentos.reportPaid(row.id),
@@ -349,13 +358,14 @@ export function PagamentosPanel() {
   }
 
   async function removeReport(row: PaymentReportRow) {
-    if (
-      !confirm(
-        `Eliminar o pagamento de ${row.userLabel} (${formatDatePt(row.periodStart)} – ${formatDatePt(row.periodEnd)})?\nOs movimentos associados voltam a ficar em aberto.`
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: 'Eliminar pagamento',
+      message: `Eliminar o pagamento de ${row.userLabel} (${formatDatePt(row.periodStart)} – ${formatDatePt(row.periodEnd)})?\n\nOs movimentos associados voltam a ficar em aberto.`,
+      confirmLabel: 'Eliminar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
     setBusyId(row.id);
     const res = await apiFetch(
       API_PATHS.pagamentos.reportById(row.id),
@@ -375,6 +385,7 @@ export function PagamentosPanel() {
 
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-slate-500">Gestão de pagamentos dos motoristas</p>
         <div className="flex flex-wrap items-center gap-2">

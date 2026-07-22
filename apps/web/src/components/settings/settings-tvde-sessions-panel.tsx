@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { API_PATHS, getRoleLabel, type Role } from '@tvde/shared';
 import { apiFetch, getApiErrorMessage } from '@/lib/api';
 import { useAlertDialog } from '@/hooks/use-alert-dialog';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface TenantSessionItem {
   id: string;
@@ -32,6 +33,7 @@ export function SettingsTvdeSessionsPanel() {
   const [error, setError] = useState('');
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const { alert, alertDialog } = useAlertDialog();
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   function load() {
     setLoading(true);
@@ -51,7 +53,13 @@ export function SettingsTvdeSessionsPanel() {
   }, []);
 
   async function revokeSession(session: TenantSessionItem) {
-    const ok = window.confirm(`Revogar sessão de ${displayUser(session)}?`);
+    const ok = await confirm({
+      title: 'Revogar sessão',
+      message: `Revogar sessão de ${displayUser(session)}?`,
+      confirmLabel: 'Revogar',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
     if (!ok) return;
 
     setRevokingId(session.id);
@@ -75,6 +83,7 @@ export function SettingsTvdeSessionsPanel() {
   return (
     <>
       {alertDialog}
+      {confirmDialog}
       <div className="space-y-6">
         <div>
           <h1 className="mb-2 text-2xl font-bold">Sessões activas</h1>

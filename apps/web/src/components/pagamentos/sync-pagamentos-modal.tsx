@@ -59,7 +59,7 @@ const PROVIDERS_BASE: Omit<
 ];
 
 function isSessionOrTimeoutError(message: string): boolean {
-  return /timeout|sess[aã]o|session|expired|expirad|login|autentic|desligad|disconnected|não ligad|nao ligad|awaiting_otp|\botp\b|credentials|credencia/i.test(
+  return /timeout|sess[aã]o|session|expired|expirad|login|autentic|desligad|disconnected|não ligad|nao ligad|awaiting_otp|\botp\b|credentials|credencia|espera de OTP|já existe um job/i.test(
     message
   );
 }
@@ -494,6 +494,10 @@ export function SyncPagamentosModal({
           error: message,
           needsLogin,
         });
+        // Sync bloqueado porque MyPRIO/Uber já pediu OTP — abrir login/OTP
+        if (needsLogin && provider.portal && /espera de OTP|awaiting_otp/i.test(message)) {
+          setLoginPortal(provider.portal);
+        }
       } finally {
         setRetryingId(null);
       }

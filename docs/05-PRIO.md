@@ -15,6 +15,7 @@ Complementa [`03-PORTAL_RPA.md`](./03-PORTAL_RPA.md).
 | Capacidade | Estado | Notas |
 |------------|--------|--------|
 | Ligar conta (login + SMS OTP) | **OK** | Host `www.myprio.com` · `61***71` |
+| OTP no sync **Pagamentos** | **OK** | `portal-quick-login-modal` abre OTP se `awaiting_otp` |
 | Sessão / Desligar | **OK** | Desligar limpa cookies → SMS novo |
 | **Sincronizar Combustível** | **OK · scrape DOM** | 23:30 — `1 inseridos, 3 ignorados` (**sem Excel portal**) |
 | **Sincronizar Electric** | **OK · scrape DOM** | Mesma abordagem que Frota (Excel = fallback) |

@@ -401,10 +401,12 @@ export async function startPortalSync(
   });
   if (fresh?.activeJobId) {
     const active = await db.portalSyncJob.findUnique({ where: { id: fresh.activeJobId } });
-    if (
-      active &&
-      (active.status === 'running' || active.status === 'pending' || active.status === 'awaiting_otp')
-    ) {
+    if (active && active.status === 'awaiting_otp') {
+      throw new Error(
+        'Portal à espera de OTP — introduza o código SMS no login (não inicie outro sync).'
+      );
+    }
+    if (active && (active.status === 'running' || active.status === 'pending')) {
       throw new Error(
         'Já existe um job MyPRIO em curso. Aguarde ou Desligar/Ligar se ficou preso.'
       );

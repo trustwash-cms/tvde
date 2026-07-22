@@ -103,7 +103,9 @@ Sequência: Uber → Bolt → Via Verde → Prio (frota + electricidade).
 
 - Uber: lista relatórios; se há match no intervalo → escolher último existente ou gerar novo.
 - Em erro de timeout/sessão: botões **Login** + **Repetir** por linha.
+- Se o portal já está em **`awaiting_otp`** (ex. MyPRIO SMS): **Login** abre o modal do código OTP (igual ao Combustível/Eletricidade), sem criar outro job de connect. Depois de validar, o sync desse fornecedor retoma. `POST …/sync` com job OTP activo devolve mensagem clara («Portal à espera de OTP…») em vez de «já existe um job».
 - Contas portal: botão **Limpar** remove avisos persistentes sem desligar.
+- Confirmações destrutivas (eliminar pagamento, marcar pendente) usam **`ConfirmDialog`** da app — nunca `window.confirm`.
 
 ### Paginação (plataformas)
 
@@ -138,4 +140,4 @@ Hoje o cálculo usa o **mesmo cartão PRIO** (`numCartaoPrio`) / nome para eletr
 
 ---
 
-*Actualizado 2026-07-19 — mark paid fidedigno Uber+Bolt; detalhe listagem; nota PRIO.*
+*Actualizado 2026-07-22 — OTP no sync de Pagamentos; ConfirmDialog (sem window.confirm).*
