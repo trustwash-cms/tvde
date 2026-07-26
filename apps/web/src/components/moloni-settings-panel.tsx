@@ -5,11 +5,16 @@ import { getMoloniRedirectUri, isMoloniLocalRedirect, type MoloniDocumentSetHeal
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { WorkspaceSelector } from '@/components/workspace-selector';
 import { MoloniConnectionIndicator } from '@/components/moloni-connection-indicator';
 import { MoloniDocumentSetWarning } from '@/components/moloni/moloni-document-set-warning';
 import { BillingMoloniBanner } from '@/components/billing/billing-moloni-banner';
 import { MoloniSyncPanel } from '@/components/moloni-sync-panel';
+import {
+  MoloniBillingEmailPanel,
+  type BillingEmailSettingsData,
+} from '@/components/moloni-billing-email-panel';
 
 interface MoloniStatus {
   configured: boolean;
@@ -21,15 +26,23 @@ interface MoloniStatus {
   clientId?: string;
   companyId?: number;
   documentSetId?: number | null;
+  defaultProductCategoryId?: number | null;
   companyName?: string;
+  isDemoCompany?: boolean;
   moloniCustomerCount?: number;
   moloniInvoiceCount?: number;
   redirectUri?: string;
   documentSetHealth?: MoloniDocumentSetHealth | null;
+  emailSettings?: BillingEmailSettingsData | null;
 }
 
 interface MoloniCompany {
   companyId: number;
+  name: string;
+}
+
+interface MoloniCategoryOption {
+  category_id: number;
   name: string;
 }
 
@@ -40,15 +53,20 @@ interface MoloniSettingsPanelProps {
 
 export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelProps) {
   const { workspaces, workspaceId, setWorkspaceId, loading: wsLoading } = useWorkspaceContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [moloni, setMoloni] = useState<MoloniStatus | null>(null);
   const [moloniCompanies, setMoloniCompanies] = useState<MoloniCompany[]>([]);
+  const [moloniCategories, setMoloniCategories] = useState<MoloniCategoryOption[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [statusChecking, setStatusChecking] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [purgingDemo, setPurgingDemo] = useState(false);
   const [moloniForm, setMoloniForm] = useState({
     clientId: '',
     clientSecret: '',
     companyId: '',
     documentSetId: '',
+    defaultProductCategoryId: '',
     redirectUri: '',
   });
 
@@ -63,6 +81,25 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
       }));
     }
   }, [defaultRedirectUri]);
+
+  async function loadCategories(wsId: string, token: string | null) {
+    setCategoriesLoading(true);
+    const res = await apiFetch<{ items: MoloniCategoryOption[]; total: number }>(
+      withWorkspaceQuery(API_PATHS.billing.productCategories, wsId, {
+        parentId: '0',
+        page: '0',
+        limit: '50',
+      }),
+      {},
+      token
+    );
+    setCategoriesLoading(false);
+    if (res.data?.items) {
+      setMoloniCategories(res.data.items);
+    } else {
+      setMoloniCategories([]);
+    }
+  }
 
   function load() {
     if (!workspaceId) return;
@@ -81,6 +118,9 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
             clientId: res.data!.clientId ?? f.clientId,
             companyId: res.data!.companyId ? String(res.data!.companyId) : f.companyId,
             documentSetId: res.data!.documentSetId ? String(res.data!.documentSetId) : f.documentSetId,
+            defaultProductCategoryId: res.data!.defaultProductCategoryId
+              ? String(res.data!.defaultProductCategoryId)
+              : '',
             redirectUri: res.data!.redirectUri ?? f.redirectUri,
           }));
         }
@@ -98,8 +138,10 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
               }));
             }
           }
+          await loadCategories(workspaceId, token);
         } else {
           setMoloniCompanies([]);
+          setMoloniCategories([]);
         }
       } else if (res.error) {
         onError?.(res.error);
@@ -119,7 +161,7 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
       return;
     }
     setLoading(true);
-    const payload: Record<string, string | number> = {
+    const payload: Record<string, string | number | null> = {
       workspaceId,
       clientId: moloniForm.clientId,
       redirectUri: moloniForm.redirectUri,
@@ -127,6 +169,9 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
     if (moloniForm.clientSecret) payload.clientSecret = moloniForm.clientSecret;
     if (moloniForm.companyId) payload.companyId = Number(moloniForm.companyId);
     if (moloniForm.documentSetId) payload.documentSetId = Number(moloniForm.documentSetId);
+    payload.defaultProductCategoryId = moloniForm.defaultProductCategoryId
+      ? Number(moloniForm.defaultProductCategoryId)
+      : null;
 
     const res = await apiFetch(API_PATHS.billing.moloniConfig, {
       method: 'PUT',
@@ -139,6 +184,26 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
     } else {
       onError?.(getApiErrorMessage(res));
     }
+  }
+
+  async function syncCatalogAndReloadCategories() {
+    if (!workspaceId) return;
+    setLoading(true);
+    onError?.('');
+    const res = await apiFetch(
+      withWorkspaceQuery(API_PATHS.billing.syncCatalog, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    if (!res.success) {
+      setLoading(false);
+      onError?.(getApiErrorMessage(res));
+      return;
+    }
+    await loadCategories(workspaceId, getStoredToken());
+    setLoading(false);
+    onSuccess?.('Catálogo sincronizado — seleccione a categoria por defeito abaixo');
+    load();
   }
 
   async function connectMoloni() {
@@ -158,8 +223,51 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
     }
   }
 
+  async function purgeDemoData() {
+    if (!workspaceId || !moloni?.isDemoCompany) return;
+    const ok = await confirm({
+      title: 'Limpar dados do modo demonstração',
+      message:
+        'Apaga no CMS deste workspace:\n' +
+        '• Documentos / faturas (rascunhos e emitidos) e tokens de download PDF\n' +
+        '• Catálogo local (séries, impostos; categorias/artigos só existem na cloud Moloni)\n' +
+        '• Clientes e fornecedores de facturação (Entidades de facturação)\n\n' +
+        'Mantém a ligação OAuth, a série documental e o email/SMTP. A categoria por defeito é limpa. ' +
+        'O módulo CRM «Clientes» não é afectado. ' +
+        'Os dados na cloud Moloni (demo) NÃO são apagados — limpe-os na interface Moloni se precisar. Continuar?',
+      confirmLabel: 'Limpar dados demo',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
+    setPurgingDemo(true);
+    onError?.('');
+    const res = await apiFetch(
+      withWorkspaceQuery(API_PATHS.billing.moloniPurgeDemoData, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    setPurgingDemo(false);
+    if (res.success) {
+      const d = res.data as {
+        invoicesDeleted?: number;
+        catalogCleared?: number;
+        entitiesDeleted?: number;
+      };
+      onSuccess?.(
+        res.message ??
+          `Dados demo limpos: ${d.invoicesDeleted ?? 0} documentos, ${d.catalogCleared ?? 0} itens de catálogo, ` +
+            `${d.entitiesDeleted ?? 0} entidades de facturação eliminadas. Use «Sincronizar agora» para continuar a testar.`
+      );
+      load();
+    } else {
+      onError?.(getApiErrorMessage(res));
+    }
+  }
+
   return (
     <section className="card space-y-4">
+      {confirmDialog}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           {workspaceId && (
@@ -353,6 +461,60 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
             disabled={!workspaceId}
           />
         )}
+
+        {moloni?.connected && (
+          <div className="md:col-span-2 space-y-2">
+            <label className="block text-xs font-medium text-slate-600">
+              Categoria por defeito (linhas manuais)
+            </label>
+            <p className="text-xs text-slate-500">
+              Quando emite uma fatura com linha manual, o CMS cria o artigo Moloni nesta categoria
+              (obrigatório — sem categoria a emissão falha).
+            </p>
+            {categoriesLoading ? (
+              <p className="text-xs text-slate-400">A carregar categorias…</p>
+            ) : moloniCategories.length === 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="font-medium">Sem categorias Moloni</p>
+                <p className="mt-1 text-xs">
+                  Sincronize o catálogo primeiro (ou crie categorias no Moloni) e depois escolha a
+                  categoria por defeito.
+                </p>
+                <button
+                  type="button"
+                  className="btn-secondary mt-2 text-xs"
+                  onClick={() => void syncCatalogAndReloadCategories()}
+                  disabled={loading || !workspaceId}
+                >
+                  Sincronizar catálogo e actualizar lista
+                </button>
+              </div>
+            ) : (
+              <select
+                className="input"
+                name="moloni-default-category-id"
+                value={moloniForm.defaultProductCategoryId}
+                onChange={(e) =>
+                  setMoloniForm({ ...moloniForm, defaultProductCategoryId: e.target.value })
+                }
+                disabled={!workspaceId}
+              >
+                <option value="">Seleccione uma categoria…</option>
+                {moloniCategories.map((cat) => (
+                  <option key={cat.category_id} value={String(cat.category_id)}>
+                    {cat.name} (ID {cat.category_id})
+                  </option>
+                ))}
+              </select>
+            )}
+            {!moloniForm.defaultProductCategoryId && moloniCategories.length > 0 && (
+              <p className="text-xs text-amber-700">
+                Sem categoria por defeito, a emissão de linhas manuais falhará.
+              </p>
+            )}
+          </div>
+        )}
+
         <input
           className="input md:col-span-2"
           name="moloni-redirect-uri"
@@ -367,14 +529,15 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
           <div className="md:col-span-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             <p className="font-medium">Moloni não aceita localhost no Callback</p>
             <p className="mt-1 text-xs">
-              Exponha a API com um túnel público (ex.{' '}
-              <code className="rounded bg-amber-100 px-1">ngrok http 3001</code>
-              ), copie o URL HTTPS e defina no <code className="rounded bg-amber-100 px-1">.env</code>:
+              Em produção use a API pública. Em desenvolvimento, exponha a API com um túnel HTTPS
+              (Cloudflare Tunnel ou <code className="rounded bg-amber-100 px-1">ngrok http 3002</code>
+              ) e defina no <code className="rounded bg-amber-100 px-1">.env</code>:
             </p>
             <pre className="mt-2 overflow-x-auto rounded bg-amber-100/80 p-2 text-xs">
-{`NEXT_PUBLIC_API_PUBLIC_URL="https://SEU-ID.ngrok-free.app/api/v1"
-# ou URI completo:
-NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU-ID.ngrok-free.app/api/v1/billing/moloni/callback"`}
+{`# Produção tvde.one:
+NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.tvde.one/api/v1/billing/moloni/callback"
+# Dev (túnel):
+# NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU-ID.ngrok-free.app/api/v1/billing/moloni/callback"`}
             </pre>
             <p className="mt-2 text-xs">
               Reinicie o frontend, cole o mesmo URI no painel Moloni Developer e aqui no campo acima.
@@ -382,7 +545,9 @@ NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU-ID.ngrok-free.app/api/v1/billing/mo
           </div>
         )}
         <p className="md:col-span-2 text-xs text-slate-500">
-          O Redirect URI deve coincidir <strong>exactamente</strong> com o painel Moloni Developer:{' '}
+          O Redirect URI deve coincidir <strong>exactamente</strong> com o painel Moloni Developer
+          (produção: <code className="rounded bg-slate-100 px-1">https://api.tvde.one/api/v1/billing/moloni/callback</code>
+          ):{' '}
           <code className="rounded bg-slate-100 px-1">{moloniForm.redirectUri || '…'}</code>
         </p>
         <div className="md:col-span-2 flex flex-wrap gap-2">
@@ -416,6 +581,24 @@ NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU-ID.ngrok-free.app/api/v1/billing/mo
       </form>
 
       {moloni?.configured && (
+        <MoloniBillingEmailPanel
+          workspaceId={workspaceId}
+          companyName={moloni.companyName}
+          initial={moloni.emailSettings}
+          disabled={
+            moloni.moduleAuthorized === false ||
+            moloni.moduleActive === false ||
+            !workspaceId
+          }
+          onSuccess={onSuccess}
+          onError={onError}
+          onSaved={(data) =>
+            setMoloni((prev) => (prev ? { ...prev, emailSettings: data } : prev))
+          }
+        />
+      )}
+
+      {moloni?.configured && (
         <BillingMoloniBanner
           workspaceId={workspaceId}
           moloni={moloni}
@@ -432,6 +615,56 @@ NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU-ID.ngrok-free.app/api/v1/billing/mo
         onSuccess={onSuccess}
         onError={onError}
       />
+
+      {moloni?.connected && (
+        <section className="space-y-3 rounded-lg border border-red-200 bg-red-50/60 p-4">
+          <div>
+            <h3 className="text-sm font-semibold text-red-900">Zona de perigo</h3>
+            <p className="mt-1 text-xs text-red-800/90">
+              Acções destrutivas para limpar testes em modo demonstração Moloni, sem afectar a
+              ligação OAuth nem as definições de email.
+            </p>
+          </div>
+
+          {moloni.isDemoCompany ? (
+            <>
+              <p className="text-xs text-red-900/80">
+                Empresa demo detectada
+                {moloni.companyName ? (
+                  <>
+                    : <strong>{moloni.companyName}</strong>
+                  </>
+                ) : null}
+                . Apaga documentos/faturas, tokens de download, catálogo local (séries/impostos) e
+                clientes/fornecedores de facturação, para voltar a testar do zero. Mantém OAuth,
+                série e email/SMTP; limpa a categoria por defeito. Dados na cloud Moloni (demo)
+                podem continuar a existir.
+              </p>
+              <button
+                type="button"
+                className="rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                disabled={loading || purgingDemo || !workspaceId}
+                onClick={() => void purgeDemoData()}
+              >
+                {purgingDemo ? 'A limpar…' : 'Limpar dados do modo demonstração'}
+              </button>
+            </>
+          ) : (
+            <p className="text-xs text-red-900/80">
+              A limpeza de dados demo só está disponível quando a empresa Moloni ligada é de
+              demonstração (nome com «Demonstração»). Empresa actual
+              {moloni.companyName ? (
+                <>
+                  : <strong>{moloni.companyName}</strong>
+                </>
+              ) : (
+                ' desconhecida'
+              )}
+              .
+            </p>
+          )}
+        </section>
+      )}
     </section>
   );
 }

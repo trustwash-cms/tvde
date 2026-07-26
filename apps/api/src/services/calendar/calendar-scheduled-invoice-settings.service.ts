@@ -43,13 +43,11 @@ export async function isCalendarScheduledInvoiceEnabled(tenantId: string, worksp
 
 export async function getCalendarScheduledInvoiceSettings(tenantId: string, workspaceId: string) {
   const billing = await resolveCalendarScheduledInvoiceAvailability(tenantId, workspaceId);
-  const [enabledRow, categoryRow] = await Promise.all([
+  const [enabledRow, connection] = await Promise.all([
     prisma.tenantSetting.findUnique({
       where: { tenantId_key: { tenantId, key: CALENDAR_SCHEDULED_INVOICE_ENABLED_KEY } },
     }),
-    prisma.tenantSetting.findUnique({
-      where: { tenantId_key: { tenantId, key: CALENDAR_SCHEDULED_INVOICE_CATEGORY_ID_KEY } },
-    }),
+    getBillingConnection(workspaceId),
   ]);
 
   let moloniCategories: Array<{ id: number; name: string }> = [];
@@ -68,11 +66,18 @@ export async function getCalendarScheduledInvoiceSettings(tenantId: string, work
     }
   }
 
-  const defaultCategoryId = categoryRow?.value ? Number(categoryRow.value) : null;
+  let defaultCategoryId = connection?.defaultProductCategoryId ?? null;
+  if (defaultCategoryId == null) {
+    const categoryRow = await prisma.tenantSetting.findUnique({
+      where: { tenantId_key: { tenantId, key: CALENDAR_SCHEDULED_INVOICE_CATEGORY_ID_KEY } },
+    });
+    const fromSetting = categoryRow?.value ? Number(categoryRow.value) : NaN;
+    defaultCategoryId = Number.isFinite(fromSetting) ? fromSetting : null;
+  }
 
   return {
     enabled: enabledRow?.value === 'true',
-    defaultCategoryId: Number.isNaN(defaultCategoryId) ? null : defaultCategoryId,
+    defaultCategoryId,
     moloniCategories,
     billing,
   };
@@ -106,6 +111,11 @@ export async function saveCalendarScheduledInvoiceSettings(
   }
 
   if (input.defaultCategoryId !== undefined) {
+    await prisma.billingConnection.updateMany({
+      where: { workspaceId },
+      data: { defaultProductCategoryId: input.defaultCategoryId },
+    });
+    // Mantém o setting legado sincronizado para compatibilidade.
     if (input.defaultCategoryId == null) {
       await prisma.tenantSetting.deleteMany({
         where: { tenantId, key: CALENDAR_SCHEDULED_INVOICE_CATEGORY_ID_KEY },

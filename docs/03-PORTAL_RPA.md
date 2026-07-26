@@ -2,6 +2,8 @@
 
 Automatização de login + recolha de dados em portais **sem API pública**, com a mesma UX de “ligar conta” do Bolt.
 
+Encriptação de credenciais (AES-256-GCM, reutilizar / esquecer): [`09-ENCRIPTION.MD`](./09-ENCRIPTION.MD).
+
 O SMS/email OTP chega ao telemóvel do gestor; o código é colado no modal do dashboard (**human-in-the-loop**). Não lemos SMS automaticamente.
 
 ---
@@ -75,13 +77,15 @@ Disponível para **superadmin** (Gestor de Frota) em:
 
 Fluxo:
 
-1. **Ligar conta** — username/email + password (encriptados por tenant)
-2. Se o portal pedir OTP → modal com input (timeout ~10 min no servidor)
-3. Estado passa a **Ligado** → **Sincronizar** descarrega export e corre os parsers existentes
-4. **Desligar** apaga credenciais + sessão do tenant
-5. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
+1. **Ligar conta** — username/email + password (**AES-256-GCM** por tenant, `ENCRYPTION_KEY`). A password fica guardada para reutilização.
+2. Se já há password guardada (`hasPassword`) → **Continuar com conta guardada** (sem voltar a digitar); MyPRIO/Uber podem pedir OTP SMS na mesma.
+3. Se o portal pedir OTP → modal com input (timeout ~10 min no servidor)
+4. Estado passa a **Ligado** → **Sincronizar** descarrega export e corre os parsers existentes
+5. **Esquecer password** — remove só `passwordEncrypted` (mantém username + sessão). Distinto de Desligar.
+6. **Desligar** apaga password **e** sessão Playwright do tenant
+7. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
 
-No sync de **Pagamentos** (`portal-quick-login-modal.tsx`): se o estado já for `awaiting_otp`, o modal abre **directamente no formulário OTP** (não pede user/password de novo nem cria outro job). Comportamento alinhado com o painel Conta MyPRIO em Combustível/Eletricidade.
+No sync de **Pagamentos** (`portal-quick-login-modal.tsx`): se o estado já for `awaiting_otp`, o modal abre **directamente no formulário OTP**. Se há password guardada e a sessão expirou, **Login** oferece **Continuar** sem pedir password de novo (com opção «Esquecer password» / «Introduzir outra»).
 
 Estados: `Desligado` · `Ligado` · `OTP pendente` · `Sessão expirada` · `Erro`
 
@@ -95,14 +99,15 @@ Prefixo: `/api/v1` (superadmin + tenant na sessão)
 
 | Método | Path | Acção |
 |--------|------|--------|
-| GET | `/portal-connections` | Lista estado dos 3 portais |
+| GET | `/portal-connections` | Lista estado dos 3 portais (`hasPassword`, `usernameMasked`, …) |
 | GET | `/portal-connections/:portal` | Detalhe (`via_verde` \| `myprio` \| `uber`) |
-| POST | `/portal-connections/:portal/connect` | `{ username, password }` |
+| POST | `/portal-connections/:portal/connect` | `{ username?, password?, useStoredCredentials? }` |
 | POST | `/portal-connections/:portal/otp` | `{ code }` |
 | POST | `/portal-connections/:portal/sync` | Dispara sync (`uberSync` / `syncScope` opcionais) |
 | POST | `/portal-connections/:portal/reports` | Uber: listar relatórios Supplier (~45–60s) |
 | POST | `/portal-connections/:portal/clear-messages` | Limpa `lastError` + job falhado persistente |
-| DELETE | `/portal-connections/:portal` | Desliga |
+| POST | `/portal-connections/:portal/forget-password` | Remove só a password encriptada |
+| DELETE | `/portal-connections/:portal` | Desliga (password + sessão) |
 
 Jobs: `pending` → `running` → (`awaiting_otp`) → `completed` \| `failed`
 

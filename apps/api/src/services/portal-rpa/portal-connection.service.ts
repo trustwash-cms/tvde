@@ -188,6 +188,7 @@ async function mapPublic(
     portal: string;
     status: string;
     usernameEncrypted: string | null;
+    passwordEncrypted?: string | null;
     sessionStateEncrypted: string | null;
     lastLoginAt: Date | null;
     lastSyncAt: Date | null;
@@ -215,6 +216,7 @@ async function mapPublic(
     status: (row?.status as PortalConnectionPublic['status']) ?? 'disconnected',
     usernameMasked,
     hasSession: Boolean(row?.sessionStateEncrypted),
+    hasPassword: Boolean(row?.passwordEncrypted),
     lastLoginAt: row?.lastLoginAt?.toISOString() ?? null,
     lastSyncAt: row?.lastSyncAt?.toISOString() ?? null,
     lastError: row?.lastError ?? null,
@@ -289,21 +291,63 @@ export async function startPortalConnect(
   portal: PortalKind,
   username: string,
   password: string,
-  actorUserId: string
+  actorUserId: string,
+  options?: { useStoredCredentials?: boolean }
 ) {
   assertRpaEnabled();
+  const existing = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+
+  const useStored = Boolean(options?.useStoredCredentials);
+  let resolvedUsername = username.trim();
+  let resolvedPassword = password;
+
+  if (useStored || (!resolvedUsername && existing?.usernameEncrypted)) {
+    if (!resolvedUsername) {
+      if (!existing?.usernameEncrypted) {
+        throw new Error('Utilizador em falta — não há credencial guardada');
+      }
+      try {
+        resolvedUsername = decrypt(existing.usernameEncrypted);
+      } catch {
+        throw new Error('Credencial guardada inválida — introduza o utilizador de novo');
+      }
+    }
+  }
+
+  if (useStored || (!resolvedPassword && existing?.passwordEncrypted)) {
+    if (!resolvedPassword) {
+      if (!existing?.passwordEncrypted) {
+        throw new Error('Password em falta — não há password guardada');
+      }
+      try {
+        resolvedPassword = decrypt(existing.passwordEncrypted);
+      } catch {
+        throw new Error('Password guardada inválida — introduza a password de novo');
+      }
+    }
+  }
+
+  if (!resolvedUsername) {
+    throw new Error('Utilizador em falta');
+  }
+  if (portal !== 'uber' && !resolvedPassword) {
+    throw new Error('Password em falta');
+  }
+
   const connection = await db.portalConnection.upsert({
     where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
     create: {
       tenantId,
       portal: toDbPortal(portal),
-      usernameEncrypted: encrypt(username.trim()),
-      passwordEncrypted: encrypt(password),
+      usernameEncrypted: encrypt(resolvedUsername),
+      passwordEncrypted: resolvedPassword ? encrypt(resolvedPassword) : null,
       status: 'disconnected',
     },
     update: {
-      usernameEncrypted: encrypt(username.trim()),
-      passwordEncrypted: encrypt(password),
+      usernameEncrypted: encrypt(resolvedUsername),
+      ...(resolvedPassword ? { passwordEncrypted: encrypt(resolvedPassword) } : {}),
       lastError: null,
     },
   });
@@ -325,6 +369,28 @@ export async function startPortalConnect(
 
   void runPortalJob(db, job.id, actorUserId);
   return { jobId: job.id, connection: await getPortalConnectionDetail(db, tenantId, portal) };
+}
+
+/**
+ * Remove só a password encriptada. Mantém username e sessão Playwright.
+ * Distinto de disconnectPortal (password + sessão).
+ */
+export async function forgetPortalPassword(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind
+) {
+  const connection = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+  if (!connection) return getPortalConnectionDetail(db, tenantId, portal);
+
+  await db.portalConnection.update({
+    where: { id: connection.id },
+    data: { passwordEncrypted: null },
+  });
+
+  return getPortalConnectionDetail(db, tenantId, portal);
 }
 
 export async function submitPortalOtp(
@@ -941,7 +1007,7 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
       const jobMeta = readJobMeta(job.resultJson);
       const uberInteractive = portal === 'uber' && env.portalRpaUberInteractive;
       const syncTimeoutMs =
-        portal === 'uber' ? 900_000 : portal === 'myprio' ? 55_000 : 90_000;
+        portal === 'uber' ? 900_000 : portal === 'myprio' ? 55_000 : portal === 'via_verde' ? 180_000 : 90_000;
       console.log(
         `[portal-rpa] sync start portal=${portal} scope=${jobMeta.syncScope ?? '-'} uber=${jobMeta.uberSync?.mode ?? '-'} interactive=${uberInteractive} headless=${uberInteractive ? false : env.portalRpaHeadless} timeout=${syncTimeoutMs}ms`
       );

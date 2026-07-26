@@ -3,7 +3,7 @@
 Documento de referência para migrar e evoluir funcionalidades do projeto PHP legado para o monorepo TVDE (Next.js + Fastify + PostgreSQL + Prisma).
 
 **Última actualização:** 19 Julho 2026  
-**Estado actual:** Bolt + utilizadores; Via Verde / Eletricidade / Combustível / Uber com import + Portal RPA; **Pagamentos** (calculadora + massa + mark/unmark pagos) — ver [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md).
+**Docs:** deploy VM — [`deploy_tvde.one.md`](./deploy_tvde.one.md); Cloudflare — [`cloudflare_tvde.one.md`](./cloudflare_tvde.one.md).
 
 ---
 

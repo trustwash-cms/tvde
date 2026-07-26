@@ -104,6 +104,8 @@ export function PortalConnectionPanel({
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
+  /** Quando true e hasPassword: Ligar sem pedir password */
+  const [useStoredCredentials, setUseStoredCredentials] = useState(false);
   const { confirm, confirmDialog } = useConfirmDialog();
 
   const portalLabel = PORTAL_KIND_LABELS[portal];
@@ -304,11 +306,14 @@ export function PortalConnectionPanel({
     setBusy(true);
     setPhase('connecting');
     setError('');
+    const body = useStoredCredentials
+      ? { useStoredCredentials: true as const }
+      : { username, password };
     const res = await apiFetch(
       API_PATHS.portalConnections.connect(portal),
       {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(body),
       },
       getStoredToken()
     );
@@ -319,6 +324,32 @@ export function PortalConnectionPanel({
       return;
     }
     // Mantém modal aberto com loader até o job terminar / pedir OTP
+    await load();
+  }
+
+  async function handleForgetPassword() {
+    const ok = await confirm({
+      title: 'Esquecer password',
+      message: `Remover a password guardada de ${portalLabel}? O utilizador e a sessão (se existir) mantêm-se. No próximo login terá de introduzir a password.`,
+      confirmLabel: 'Esquecer',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    const res = await apiFetch(
+      API_PATHS.portalConnections.forgetPassword(portal),
+      { method: 'POST', body: JSON.stringify({}) },
+      getStoredToken()
+    );
+    setBusy(false);
+    if (!res.success) {
+      setError(humanizePortalError(res.error) || 'Não foi possível esquecer a password');
+      return;
+    }
+    setUseStoredCredentials(false);
+    setPassword('');
     await load();
   }
 
@@ -381,7 +412,7 @@ export function PortalConnectionPanel({
   async function handleDisconnect() {
     const ok = await confirm({
       title: `Desligar ${portalLabel}`,
-      message: `Desligar a conta ${portalLabel}? Password e sessão do browser são removidas — o próximo Ligar pede login completo (com SMS se o portal exigir).`,
+      message: `Desligar a conta ${portalLabel}? Password e sessão do browser são removidas — o próximo Ligar pede login completo (com SMS se o portal exigir). Para remover só a password e manter a sessão, use «Esquecer password».`,
       confirmLabel: 'Desligar',
       cancelLabel: 'Cancelar',
       variant: 'danger',
@@ -446,6 +477,7 @@ export function PortalConnectionPanel({
             <span>
               Estado: <span className="font-medium text-slate-700">{statusLabel}</span>
               {connection?.usernameMasked ? ` · ${connection.usernameMasked}` : null}
+              {connection?.hasPassword ? ' · password guardada' : null}
             </span>
           </p>
           {connection?.lastSyncAt ? (
@@ -517,10 +549,21 @@ export function PortalConnectionPanel({
                 setError('');
                 setUsername('');
                 setPassword('');
+                setUseStoredCredentials(Boolean(connection?.hasPassword));
                 setConnectOpen(true);
               }}
             >
               Ligar conta
+            </button>
+          ) : null}
+          {connection?.hasPassword ? (
+            <button
+              type="button"
+              className="btn-secondary text-sm"
+              disabled={busy}
+              onClick={() => void handleForgetPassword()}
+            >
+              Esquecer password
             </button>
           ) : null}
           {status !== 'disconnected' ? (
@@ -567,7 +610,7 @@ export function PortalConnectionPanel({
         closeOnBackdrop={!busy && phase !== 'connecting'}
         closeOnEscape={!busy && phase !== 'connecting'}
       >
-        <form onSubmit={handleConnect} className="relative space-y-3" autoComplete="off">
+        <form onSubmit={(e) => void handleConnect(e)} className="relative space-y-3" autoComplete="off">
           <AutofillDecoys />
           {phase === 'connecting' ? (
             <div className="flex items-start gap-3 rounded-md border border-sky-100 bg-sky-50 px-3 py-3 text-sm text-sky-900">
@@ -590,58 +633,124 @@ export function PortalConnectionPanel({
               </div>
             </div>
           ) : null}
-          <label className="block text-sm">
-            <span className="text-slate-600">
-              {portal === 'via_verde'
-                ? 'Email'
-                : portal === 'uber'
-                  ? 'Telefone ou email'
-                  : portal === 'myprio'
-                    ? 'Nº utilizador MyPRIO'
-                    : 'Utilizador'}
-            </span>
-            <AntiAutofillInput
-              id={`portal-${portal}-username`}
-              name={`portal-${portal}-username`}
-              className="input mt-1 w-full"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              inputMode={portal === 'myprio' ? 'numeric' : undefined}
-              placeholder={portal === 'myprio' ? 'ex. 610871' : undefined}
-              disabled={busy}
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="text-slate-600">
-              {portal === 'uber' ? 'Password (se pedida)' : 'Password'}
-            </span>
-            <AntiAutofillInput
-              id={`portal-${portal}-secret`}
-              name={`portal-${portal}-secret`}
-              className="input mt-1 w-full"
-              maskAsPassword
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required={portal !== 'uber'}
-              autoComplete="new-password"
-              disabled={busy}
-            />
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={busy}
-              onClick={() => setConnectOpen(false)}
-            >
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
-              {busy ? <Loader2 size={14} className="animate-spin" /> : null}
-              {busy ? 'A ligar…' : 'Ligar'}
-            </button>
-          </div>
+          {useStoredCredentials && connection?.hasPassword ? (
+            <>
+              <p className="text-sm text-slate-600">
+                Credenciais guardadas (AES-256-GCM) para{' '}
+                <span className="font-medium text-slate-800">
+                  {connection.usernameMasked || portalLabel}
+                </span>
+                . Continuar sem voltar a digitar a password
+                {portal === 'myprio' || portal === 'uber' ? ' — o portal pode pedir OTP SMS a seguir' : ''}.
+              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                <div className="flex flex-wrap gap-3 text-xs">
+                  <button
+                    type="button"
+                    className="text-slate-600 underline-offset-2 hover:underline disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => setUseStoredCredentials(false)}
+                  >
+                    Introduzir outra password
+                  </button>
+                  <button
+                    type="button"
+                    className="text-red-600 underline-offset-2 hover:underline disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => void handleForgetPassword()}
+                  >
+                    Esquecer password
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={busy}
+                    onClick={() => setConnectOpen(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+                    {busy ? 'A ligar…' : 'Continuar'}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-xs text-slate-500">
+                A password fica guardada encriptada neste tenant. Pode esquecê-la a qualquer momento.
+              </p>
+              <label className="block text-sm">
+                <span className="text-slate-600">
+                  {portal === 'via_verde'
+                    ? 'Email'
+                    : portal === 'uber'
+                      ? 'Telefone ou email'
+                      : portal === 'myprio'
+                        ? 'Nº utilizador MyPRIO'
+                        : 'Utilizador'}
+                </span>
+                <AntiAutofillInput
+                  id={`portal-${portal}-username`}
+                  name={`portal-${portal}-username`}
+                  className="input mt-1 w-full"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  required
+                  inputMode={portal === 'myprio' ? 'numeric' : undefined}
+                  placeholder={portal === 'myprio' ? 'ex. 610871' : undefined}
+                  disabled={busy}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="text-slate-600">
+                  {portal === 'uber' ? 'Password (se pedida)' : 'Password'}
+                </span>
+                <AntiAutofillInput
+                  id={`portal-${portal}-secret`}
+                  name={`portal-${portal}-secret`}
+                  className="input mt-1 w-full"
+                  maskAsPassword
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required={portal !== 'uber'}
+                  autoComplete="new-password"
+                  disabled={busy}
+                />
+              </label>
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                {connection?.hasPassword ? (
+                  <button
+                    type="button"
+                    className="text-xs text-slate-600 underline-offset-2 hover:underline disabled:opacity-50"
+                    disabled={busy}
+                    onClick={() => setUseStoredCredentials(true)}
+                  >
+                    Usar password guardada
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    disabled={busy}
+                    onClick={() => setConnectOpen(false)}
+                  >
+                    Cancelar
+                  </button>
+                  <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
+                    {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+                    {busy ? 'A ligar…' : 'Ligar'}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
         </form>
       </Modal>
 

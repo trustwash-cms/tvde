@@ -1,18 +1,16 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   API_PATHS,
   WEB_ROUTES,
   getRoleLabel,
   type Role,
-  type UserDocumentItem,
   type UserProfileDetail,
 } from '@tvde/shared';
-import { Shield, User } from 'lucide-react';
-import { UserDocumentsSection } from '@/components/users/user-documents-section';
-import { apiFetch, getApiErrorMessage } from '@/lib/api';
+import { Camera, Shield, User } from 'lucide-react';
+import { apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { useAlertDialog } from '@/hooks/use-alert-dialog';
 
 interface SessionItem {
@@ -39,19 +37,27 @@ function emptyProfileForm(detail: UserProfileDetail | null) {
   };
 }
 
-function userInitials(email: string): string {
-  const part = email.split('@')[0] ?? email;
+function userInitials(detail: UserProfileDetail): string {
+  const name = detail.user.fullName?.trim() || detail.user.username?.trim();
+  if (name) {
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }
+  const part = detail.user.email.split('@')[0] ?? detail.user.email;
   return part.slice(0, 2).toUpperCase();
 }
 
 export default function MePage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [avatarBusy, setAvatarBusy] = useState(false);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState<UserProfileDetail | null>(null);
-  const [documents, setDocuments] = useState<UserDocumentItem[]>([]);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [form, setForm] = useState(emptyProfileForm(null));
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { alert, alertDialog } = useAlertDialog();
 
   function loadProfile() {
@@ -60,7 +66,6 @@ export default function MePage() {
       setLoading(false);
       if (res.success && res.data) {
         setDetail(res.data);
-        setDocuments(res.data.documents);
         setForm(emptyProfileForm(res.data));
         return;
       }
@@ -79,26 +84,76 @@ export default function MePage() {
     loadSessions();
   }, []);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError('');
-
-    const res = await apiFetch<UserProfileDetail>(API_PATHS.users.meProfile, {
-      method: 'PATCH',
-      body: JSON.stringify(form),
-    });
-
-    setSubmitting(false);
-
-    if (res.success && res.data) {
-      setDetail(res.data);
-      setDocuments(res.data.documents);
-      await alert({ title: 'Perfil actualizado', message: 'Os seus dados foram guardados.', variant: 'default' });
+  useEffect(() => {
+    if (!detail?.user.avatarStorageKey) {
+      setAvatarUrl(null);
       return;
     }
+    const token = getStoredToken();
+    const version = detail.user.avatarUpdatedAt ?? String(Date.now());
+    const url = `${getApiUrl()}${API_PATHS.users.meAvatar}?v=${encodeURIComponent(version)}`;
+    let objectUrl: string | null = null;
+    fetch(url, {
+      cache: 'no-store',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => {
+        if (blob) {
+          objectUrl = URL.createObjectURL(blob);
+          setAvatarUrl(objectUrl);
+        }
+      })
+      .catch(() => setAvatarUrl(null));
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [detail?.user.avatarStorageKey, detail?.user.avatarUpdatedAt]);
 
-    setError(getApiErrorMessage(res));
+  async function handleAvatarFile(file: File | null) {
+    if (!file) return;
+    setAvatarBusy(true);
+    const token = getStoredToken();
+    const body = new FormData();
+    body.append('file', file);
+    try {
+      const res = await fetch(`${getApiUrl()}${API_PATHS.users.meAvatar}`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body,
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        await alert({
+          title: 'Upload falhou',
+          message: json.error || 'Não foi possível actualizar a foto.',
+          variant: 'error',
+        });
+        return;
+      }
+      loadProfile();
+    } finally {
+      setAvatarBusy(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleRemoveAvatar() {
+    setAvatarBusy(true);
+    try {
+      const res = await apiFetch(API_PATHS.users.meAvatar, { method: 'DELETE' });
+      if (!res.success) {
+        await alert({
+          title: 'Remoção falhou',
+          message: getApiErrorMessage(res),
+          variant: 'error',
+        });
+        return;
+      }
+      loadProfile();
+    } finally {
+      setAvatarBusy(false);
+    }
   }
 
   async function revokeSession(sessionId: string) {
@@ -123,6 +178,32 @@ export default function MePage() {
   }
 
   const twoFaEnabled = !!detail.user.twoFaMethod;
+  const role = detail.user.role as Role;
+  /** NIF / CMTVDE / morada — perfil de motorista (admin), não gestor. */
+  const showDriverProfile = role === 'admin';
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError('');
+
+    const body = showDriverProfile ? form : { fullName: form.fullName };
+
+    const res = await apiFetch<UserProfileDetail>(API_PATHS.users.meProfile, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+
+    setSubmitting(false);
+
+    if (res.success && res.data) {
+      setDetail(res.data);
+      await alert({ title: 'Perfil actualizado', message: 'Os seus dados foram guardados.', variant: 'default' });
+      return;
+    }
+
+    setError(getApiErrorMessage(res));
+  }
 
   return (
     <>
@@ -130,12 +211,26 @@ export default function MePage() {
       <div className="mx-auto max-w-3xl space-y-8">
         <div>
           <h1 className="mb-2 text-2xl font-bold">Meu Perfil</h1>
-          <p className="text-slate-500">Gerir os seus dados pessoais, documentos e sessões activas.</p>
+          <p className="text-slate-500">
+            {showDriverProfile
+              ? 'Gerir os seus dados pessoais e sessões activas.'
+              : 'Gerir o seu nome, segurança e sessões activas.'}
+          </p>
         </div>
 
         <section className="card flex flex-wrap items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-primary-light)] text-xl font-semibold text-[var(--color-primary)]">
-            {userInitials(detail.user.email)}
+          <div className="relative">
+            {avatarUrl ? (
+              <img
+                src={avatarUrl}
+                alt="Foto de perfil"
+                className="h-16 w-16 rounded-full object-cover"
+              />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-primary-light)] text-xl font-semibold text-[var(--color-primary)]">
+                {userInitials(detail)}
+              </div>
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-lg font-semibold text-slate-900">
@@ -143,9 +238,37 @@ export default function MePage() {
             </p>
             <p className="text-sm text-slate-500">{detail.user.email}</p>
             <p className="mt-1 text-xs uppercase tracking-wide text-slate-400">
-              {getRoleLabel(detail.user.role as Role)}
+              {getRoleLabel(role)}
               {detail.user.tenant ? ` · ${detail.user.tenant.siteId}` : ''}
             </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => void handleAvatarFile(e.target.files?.[0] ?? null)}
+              />
+              <button
+                type="button"
+                className="btn-secondary inline-flex items-center gap-1.5 text-sm"
+                disabled={avatarBusy}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Camera size={14} />
+                {avatarBusy ? 'A processar…' : 'Alterar foto'}
+              </button>
+              {detail.user.avatarStorageKey ? (
+                <button
+                  type="button"
+                  className="btn-secondary text-sm text-red-600"
+                  disabled={avatarBusy}
+                  onClick={() => void handleRemoveAvatar()}
+                >
+                  Remover foto
+                </button>
+              ) : null}
+            </div>
           </div>
         </section>
 
@@ -166,7 +289,7 @@ export default function MePage() {
           </Link>
         </section>
 
-        <form onSubmit={handleSubmit} className="card space-y-6">
+        <form onSubmit={(e) => void handleSubmit(e)} className="card space-y-6">
           <div className="flex items-center gap-2">
             <User size={18} className="text-slate-500" />
             <h2 className="text-base font-semibold text-slate-900">Dados pessoais</h2>
@@ -181,88 +304,95 @@ export default function MePage() {
                 onChange={(e) => setForm({ ...form, fullName: e.target.value })}
               />
             </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">NIF</label>
-              <input className="input" value={form.nif} onChange={(e) => setForm({ ...form, nif: e.target.value })} />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">CC / Autorização de residência</label>
-              <input
-                className="input"
-                value={form.ccAutorizacaoResidencia}
-                onChange={(e) => setForm({ ...form, ccAutorizacaoResidencia: e.target.value })}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm font-medium text-slate-700">Certificado CMTVDE</label>
-              <input
-                className="input"
-                value={form.numeroOperadorTvde}
-                onChange={(e) => setForm({ ...form, numeroOperadorTvde: e.target.value })}
-              />
-            </div>
+            {showDriverProfile ? (
+              <>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">NIF</label>
+                  <input
+                    className="input"
+                    value={form.nif}
+                    onChange={(e) => setForm({ ...form, nif: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    CC / Autorização de residência
+                  </label>
+                  <input
+                    className="input"
+                    value={form.ccAutorizacaoResidencia}
+                    onChange={(e) => setForm({ ...form, ccAutorizacaoResidencia: e.target.value })}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="mb-1 block text-sm font-medium text-slate-700">Certificado CMTVDE</label>
+                  <input
+                    className="input"
+                    value={form.numeroOperadorTvde}
+                    onChange={(e) => setForm({ ...form, numeroOperadorTvde: e.target.value })}
+                  />
+                </div>
+              </>
+            ) : null}
           </div>
 
-          <div className="space-y-4">
-            <h3 className="text-sm font-semibold text-slate-800">Morada</h3>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Distrito</label>
-                <input
-                  className="input"
-                  value={form.distrito}
-                  onChange={(e) => setForm({ ...form, distrito: e.target.value })}
-                />
+          {showDriverProfile ? (
+            <>
+              <div className="space-y-4">
+                <h3 className="text-sm font-semibold text-slate-800">Morada</h3>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Distrito</label>
+                    <input
+                      className="input"
+                      value={form.distrito}
+                      onChange={(e) => setForm({ ...form, distrito: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Concelho</label>
+                    <input
+                      className="input"
+                      value={form.concelho}
+                      onChange={(e) => setForm({ ...form, concelho: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Localidade</label>
+                    <input
+                      className="input"
+                      value={form.localidade}
+                      onChange={(e) => setForm({ ...form, localidade: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Código postal</label>
+                    <input
+                      className="input"
+                      value={form.codigoPostal}
+                      onChange={(e) => setForm({ ...form, codigoPostal: e.target.value })}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="mb-1 block text-sm font-medium text-slate-700">Arruamento</label>
+                    <input
+                      className="input"
+                      value={form.arruamento}
+                      onChange={(e) => setForm({ ...form, arruamento: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-slate-700">N.º porta</label>
+                    <input
+                      className="input"
+                      value={form.numeroPorta}
+                      onChange={(e) => setForm({ ...form, numeroPorta: e.target.value })}
+                    />
+                  </div>
+                </div>
               </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Concelho</label>
-                <input
-                  className="input"
-                  value={form.concelho}
-                  onChange={(e) => setForm({ ...form, concelho: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Localidade</label>
-                <input
-                  className="input"
-                  value={form.localidade}
-                  onChange={(e) => setForm({ ...form, localidade: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">Código postal</label>
-                <input
-                  className="input"
-                  value={form.codigoPostal}
-                  onChange={(e) => setForm({ ...form, codigoPostal: e.target.value })}
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="mb-1 block text-sm font-medium text-slate-700">Arruamento</label>
-                <input
-                  className="input"
-                  value={form.arruamento}
-                  onChange={(e) => setForm({ ...form, arruamento: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium text-slate-700">N.º porta</label>
-                <input
-                  className="input"
-                  value={form.numeroPorta}
-                  onChange={(e) => setForm({ ...form, numeroPorta: e.target.value })}
-                />
-              </div>
-            </div>
-          </div>
-
-          <UserDocumentsSection
-            userId={detail.user.id}
-            documents={documents}
-            onDocumentsChange={setDocuments}
-            selfMode
-          />
+            </>
+          ) : null}
 
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
@@ -293,7 +423,7 @@ export default function MePage() {
                   <button
                     type="button"
                     className="btn-secondary text-xs"
-                    onClick={() => revokeSession(session.id)}
+                    onClick={() => void revokeSession(session.id)}
                   >
                     Revogar
                   </button>

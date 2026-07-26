@@ -14,22 +14,41 @@ Todos os pedidos à API (excepto OAuth) usam **POST** com `access_token` na quer
 
 1. Conta em [moloni.pt](https://www.moloni.pt)
 2. Activar API → obter **Developer ID** (`client_id`) e **Client Secret**
-3. Definir **Redirect URI** (deve coincidir com o CMS):
+3. Definir **Redirect URI** (deve coincidir com o CMS) — **na API pública**, não no frontend:
 
 ```
-https://SEU_DOMINIO/api/v1/billing/moloni/callback
+# Produção tvde.one (colar exactamente no Moloni Developer):
+https://api.tvde.one/api/v1/billing/moloni/callback
 ```
+
+### Produção (api.tvde.one)
+
+No `.env` da VM:
+
+```env
+NEXT_PUBLIC_API_PUBLIC_URL="https://api.tvde.one/api/v1"
+NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.tvde.one/api/v1/billing/moloni/callback"
+API_PUBLIC_URL="https://api.tvde.one/api/v1"
+```
+
+O mesmo URI deve estar:
+
+1. No painel Moloni Developer → **URI de Resposta**
+2. Em **Configurações → Moloni** → campo Redirect URI (por workspace)
+3. Em `billing_connections.redirect_uri` (gravado ao Guardar)
+
+Não use URLs ngrok antigas nem `fleet.tvde.one` no callback.
 
 ### Desenvolvimento local — túnel obrigatório
 
-A Moloni **não aceita** `localhost` nem `127.0.0.1` no Callback. Exponha a API (porta 3001) com um URL público HTTPS:
+A Moloni **não aceita** `localhost` nem `127.0.0.1` no Callback. Exponha a API (porta 3002) com um URL público HTTPS:
 
 ```bash
 # Exemplo com ngrok
-ngrok http 3001
+ngrok http 3002
 ```
 
-No `.env` do CMS:
+No `.env` do CMS (só em dev):
 
 ```env
 NEXT_PUBLIC_API_PUBLIC_URL="https://abc123.ngrok-free.app/api/v1"
@@ -37,12 +56,7 @@ NEXT_PUBLIC_API_PUBLIC_URL="https://abc123.ngrok-free.app/api/v1"
 NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://abc123.ngrok-free.app/api/v1/billing/moloni/callback"
 ```
 
-Reinicie o frontend (`npm run dev -w @tvde/web`). O mesmo URI deve estar:
-
-1. No painel Moloni Developer → **URI de Resposta**
-2. Em **Configurações → Moloni** → campo Redirect URI (por workspace)
-
-O browser continua em `http://localhost:3000`; só o callback OAuth passa pelo túnel.
+Reinicie o frontend (`npm run dev -w @tvde/web`). Em produção use sempre `api.tvde.one` (secção acima).
 
 ---
 
@@ -300,11 +314,13 @@ Endpoint CMS: `GET /invoices/:id/pdf` → stream PDF ao browser.
 
 ---
 
-## 5. Sandbox
+## 5. Sandbox / demonstração
 
 Moloni oferece ambiente de testes — ver [Sandbox](https://www.moloni.pt/dev/sandbox/).
 
 Para sandbox, altere `MOLONI_API_BASE` em `config.ts` se a URL for diferente.
+
+**Empresa de Demonstração:** o CMS detecta modo demo pelo nome da empresa (`/demonstra/i`). Em **Configurações → Moloni** existe «Limpar dados do modo demonstração» (`POST /billing/moloni/purge-demo-data`) que apaga artefactos **locais** (documentos, tokens, cache de catálogo, entidades de facturação) — não apaga dados na cloud Moloni nem desliga o OAuth. Ver [FATURACAO.md §6.4.1](./FATURACAO.md).
 
 ---
 

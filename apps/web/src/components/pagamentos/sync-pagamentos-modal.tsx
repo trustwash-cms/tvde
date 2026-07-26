@@ -58,8 +58,12 @@ const PROVIDERS_BASE: Omit<
   { id: 'prio', name: 'Prio (elec. + combustível)', icon: Fuel, portal: 'myprio' },
 ];
 
-function isSessionOrTimeoutError(message: string): boolean {
-  return /timeout|sess[aã]o|session|expired|expirad|login|autentic|desligad|disconnected|não ligad|nao ligad|awaiting_otp|\botp\b|credentials|credencia|espera de OTP|já existe um job/i.test(
+/**
+ * Sessão / login em falta — NÃO incluir «timeout» genérico.
+ * Timeout Playwright ou poll ≠ precisa de Login (pode ser portal lento).
+ */
+function isSessionError(message: string): boolean {
+  return /sess[aã]o|session|expired|expirad|volte a ligar|faça login|fazer login|autentic|desligad|disconnected|não ligad|nao ligad|sem sessão|sem sessao|awaiting_otp|\botp\b|credentials|credencia|espera de OTP|já existe um job|conta não ligada|conta nao ligada/i.test(
     message
   );
 }
@@ -119,10 +123,21 @@ async function pollPortalUntilDone(portal: PortalKind, timeoutMs: number) {
       throw new Error(res.error || `Falha ao consultar estado ${portal}`);
     }
     const s = res.data.activeJobStatus;
+    if (res.data.status === 'expired' || res.data.status === 'disconnected') {
+      const msg =
+        res.data.lastError ||
+        `Sessão ${portal} expirada ou desligada — faça login`;
+      const err = new Error(msg) as Error & { needsLogin?: boolean };
+      err.needsLogin = true;
+      throw err;
+    }
     if (s === 'failed' || res.data.status === 'error') {
       const msg = res.data.lastError || res.data.lastJobMessage || 'Sincronização falhou';
       const err = new Error(msg) as Error & { needsLogin?: boolean };
-      err.needsLogin = isSessionOrTimeoutError(msg) || res.data.status === 'expired';
+      err.needsLogin =
+        res.data.status === 'expired' ||
+        res.data.status === 'disconnected' ||
+        isSessionError(msg);
       throw err;
     }
     if (s === 'completed') {
@@ -136,10 +151,29 @@ async function pollPortalUntilDone(portal: PortalKind, timeoutMs: number) {
       return res.data.lastJobMessage || 'Concluído';
     }
   }
-  const err = new Error(`Timeout a sincronizar ${portal}`) as Error & {
-    needsLogin?: boolean;
-  };
-  err.needsLogin = true;
+
+  // Poll esgotado — consultar estado final; Login só se a API marcar sessão morta
+  const final = await apiFetch<PortalConnectionStatus>(
+    API_PATHS.portalConnections.byPortal(portal),
+    {},
+    getStoredToken()
+  );
+  const finalStatus = final.data?.status;
+  const finalMsg =
+    final.data?.lastError ||
+    final.data?.lastJobMessage ||
+    `Timeout a sincronizar ${portal}`;
+  const err = new Error(
+    finalStatus === 'expired' || finalStatus === 'disconnected'
+      ? final.data?.lastError || `Sessão ${portal} expirada ou desligada — faça login`
+      : /Timeout Playwright|sync abortado/i.test(finalMsg)
+        ? finalMsg
+        : `Timeout a sincronizar ${portal} (portal lento ou sync ainda a correr — use Repetir; Login só se a sessão estiver expirada)`
+  ) as Error & { needsLogin?: boolean };
+  err.needsLogin =
+    finalStatus === 'expired' ||
+    finalStatus === 'disconnected' ||
+    isSessionError(finalMsg);
   throw err;
 }
 
@@ -288,7 +322,7 @@ export function SyncPagamentosModal({
         const err = new Error(
           listRes.error || 'Não foi possível listar relatórios Uber'
         ) as Error & { needsLogin?: boolean };
-        err.needsLogin = isSessionOrTimeoutError(err.message);
+        err.needsLogin = isSessionError(err.message);
         throw err;
       }
 
@@ -360,7 +394,7 @@ export function SyncPagamentosModal({
     async (index: number) => {
       animateProgress(index, 45_000);
       await startPortalSync('via_verde', {});
-      return pollPortalUntilDone('via_verde', 5 * 60_000);
+      return pollPortalUntilDone('via_verde', 3.5 * 60_000);
     },
     [animateProgress]
   );
@@ -416,8 +450,7 @@ export function SyncPagamentosModal({
         const message = err instanceof Error ? err.message : 'Erro';
         const needsLogin =
           Boolean(provider.portal) &&
-          (Boolean((err as { needsLogin?: boolean })?.needsLogin) ||
-            isSessionOrTimeoutError(message));
+          (Boolean((err as { needsLogin?: boolean })?.needsLogin) || isSessionError(message));
         markRow(index, {
           status: 'error',
           progress: 100,
@@ -485,8 +518,7 @@ export function SyncPagamentosModal({
         const message = err instanceof Error ? err.message : 'Erro';
         const needsLogin =
           Boolean(provider.portal) &&
-          (Boolean((err as { needsLogin?: boolean })?.needsLogin) ||
-            isSessionOrTimeoutError(message));
+          (Boolean((err as { needsLogin?: boolean })?.needsLogin) || isSessionError(message));
         markRow(index, {
           status: 'error',
           progress: 100,
@@ -714,8 +746,8 @@ export function SyncPagamentosModal({
             </p>
             <p className="mt-1 text-slate-500">
               {doneCount} OK
-              {errorCount ? ` · ${errorCount} com erro` : ''} — em timeout/sessão use Login e
-              depois Repetir.
+              {errorCount ? ` · ${errorCount} com erro` : ''} — se a sessão
+              expirou use Login e depois Repetir; em timeout do portal use só Repetir.
             </p>
           </div>
         ) : null}

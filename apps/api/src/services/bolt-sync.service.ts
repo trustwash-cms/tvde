@@ -6,6 +6,7 @@ import {
   type BoltSyncCounters,
   type BoltSyncType,
 } from '@tvde/bolt';
+import { getMonthUtcRange } from '@tvde/shared';
 import { textOr } from './search.service';
 import { ensureBoltClient, getBoltConnection } from './bolt-connection.service';
 
@@ -342,14 +343,22 @@ export async function syncAllBoltWorkspaces(type: BoltSyncType = 'all') {
 
 export async function listBoltOrders(
   workspaceId: string,
-  input: { q?: string; page?: number; limit?: number }
+  input: { q?: string; page?: number; limit?: number; driverUuids?: string[] }
 ) {
   const page = Math.max(0, input.page ?? 0);
   const limit = Math.min(100, Math.max(1, input.limit ?? 50));
-  const where = boltBillableOrderWhere(
-    workspaceId,
-    input.q ? textOr(input.q, ['orderReference', 'driverName', 'vehicleModel', 'vehicleLicensePlate']) : undefined
-  );
+  const driverFilter =
+    input.driverUuids != null
+      ? input.driverUuids.length
+        ? { driverUuid: { in: input.driverUuids } }
+        : { id: { in: [] as string[] } }
+      : undefined;
+  const where = boltBillableOrderWhere(workspaceId, {
+    ...(driverFilter ?? {}),
+    ...(input.q
+      ? textOr(input.q, ['orderReference', 'driverName', 'vehicleModel', 'vehicleLicensePlate'])
+      : {}),
+  });
 
   const [total, orders] = await Promise.all([
     prisma.boltOrder.count({ where }),
@@ -382,39 +391,71 @@ export async function listBoltOrders(
   };
 }
 
-export async function getBoltDashboardStats(workspaceId: string) {
-  const billableWhere = boltBillableOrderWhere(workspaceId);
+export async function getBoltDashboardStats(
+  workspaceId: string,
+  options?: { driverUuids?: string[]; monthKey?: string }
+) {
+  const driverFilter =
+    options?.driverUuids != null
+      ? options.driverUuids.length
+        ? { driverUuid: { in: options.driverUuids } }
+        : { id: { in: [] as string[] } }
+      : undefined;
+  const billableWhere = boltBillableOrderWhere(workspaceId, driverFilter);
+  const { start, endExclusive, key } = getMonthUtcRange(options?.monthKey);
 
-  const [ordersCount, driversCount, vehiclesCount, revenueAgg, recentOrders] = await Promise.all([
-    prisma.boltOrder.count({ where: billableWhere }),
-    prisma.boltDriver.count({ where: { workspaceId } }),
-    prisma.boltVehicle.count({ where: { workspaceId } }),
-    prisma.boltOrder.aggregate({
-      where: billableWhere,
-      _sum: { ridePrice: true },
-    }),
-    prisma.boltOrder.findMany({
-      where: billableWhere,
-      orderBy: { orderCreatedTimestamp: 'desc' },
-      take: 10,
-      select: {
-        id: true,
-        orderReference: true,
-        driverName: true,
-        orderStatus: true,
-        vehicleModel: true,
-        ridePrice: true,
-        orderCreatedTimestamp: true,
-        _count: { select: { stops: true } },
-      },
-    }),
-  ]);
+  const [ordersCount, driversCount, vehiclesCount, revenueAgg, monthAgg, recentOrders] =
+    await Promise.all([
+      prisma.boltOrder.count({ where: billableWhere }),
+      options?.driverUuids != null
+        ? prisma.boltDriver.count({
+            where: {
+              workspaceId,
+              ...(options.driverUuids.length
+                ? { driverUuid: { in: options.driverUuids } }
+                : { id: { in: [] as string[] } }),
+            },
+          })
+        : prisma.boltDriver.count({ where: { workspaceId } }),
+      options?.driverUuids != null
+        ? Promise.resolve(0)
+        : prisma.boltVehicle.count({ where: { workspaceId } }),
+      prisma.boltOrder.aggregate({
+        where: billableWhere,
+        _sum: { ridePrice: true },
+      }),
+      prisma.boltOrder.aggregate({
+        where: {
+          ...billableWhere,
+          orderCreatedTimestamp: { gte: start, lt: endExclusive },
+        },
+        _sum: { ridePrice: true },
+      }),
+      prisma.boltOrder.findMany({
+        where: billableWhere,
+        orderBy: { orderCreatedTimestamp: 'desc' },
+        take: 10,
+        select: {
+          id: true,
+          orderReference: true,
+          driverName: true,
+          orderStatus: true,
+          vehicleModel: true,
+          ridePrice: true,
+          orderCreatedTimestamp: true,
+          isPaid: true,
+          _count: { select: { stops: true } },
+        },
+      }),
+    ]);
 
   return {
     ordersCount,
     driversCount,
     vehiclesCount,
     totalRevenue: revenueAgg._sum.ridePrice?.toString() ?? '0',
+    monthTotal: monthAgg._sum.ridePrice?.toString() ?? '0',
+    selectedMonth: key,
     recentOrders: recentOrders.map((o) => ({
       ...o,
       ridePrice: o.ridePrice?.toString() ?? null,

@@ -1,9 +1,10 @@
 'use client';
 
 import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { ChevronDown } from 'lucide-react';
-import { type MoloniDocumentType, getDocumentTypeLabel } from '@tvde/shared';
+import { type MoloniDocumentType, getDocumentTypeLabel, WEB_ROUTES } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
@@ -45,6 +46,7 @@ interface MoloniStatus {
   connected: boolean;
   healthy: boolean;
   statusMessage: string;
+  defaultProductCategoryId?: number | null;
 }
 
 interface InvoiceLineForm {
@@ -162,6 +164,7 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
+  const [syncingCatalog, setSyncingCatalog] = useState(false);
   const [createClientOpen, setCreateClientOpen] = useState(false);
   const [createClientForm, setCreateClientForm] = useState<BillingEntityFormValues>(emptyEntityForm());
   const [pushClientOnCreate, setPushClientOnCreate] = useState(false);
@@ -271,6 +274,27 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
     setError('');
     loadStatic();
   }, [workspaceId, documentType]);
+
+  async function syncCatalogSeries() {
+    if (!workspaceId) return;
+    setSyncingCatalog(true);
+    setError('');
+    const res = await apiFetch(
+      withWorkspaceQuery(API_PATHS.billing.syncCatalog, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    setSyncingCatalog(false);
+    if (!res.success) {
+      setError(getApiErrorMessage(res));
+      return;
+    }
+    const data = res.data as { documentSets?: number; taxes?: number } | undefined;
+    setSuccess(
+      `Catálogo sincronizado: ${data?.documentSets ?? 0} séries, ${data?.taxes ?? 0} impostos.`
+    );
+    loadStatic();
+  }
 
   useEffect(() => {
     if (moloni?.healthy) loadProducts();
@@ -429,6 +453,10 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
     return null;
   }
 
+  const hasManualLines = filledLines(form.lines).some((l) => !l.moloniProductId);
+  const missingDefaultCategory =
+    hasManualLines && moloni?.healthy && !moloni.defaultProductCategoryId;
+
   async function submitInvoice(mode: 'draft' | 'issue') {
     if (!workspaceId) {
       setError('Seleccione um workspace');
@@ -441,6 +469,12 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
     }
     if (mode === 'issue' && !moloni?.healthy) {
       setError('Moloni não ligado — configure em Definições → Moloni');
+      return;
+    }
+    if (mode === 'issue' && hasManualLines && !moloni?.defaultProductCategoryId) {
+      setError(
+        'Linha manual sem categoria Moloni — seleccione uma categoria por defeito em Configurações → Moloni'
+      );
       return;
     }
     if (mode === 'issue') {
@@ -621,6 +655,18 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
       {confirmDialog}
       {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
       {success && <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-700">{success}</div>}
+      {missingDefaultCategory && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">Categoria Moloni por defeito em falta</p>
+          <p className="mt-1 text-xs">
+            Tem linhas manuais sem artigo Moloni. Antes de emitir, escolha a categoria por defeito em{' '}
+            <Link href={WEB_ROUTES.dashboard.settings.moloni} className="underline">
+              Configurações → Moloni
+            </Link>
+            .
+          </p>
+        </div>
+      )}
 
       <WorkspaceSelector workspaces={workspaces} workspaceId={workspaceId} onChange={setWorkspaceId} />
 
@@ -670,7 +716,7 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
                 disabled={!workspaceId || documentSets.length === 0}
               >
                 {documentSets.length === 0 ? (
-                  <option value="">Sincronize séries no Moloni</option>
+                  <option value="">Sem séries — sincronize o catálogo</option>
                 ) : (
                   documentSets.map((ds) => (
                     <option key={ds.id} value={ds.externalId}>
@@ -679,6 +725,27 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
                   ))
                 )}
               </select>
+              {documentSets.length === 0 && workspaceId && (
+                <p className="mt-1.5 text-xs text-amber-800">
+                  As séries vêm do catálogo Moloni local.{' '}
+                  {moloni?.connected ? (
+                    <>
+                      <button
+                        type="button"
+                        className="font-medium underline"
+                        disabled={syncingCatalog}
+                        onClick={() => void syncCatalogSeries()}
+                      >
+                        {syncingCatalog ? 'A sincronizar…' : 'Sincronizar séries agora'}
+                      </button>
+                      {' · '}
+                    </>
+                  ) : null}
+                  <Link href={WEB_ROUTES.dashboard.settings.moloni} className="font-medium underline">
+                    Configurações → Moloni
+                  </Link>
+                </p>
+              )}
             </div>
           </div>
 

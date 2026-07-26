@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { BoltSyncType } from '@tvde/bolt';
+import type { Role } from '@tvde/shared';
 import { createAuditLog } from '../services/audit.service';
 import { resolveWorkspaceTenantScope } from '../lib/workspace-scope';
 import { parseSearchQuery, textOr } from '../services/search.service';
@@ -14,8 +15,23 @@ import {
   listBoltOrders,
   syncBoltData,
 } from '../services/bolt-sync.service';
+import { getDriverFleetScope } from '../services/user-vehicle-matching.service';
 
 const syncTypeSchema = z.enum(['orders', 'drivers', 'vehicles', 'all']);
+
+async function resolveDriverUuids(
+  fastify: FastifyInstance,
+  request: { user: { sub: string; role: string; tenantId: string | null } },
+  tenantId: string
+): Promise<string[] | undefined> {
+  const scope = await getDriverFleetScope(
+    fastify.db,
+    tenantId,
+    request.user.sub,
+    request.user.role as Role
+  );
+  return scope ? scope.uuidBolt : undefined;
+}
 
 export async function boltRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -123,13 +139,22 @@ export async function boltRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/bolt/dashboard', async (request, reply) => {
-    const query = request.query as { workspaceId?: string };
-    const { workspaceId } = await resolveWorkspaceTenantScope(
+    const query = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        month: z.string().optional(),
+      })
+      .parse(request.query);
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
       query.workspaceId
     );
-    const data = await getBoltDashboardStats(workspaceId);
+    const driverUuids = await resolveDriverUuids(fastify, request, tenantId);
+    const data = await getBoltDashboardStats(workspaceId, {
+      driverUuids,
+      monthKey: query.month,
+    });
     return reply.send({ success: true, data });
   });
 
@@ -144,16 +169,18 @@ export async function boltRoutes(fastify: FastifyInstance) {
       .parse(request.query);
 
     const q = parseSearchQuery(query.q);
-    const { workspaceId } = await resolveWorkspaceTenantScope(
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
       query.workspaceId
     );
+    const driverUuids = await resolveDriverUuids(fastify, request, tenantId);
 
     const data = await listBoltOrders(workspaceId, {
       q,
       page: query.page,
       limit: query.limit ?? 50,
+      driverUuids,
     });
 
     return reply.send({ success: true, data });
@@ -162,14 +189,23 @@ export async function boltRoutes(fastify: FastifyInstance) {
   fastify.get('/bolt/orders/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const query = request.query as { workspaceId?: string };
-    const { workspaceId } = await resolveWorkspaceTenantScope(
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
       query.workspaceId
     );
+    const driverUuids = await resolveDriverUuids(fastify, request, tenantId);
 
     const order = await fastify.db.boltOrder.findFirst({
-      where: { id, workspaceId },
+      where: {
+        id,
+        workspaceId,
+        ...(driverUuids != null
+          ? driverUuids.length
+            ? { driverUuid: { in: driverUuids } }
+            : { id: { in: [] as string[] } }
+          : {}),
+      },
       include: { stops: { orderBy: { stopOrder: 'asc' } } },
     });
     if (!order) {
@@ -187,7 +223,9 @@ export async function boltRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.get('/bolt/drivers', async (request, reply) => {
+  fastify.get('/bolt/drivers', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
     const query = request.query as {
       workspaceId?: string;
       q?: string;
@@ -226,7 +264,9 @@ export async function boltRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.get('/bolt/vehicles', async (request, reply) => {
+  fastify.get('/bolt/vehicles', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
     const query = request.query as {
       workspaceId?: string;
       q?: string;

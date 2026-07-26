@@ -9,7 +9,7 @@ import {
   canViewUserProfile,
   type Role,
 } from '@tvde/shared';
-import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
+import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken, storeTokens } from '@/lib/api';
 import ListPageSearch from '@/components/list-page-search';
 import { UserListCard, type UserListItem } from '@/components/users/user-list-card';
 import { CreateUserModal, type TenantOption } from '@/components/users/create-user-modal';
@@ -18,6 +18,7 @@ import { DeleteUserModal } from '@/components/users/delete-user-modal';
 import { UserDetailsModal } from '@/components/users/user-details-modal';
 import { UserVehiclesModal } from '@/components/users/user-vehicles-modal';
 import { useAlertDialog } from '@/hooks/use-alert-dialog';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface AuthUser {
   id: string;
@@ -46,6 +47,7 @@ export default function UsersPage() {
 
   const isMaster = actorRole === 'master';
   const { alert, alertDialog } = useAlertDialog();
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   function load() {
     const params = new URLSearchParams();
@@ -212,9 +214,51 @@ export default function UsersPage() {
     return canViewUserProfile(actorUserId, actorRole, u.id, u.role as Role);
   }
 
+  function canImpersonateUser(u: UserListItem): boolean {
+    if (!isMaster || !actorUserId) return false;
+    if (u.id === actorUserId) return false;
+    if (u.status !== 'active') return false;
+    if (u.role === 'master') return false;
+    return true;
+  }
+
+  async function handleImpersonate(u: UserListItem) {
+    const name = u.fullName || u.username || u.email;
+    const ok = await confirm({
+      title: `Personificar ${name}?`,
+      message: 'Vai ver o painel exactamente como este utilizador. Pode sair a qualquer momento.',
+      confirmLabel: 'Personificar',
+      cancelLabel: 'Cancelar',
+      variant: 'default',
+    });
+    if (!ok) return;
+
+    const res = await apiFetch<{
+      accessToken: string;
+      refreshToken: string;
+      user: { role: string };
+    }>(API_PATHS.auth.impersonate, {
+      method: 'POST',
+      body: JSON.stringify({ userId: u.id }),
+    });
+
+    if (!res.success || !res.data?.accessToken || !res.data.refreshToken) {
+      await alert({
+        title: 'Personificação falhou',
+        message: getApiErrorMessage(res),
+        variant: 'error',
+      });
+      return;
+    }
+
+    storeTokens(res.data.accessToken, res.data.refreshToken);
+    window.location.href = '/dashboard';
+  }
+
   return (
     <>
       {alertDialog}
+      {confirmDialog}
       <div>
         <div className="mb-8 flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -265,11 +309,13 @@ export default function UsersPage() {
                 canToggle={canToggleUser(u)}
                 canDetails={canViewDetails(u)}
                 canVehicles={canViewDetails(u)}
+                canImpersonate={canImpersonateUser(u)}
                 onEdit={() => setEditUser(u)}
                 onDelete={() => setDeleteUser(u)}
                 onToggleStatus={() => handleToggleStatus(u)}
                 onDetails={() => setDetailsUser(u)}
                 onVehicles={() => setVehiclesUser(u)}
+                onImpersonate={() => handleImpersonate(u)}
               />
             ))
           )}

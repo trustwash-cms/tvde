@@ -72,8 +72,14 @@ export function mapDraftToMoloniInvoice(
       const needsExemption = vatRate === 0;
       const exemptionReason = line.moloniExemptionReason ?? (needsExemption ? 'M07' : undefined);
 
+      if (!line.moloniProductId) {
+        throw new Error(
+          `Linha "${line.description}" sem product_id Moloni — selecione um artigo ou use emissão que cria artigo automático`
+        );
+      }
+
       return {
-        ...(line.moloniProductId ? { product_id: line.moloniProductId } : {}),
+        product_id: line.moloniProductId,
         name: line.description,
         qty: computed.quantity,
         price: computed.unitPrice,

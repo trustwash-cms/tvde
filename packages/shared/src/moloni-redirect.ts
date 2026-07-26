@@ -1,7 +1,8 @@
 import { API_PATHS } from './routes';
 
 /**
- * URI OAuth Moloni — deve ser URL público (HTTPS).
+ * URI OAuth Moloni — deve ser URL público (HTTPS) da API.
+ * Produção tvde.one: https://api.tvde.one/api/v1/billing/moloni/callback
  * Moloni não aceita localhost; em dev use túnel (ngrok, cloudflared, etc.).
  *
  * Prioridade:

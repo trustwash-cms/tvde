@@ -6,9 +6,11 @@ export {
   canManageUser,
   canCreateUsers,
   canToggleUserStatus,
+  isDriverRole,
   DASHBOARD_ACCESS,
   canAccessDashboardArea,
   canAccessClientsDashboard,
+  canAccessDriverSelfService,
 } from './permissions';
 export {
   REMOVED_MODULE_KEYS,
@@ -27,6 +29,8 @@ export interface JwtPayload {
   workspaceId: string | null;
   siteId: string | null;
   sessionId: string;
+  /** Presente quando MASTER está a personificar este utilizador */
+  impersonatorId?: string;
 }
 
 export interface ApiResponse<T = unknown> {
@@ -67,6 +71,7 @@ export {
 } from './search';
 export { getWebConfig } from './config.client';
 export { getMoloniRedirectUri, isMoloniLocalRedirect } from './moloni-redirect';
+export { isMoloniDemoCompany } from './moloni-demo';
 export {
   parseMoloniInvoiceErrorMessage,
   type MoloniDocumentSetHealth,

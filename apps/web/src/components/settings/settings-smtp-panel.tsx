@@ -57,7 +57,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
 };
 
 const TEMPLATE_HINTS: Record<string, string> = {
-  invoice: 'Usado no envio de faturas por email. O PDF é descarregado via link seguro (90 dias), sem anexo.',
+  invoice: 'Emails de faturas Moloni usam agora Configurações → Moloni (marca + SMTP de facturação). Este template do sistema já não é usado nesse fluxo; mantém-se só como legado / fallback documental.',
   password_reset: 'Enviado quando o utilizador pede redefinição de password.',
   carwash_pickup: 'Email de confirmação de levantamento de veículo (CarModule).',
   carwash_completion: 'Email enviado ao cliente quando a folha de obra é concluída (CarModule).',
@@ -469,16 +469,6 @@ export function SettingsSmtpPanel() {
           </button>
         </form>
       </section>
-      )}
-
-      {!isMaster && (
-        <section className="card">
-          <h2 className="text-lg font-semibold">Templates de email</h2>
-          <p className="mt-2 text-sm text-slate-500">
-            A personalização de templates de email é gerida pelo administrador da plataforma (MASTER).
-            Os emails do tenant usam os templates por defeito do sistema.
-          </p>
-        </section>
       )}
     </div>
   );

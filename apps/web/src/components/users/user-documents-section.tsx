@@ -12,13 +12,25 @@ import {
   type UserDocumentType,
   type UserDocumentVisibility,
 } from '@tvde/shared';
-import { Download, Trash2, Upload } from 'lucide-react';
+import { Download, FileText, Trash2, Upload } from 'lucide-react';
 import { getApiUrl, getStoredToken } from '@/lib/api';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString('pt-PT', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    });
+  } catch {
+    return iso;
+  }
 }
 
 async function downloadDocument(
@@ -53,6 +65,9 @@ interface UserDocumentsSectionProps {
   canUpload?: boolean;
   canDelete?: boolean;
   disabled?: boolean;
+  /** list = detalhes utilizador; cards = página Documentos do motorista */
+  layout?: 'list' | 'cards';
+  showHeader?: boolean;
 }
 
 export function UserDocumentsSection({
@@ -63,6 +78,8 @@ export function UserDocumentsSection({
   canUpload = true,
   canDelete = true,
   disabled = false,
+  layout = 'list',
+  showHeader = true,
 }: UserDocumentsSectionProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [documentType, setDocumentType] = useState<UserDocumentType>('comprovativo_morada');
@@ -153,12 +170,24 @@ export function UserDocumentsSection({
     onDocumentsChange(documents.filter((d) => d.id !== doc.id));
   }
 
+  function handleDownload(doc: UserDocumentItem) {
+    downloadDocument(userId, doc, selfMode).catch(() =>
+      setError('Não foi possível descarregar o ficheiro')
+    );
+  }
+
   return (
     <div className="space-y-4">
-      <div>
-        <h4 className="text-sm font-semibold text-slate-800">Documentos</h4>
-        <p className="mt-1 text-xs text-slate-500">PDF, JPG ou PNG — máximo 5 MB por ficheiro.</p>
-      </div>
+      {showHeader ? (
+        <div>
+          <h4 className="text-sm font-semibold text-slate-800">Documentos</h4>
+          <p className="mt-1 text-xs text-slate-500">
+            {canUpload
+              ? 'PDF, JPG ou PNG — máximo 5 MB por ficheiro.'
+              : 'Os documentos associados à sua conta. Contacte o gestor se precisar de actualizações.'}
+          </p>
+        </div>
+      ) : null}
 
       {canUpload ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
@@ -220,6 +249,71 @@ export function UserDocumentsSection({
 
       {documents.length === 0 ? (
         <p className="text-sm text-slate-500">Nenhum documento carregado.</p>
+      ) : layout === 'cards' ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          {documents.map((doc) => (
+            <article
+              key={doc.id}
+              className="flex flex-col rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+            >
+              <div className="mb-3 flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-600">
+                  <FileText size={20} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-slate-900">
+                    {USER_DOCUMENT_TYPE_LABELS[doc.documentType]}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-slate-500" title={doc.fileName}>
+                    {doc.fileName}
+                  </p>
+                </div>
+              </div>
+
+              <dl className="mb-4 space-y-1 text-xs text-slate-500">
+                <div className="flex justify-between gap-2">
+                  <dt>Tamanho</dt>
+                  <dd className="font-medium text-slate-700">{formatBytes(doc.sizeBytes)}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>Visibilidade</dt>
+                  <dd className="font-medium text-slate-700">
+                    {USER_DOCUMENT_VISIBILITY_LABELS[doc.visibility]}
+                  </dd>
+                </div>
+                {doc.createdAt ? (
+                  <div className="flex justify-between gap-2">
+                    <dt>Carregado</dt>
+                    <dd className="font-medium text-slate-700">{formatDate(doc.createdAt)}</dd>
+                  </div>
+                ) : null}
+              </dl>
+
+              <div className="mt-auto flex items-center gap-2 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  className="btn-secondary inline-flex flex-1 items-center justify-center gap-2 text-sm"
+                  disabled={busy}
+                  onClick={() => handleDownload(doc)}
+                >
+                  <Download size={16} />
+                  Descarregar
+                </button>
+                {canDelete ? (
+                  <button
+                    type="button"
+                    title="Eliminar"
+                    className="rounded-md p-2 text-red-500 hover:bg-red-50"
+                    disabled={busy}
+                    onClick={() => handleDelete(doc)}
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
       ) : (
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
           {documents.map((doc) => (
@@ -237,11 +331,7 @@ export function UserDocumentsSection({
                   title="Descarregar"
                   className="rounded-md p-1.5 text-sky-600 hover:bg-sky-50"
                   disabled={busy}
-                  onClick={() =>
-                    downloadDocument(userId, doc, selfMode).catch(() =>
-                      setError('Não foi possível descarregar o ficheiro')
-                    )
-                  }
+                  onClick={() => handleDownload(doc)}
                 >
                   <Download size={18} />
                 </button>

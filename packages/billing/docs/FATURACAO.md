@@ -72,8 +72,8 @@ Documentação de referência do módulo **Facturação** do CMS multi-tenant, i
 | `/dashboard/billing/faturas-simplificadas` | Criar / editar Faturas simplificadas |
 | `/dashboard/billing/faturas-recibo` | Criar / editar Faturas-recibo |
 | `/dashboard/billing/notas-debito` | Criar / editar Notas de débito |
-| `/dashboard/settings/moloni` | Ligação OAuth + sync manual |
-| `/dashboard/settings/smtp` | SMTP + templates (incl. faturas) |
+| `/dashboard/settings/moloni` | Ligação OAuth + sync + **email de faturas** (marca/SMTP) |
+| `/dashboard/settings/smtp` | SMTP do sistema (não facturação Moloni) |
 | `/dashboard/clients` | Hub CRM + links para facturação |
 
 ---
@@ -104,15 +104,20 @@ CRM (clients)          billing_entities          Moloni
 
 1. Conta Moloni com API activa (Developer ID + Secret)
 2. `ENCRYPTION_KEY` no `.env` (32+ chars — encripta tokens Moloni)
-3. SMTP configurado para envio de emails (tenant, plataforma ou `.env`)
-4. Em desenvolvimento: **túnel HTTPS** (ngrok) — Moloni rejeita `localhost`
+3. Email de faturas configurado em **Configurações → Moloni** (marca + SMTP de facturação; fallback SMTP sistema)
+4. Em desenvolvimento: **túnel HTTPS** (ngrok / cloudflared) — Moloni rejeita `localhost`
+5. Em produção tvde.one: callback em `https://api.tvde.one/...` (não ngrok, não fleet)
 
 ### 4.2 Variáveis de ambiente (Moloni)
 
 ```env
 # Prioridade: URI explícito > API_PUBLIC_URL + /billing/moloni/callback
-NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU_TUNEL.ngrok-free.app/api/v1/billing/moloni/callback"
-NEXT_PUBLIC_API_PUBLIC_URL="https://SEU_TUNEL.ngrok-free.app/api/v1"
+# Produção:
+NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.tvde.one/api/v1/billing/moloni/callback"
+NEXT_PUBLIC_API_PUBLIC_URL="https://api.tvde.one/api/v1"
+# Dev (túnel):
+# NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://SEU_TUNEL.ngrok-free.app/api/v1/billing/moloni/callback"
+# NEXT_PUBLIC_API_PUBLIC_URL="https://SEU_TUNEL.ngrok-free.app/api/v1"
 
 # Sync cron (opcional)
 BILLING_SYNC_SECRET="secret-forte"
@@ -229,9 +234,15 @@ Páginas por tipo: Faturas, FS, FR, Notas de débito — cada uma com `documentT
 - Painel sync manual: entidades, catálogo, documentos, tudo
 - Aviso se redirect URI for localhost
 
-### 5.5 Configurações SMTP (`/dashboard/settings/smtp`)
+### 5.5 Email de faturas (`/dashboard/settings/moloni`)
 
-- SMTP tenant ou plataforma
+- Branding (cabeçalho, rodapé, suporte) e SMTP **por workspace**, isolados do SMTP TVDE
+- Ver [EMAIL.md](./EMAIL.md)
+- Link público: até `INVOICE_DOWNLOAD_MAX_COUNT` downloads (default 3) em 90 dias
+
+### 5.6 Configurações SMTP do sistema (`/dashboard/settings/smtp`)
+
+- SMTP tenant ou plataforma (notificações TVDE — **não** emails Moloni)
 - Template **Faturas** (HTML + assunto) — ver [EMAIL.md](./EMAIL.md)
 - Template **Redefinir password**
 
@@ -319,6 +330,23 @@ Ver [EMAIL.md](./EMAIL.md).
 **Match NIF:** importação detecta clientes CRM → `pending_confirm`
 
 **Documentos:** só importa se existir `billing_entity` com `external_id` = `customer_id`. Grava `issued_at` a partir de `doc.date` Moloni. Re-sync actualiza totais, número e `issued_at`.
+
+### 6.4.1 Limpar dados do modo demonstração
+
+Em **Configurações → Moloni → Zona de perigo**, quando a empresa ligada é de **demonstração** (nome com «Demonstração» / match `/demonstra/i`):
+
+1. Confirmar o diálogo **Limpar dados do modo demonstração**
+2. O CMS apaga **localmente**:
+   - documentos / faturas (rascunhos + emitidos), linhas e tokens de download PDF
+   - cache do catálogo (`billing_catalog_items`: séries, impostos)
+   - **clientes e fornecedores de facturação** (`billing_entities` — hard-delete)
+   - conflitos de sync; limpa `default_product_category_id`
+3. **Mantém** OAuth, `company_id`, série documental (`document_set_id`) e email/SMTP de faturas
+4. **Não** afecta o módulo CRM «Clientes» (tabela `clients`)
+5. Dados na cloud Moloni (demo) **não** são apagados — limpar na UI Moloni se precisar (categorias/artigos vivem na cloud)
+6. Usar **Sincronizar agora** para reimportar catálogo/entidades e voltar a testar
+
+Endpoint: `POST /billing/moloni/purge-demo-data` (**superadmin** / MASTER). Bloqueado se a empresa não for demo.
 
 ### 6.5 Duplicar documento (como no Moloni)
 

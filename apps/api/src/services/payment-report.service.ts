@@ -63,6 +63,8 @@ export type ListPaymentReportsFilters = {
   paymentMethod?: string;
   page?: number;
   perPage?: number;
+  /** Motorista: só os próprios reports */
+  userId?: string;
 };
 
 function mapReportRow(r: {
@@ -137,6 +139,10 @@ export async function listPaymentReports(
     : 25;
 
   const where: Prisma.PaymentReportWhereInput = { tenantId };
+
+  if (filters.userId) {
+    where.userId = filters.userId;
+  }
 
   if (filters.periodStart && filters.periodEnd) {
     // Sobreposição: periodStart <= fim AND periodEnd >= início

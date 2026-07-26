@@ -217,33 +217,47 @@ export function SettingsCalendarScheduledInvoice({
         </span>
       </label>
 
-      {settings.billing.moloniConnected && settings.moloniCategories.length > 0 && (
+      {settings.billing.moloniConnected && (
         <div className="space-y-2 rounded-lg border border-slate-200 p-3">
           <label className="block text-sm font-medium text-slate-700">
-            Categoria Moloni para artigos criados automaticamente
+            Categoria Moloni por defeito (linhas manuais / autofatura)
           </label>
           <p className="text-xs text-slate-500">
-            Quando uma linha da fatura agendada não tem produto Moloni, o sistema cria o artigo nesta
-            categoria. Se não escolher, usa «CMS Autofatura» (criada automaticamente).
+            Usada quando uma linha não tem artigo Moloni. Também pode definir em Configurações → Moloni.
           </p>
-          <select
-            className="input w-full max-w-md"
-            value={defaultCategoryId}
-            disabled={!canEdit || loading}
-            onChange={(e) => {
-              const val = e.target.value;
-              const next = val === '' ? '' : Number(val);
-              setDefaultCategoryId(next);
-              void saveCategory(next);
-            }}
-          >
-            <option value="">CMS Autofatura (predefinição)</option>
-            {settings.moloniCategories.map((cat) => (
-              <option key={cat.id} value={cat.id}>
-                {cat.name}
-              </option>
-            ))}
-          </select>
+          {settings.moloniCategories.length === 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <p className="font-medium">Sem categorias Moloni</p>
+              <p className="mt-1 text-xs">
+                Sincronize o catálogo ou crie categorias no Moloni, depois actualize esta página.
+              </p>
+              <Link
+                href={WEB_ROUTES.dashboard.settings.moloni}
+                className="mt-2 inline-flex text-xs font-medium text-[var(--color-primary)] underline"
+              >
+                Ir a Configurações → Moloni
+              </Link>
+            </div>
+          ) : (
+            <select
+              className="input w-full max-w-md"
+              value={defaultCategoryId}
+              disabled={!canEdit || loading}
+              onChange={(e) => {
+                const val = e.target.value;
+                const next = val === '' ? '' : Number(val);
+                setDefaultCategoryId(next);
+                void saveCategory(next);
+              }}
+            >
+              <option value="">Seleccione uma categoria…</option>
+              {settings.moloniCategories.map((cat) => (
+                <option key={cat.id} value={cat.id}>
+                  {cat.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
       )}
     </section>

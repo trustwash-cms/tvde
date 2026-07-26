@@ -30,7 +30,12 @@ export interface TenantVehicleMatchRecord extends UserVehiclePeriodRecord {
 export interface DriverFleetScope {
   plates: string[];
   cardNumbers: string[];
+  uuidUber: string[];
+  uuidBolt: string[];
 }
+
+/** Alias do plano motorista — mesmo helper. */
+export type DriverScope = DriverFleetScope;
 
 export interface VehicleMatchResult {
   userId: string | null;
@@ -75,7 +80,7 @@ export async function getDriverFleetScope(
 
   const vehicles = await db.userVehicle.findMany({
     where: { tenantId, userId: actorId },
-    select: { matricula: true, numCartaoPrio: true },
+    select: { matricula: true, numCartaoPrio: true, uuidUber: true, uuidBolt: true },
   });
 
   return {
@@ -83,8 +88,16 @@ export async function getDriverFleetScope(
     cardNumbers: vehicles
       .map((vehicle) => vehicle.numCartaoPrio?.trim())
       .filter((value): value is string => Boolean(value)),
+    uuidUber: vehicles
+      .map((vehicle) => vehicle.uuidUber?.trim())
+      .filter((value): value is string => Boolean(value)),
+    uuidBolt: vehicles
+      .map((vehicle) => vehicle.uuidBolt?.trim())
+      .filter((value): value is string => Boolean(value)),
   };
 }
+
+export const getDriverScope = getDriverFleetScope;
 
 export function matchViaVerdeToVehicle(
   vehicles: TenantVehicleMatchRecord[],

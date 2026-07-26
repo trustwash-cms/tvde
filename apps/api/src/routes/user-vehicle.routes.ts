@@ -43,7 +43,7 @@ export async function userVehicleRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
 
   fastify.get('/users/vehicle-platform-drivers', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { actorRole, actorTenantId } = actorContext(request);
     try {
@@ -60,7 +60,7 @@ export async function userVehicleRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/users/:userId/vehicles', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { userId } = request.params as { userId: string };
     const { actorId, actorRole, actorTenantId } = actorContext(request);
@@ -80,7 +80,7 @@ export async function userVehicleRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/users/:userId/vehicles', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { userId } = request.params as { userId: string };
     const body = vehicleBodySchema.parse(request.body);
@@ -103,7 +103,7 @@ export async function userVehicleRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/users/:userId/vehicles/:vehicleId', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { userId, vehicleId } = request.params as { userId: string; vehicleId: string };
     const body = vehicleBodySchema.parse(request.body);
@@ -127,7 +127,7 @@ export async function userVehicleRoutes(fastify: FastifyInstance) {
   });
 
   fastify.delete('/users/:userId/vehicles/:vehicleId', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { userId, vehicleId } = request.params as { userId: string; vehicleId: string };
     const { actorId, actorRole, actorTenantId } = actorContext(request);

@@ -310,7 +310,7 @@ export async function userRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
 
   fastify.get('/users', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const query = request.query as { q?: string; tenantId?: string };
     const q = parseSearchQuery(query.q);
@@ -530,7 +530,7 @@ export async function userRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/users/:id', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = z
@@ -728,7 +728,7 @@ export async function userRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/users/:id/delete-confirmation', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
 
@@ -768,7 +768,7 @@ export async function userRoutes(fastify: FastifyInstance) {
   });
 
   fastify.delete('/users/:id', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = z.object({
@@ -842,7 +842,7 @@ export async function auditRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
 
   fastify.get('/audit-logs', {
-    preHandler: [fastify.requireRole('admin')],
+    preHandler: [fastify.requireRole('superadmin')],
   }, async (request, reply) => {
     const where = request.user.role === 'master'
       ? {}

@@ -5,6 +5,7 @@ import {
   WEB_ROUTES,
   canAccessClientsDashboard,
   canAccessDashboardArea,
+  isDriverRole,
   type Role,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
@@ -16,10 +17,13 @@ import {
   type DashboardStatCard,
 } from '@/components/dashboard-module-cards';
 import { DashboardUpcomingPanel } from '@/components/dashboard-upcoming-panel';
+import { DriverDashboard } from '@/components/driver-dashboard';
 
 interface MeUser {
   role: Role;
   email: string;
+  fullName?: string | null;
+  username?: string | null;
   capabilities?: ModuleCapabilities;
   tenant?: { siteId: string; name: string } | null;
 }
@@ -41,7 +45,9 @@ export default function DashboardPage() {
   const calendarActive =
     me != null && hasActiveModule(me.role, me.capabilities, 'calendar');
   const adminMgmtActive =
-    me != null && hasActiveModule(me.role, me.capabilities, 'admin_mgmt');
+    me != null &&
+    canAccessDashboardArea(me.role, 'admin_mgmt') &&
+    hasActiveModule(me.role, me.capabilities, 'admin_mgmt');
 
   useEffect(() => {
     const token = getStoredToken();
@@ -54,7 +60,7 @@ export default function DashboardPage() {
 
   useEffect(() => {
     const token = getStoredToken();
-    if (!token || me == null) return;
+    if (!token || me == null || isDriverRole(me.role)) return;
 
     const fetches: Promise<{ data?: unknown[] }>[] = [];
     if (showWorkspaces) fetches.push(apiFetch<unknown[]>(API_PATHS.workspaces.list, {}, token));
@@ -116,6 +122,10 @@ export default function DashboardPage() {
   }, [showClients, showUsers, showWorkspaces, stats]);
 
   const showUpcoming = calendarActive || adminMgmtActive;
+
+  if (me && isDriverRole(me.role)) {
+    return <DriverDashboard role={me.role} capabilities={me.capabilities} />;
+  }
 
   return (
     <div className="space-y-5">

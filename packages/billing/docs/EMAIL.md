@@ -1,24 +1,34 @@
-# Email de faturas — SMTP e templates
+# Email de faturas — branding e SMTP Moloni
 
-O envio de faturas por email usa o SMTP configurado no CMS e um template HTML personalizável por tenant ou plataforma.
+O envio de faturas por email (emissão Moloni e **autofaturação do calendário**) usa branding + SMTP **do workspace de facturação**, isolados do SMTP e templates TVDE do sistema.
 
 ---
 
 ## 1. Onde configurar
 
-**Configurações → SMTP** (`/dashboard/settings/smtp`)
+**Configurações → Moloni** (`/dashboard/settings/moloni`) → secção **Email de faturas (Moloni)**
 
-| Secção | Conteúdo |
-|--------|----------|
-| SMTP | Host, porta, utilizador, password, TLS |
-| Email de teste | Valida configuração |
-| Templates de email | Separadores por tipo — ver [doc 17](../docs/17-email-transacional-templates.md) |
+| Campo | Uso |
+|--------|-----|
+| Nome no cabeçalho | Marca no email (ex.: `projetox`) |
+| Texto do rodapé / empresa | Copyright no rodapé (ex.: `Fatura123 Unip. LDA`) |
+| Email de suporte | Link de contacto no corpo do email |
+| SMTP (host, porta, user, pass, from, TLS) | Remetente da facturação (por workspace) |
 
-### Hierarquia SMTP
+Persistência: colunas `email_*` em `billing_connections` (1:1 com o workspace).
 
-1. SMTP do **tenant** (se configurado e activo)
-2. SMTP da **plataforma** (master)
-3. Fallback **`.env`** (`SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, …)
+### Hierarquia SMTP (só emails de fatura)
+
+1. **SMTP de facturação** do workspace (se host + user + password)
+2. Fallback: SMTP do **tenant** → **plataforma** → **`.env`**
+
+### Hierarquia da marca
+
+1. `email_brand_name` / `email_footer_text` no Moloni
+2. Nome da empresa Moloni ligada
+3. `NEXT_PUBLIC_APP_NAME` (sistema)
+
+Os emails de sistema (2FA, reset password, CarModule, etc.) **não** usam estas definições — continuam em **Configurações → SMTP**.
 
 ---
 
@@ -26,10 +36,9 @@ O envio de faturas por email usa o SMTP configurado no CMS e um template HTML pe
 
 | Propriedade | Valor |
 |-------------|-------|
-| Chave interna | `invoice` |
-| Ficheiro por defeito | `apps/api/src/services/invoice-email-template.ts` |
-| Tabela override | `email_templates` (campo `key = 'invoice'`) |
-| API edição | `PUT /email-templates/invoice` |
+| Fonte | `apps/api/src/services/invoice-email-template.ts` |
+| Isolamento | **Não** lê `email_templates` do tenant/plataforma para envio Moloni |
+| Serviço | `sendBillingInvoiceTemplateEmail()` em `billing-email.service.ts` |
 
 ### Assunto por defeito
 
@@ -37,145 +46,85 @@ O envio de faturas por email usa o SMTP configurado no CMS e um template HTML pe
 Fatura {{invoiceNumber}} — {{appName}}
 ```
 
-### Variáveis disponíveis
+(`appName` no rodapé = texto de rodapé / empresa; cabeçalho usa o nome da marca.)
 
-| Variável | Preenchimento automático |
-|----------|--------------------------|
-| `{{appName}}` | `NEXT_PUBLIC_APP_NAME` ou `SMTP_FROM_NAME` |
-| `{{appNamePrefix}}` | Parte antes do `.` em appName (ex.: `Empresa`) |
-| `{{appNameSuffix}}` | Parte depois do `.` (ex.: `io`) |
-| `{{recipientName}}` | Nome da entidade fiscal ou cliente CRM |
-| `{{periodDescription}}` | Mês/ano da emissão (ex.: `maio de 2025`) |
-| `{{invoiceNumber}}` | Número da fatura |
-| `{{issueDate}}` | Data emissão (formato PT longo) |
-| `{{dueDate}}` | Data vencimento ou `—` |
-| `{{total}}` | Total formatado (ex.: `9,90 €`) |
-| `{{attachmentNote}}` | Texto sobre PDF em anexo |
-| `{{attachmentCta}}` | Texto do botão visual (ex.: `Descarregar fatura`) |
-| `{{supportEmail}}` | Remetente SMTP |
+### Variáveis
+
+| Variável | Preenchimento |
+|----------|----------------|
+| `{{appName}}` | Rodapé / empresa (ou marca / fallback) |
+| `{{appNamePrefix}}` / `{{appNameSuffix}}` | Cabeçalho a partir da marca |
+| `{{recipientName}}` | Entidade fiscal ou CRM |
+| `{{periodDescription}}` | Mês/ano da emissão |
+| `{{invoiceNumber}}`, `{{issueDate}}`, `{{dueDate}}`, `{{total}}` | Dados da fatura |
+| `{{downloadUrl}}` | Link público (página + download PDF) |
+| `{{downloadExpiresIn}}` | Validade do link (default 90 dias) |
+| `{{attachmentCta}}` | Texto do botão |
+| `{{supportEmail}}` | Suporte facturação ou SMTP |
 | `{{currentYear}}` | Ano actual |
-| `{{footerAddress}}` | Morada rodapé (vazio por defeito; editável no template) |
-
-### Design do template
-
-O template por defeito inclui:
-
-- Cabeçalho escuro (`#1A1A2E`) com logo estilizado
-- Caixa de resumo (número, datas, total em roxo `#534AB7`)
-- Botão «Descarregar fatura» (visual — **PDF vai em anexo**, não é link público)
-- Rodapé com copyright e email de suporte
-
-**Nota:** valores CSS `var(--color-…)` do design original foram convertidos para cores hex fixas — clientes de email (Gmail, Outlook) não suportam variáveis CSS. Pode personalizar cores directamente no HTML.
 
 ---
 
-## 3. Fluxo de envio
+## 3. Link público de download
+
+Email → `GET /invoices/public/download-page?token=…` (HTML com botão) → `GET /invoices/public/download?token=…` (PDF).
+
+| Regra | Valor |
+|-------|--------|
+| Validade | `INVOICE_DOWNLOAD_TOKEN_EXPIRES` (default `90d`) |
+| Máx. downloads PDF | `INVOICE_DOWNLOAD_MAX_COUNT` (default `3`) |
+| Contador | `invoice_download_tokens.download_count` — só incrementa no PDF, não na página HTML |
+| Após limite | Página PT «Limite de downloads atingido» (sem stream do PDF) |
+
+Refresh da página HTML **não** descarrega o PDF; só o clique no botão (com downloads restantes).
+
+---
+
+## 4. Fluxo de envio
 
 ```
 POST /invoices/:id/send-email
-  │
+  │  (também calendar autofatura → sendInvoiceEmail)
   ├─ Valida: emitida, external_id, email destinatário
-  ├─ downloadInvoicePdf() → bytes PDF Moloni
-  ├─ getEmailTemplate(tenantId, 'invoice')
-  ├─ renderTemplate(subject + htmlBody, variables)
-  ├─ sendEmail({ html, attachments: [pdf] })
+  ├─ createInvoiceDownloadLink()
+  ├─ resolve branding + SMTP de facturação (workspace)
+  ├─ template invoice-email-template.ts (não email_templates do sistema)
+  ├─ sendEmail(smtpOverride se SMTP Moloni)
   └─ UPDATE invoices SET email_sent_at = NOW()
 ```
 
-**Destinatário:**
-
-```
-billing_entity.email  ??  client.email
-```
-
----
-
-## 4. Interface — botão na lista de faturas
-
-| Estado | Cor | Significado |
-|--------|-----|-------------|
-| Nunca enviado | Verde | Primeiro envio |
-| Já enviado | Vermelho | Reenvio (pede confirmação) |
-| Sem email | (oculto) | Entidade e CRM sem email |
-
-Localização: coluna acções em **Documentos existentes** (`billing-document-panel.tsx`).
+**Destinatário:** `billing_entity.email` ?? `client.email` (calendário pode forçar `toEmail`).
 
 ---
 
 ## 5. API
 
-### Enviar email
-
-```
-POST /api/v1/invoices/:id/send-email
-Authorization: Bearer {jwt}
-```
-
-**Resposta sucesso:**
-
-```json
-{
-  "success": true,
-  "data": { "id": "uuid", "emailSentAt": "2026-06-09T12:00:00.000Z" },
-  "message": "Fatura enviada por email"
-}
-```
-
-**Erros comuns:**
-
-| HTTP | Mensagem | Causa |
-|------|----------|-------|
-| 400 | Cliente sem email | Entidade/CRM sem email |
-| 400 | Rascunhos não podem ser enviados | `status=draft` |
-| 503 | SMTP não configurado | Sem SMTP tenant/plataforma/env |
-
-### Editar template
-
-```
-GET  /api/v1/email-templates
-PUT  /api/v1/email-templates/invoice
-```
-
-Body PUT:
-
-```json
-{
-  "subject": "Fatura {{invoiceNumber}} — {{appName}}",
-  "htmlBody": "<!DOCTYPE html>..."
-}
-```
+| Método | Rota | Descrição |
+|--------|------|-----------|
+| GET | `/billing/moloni/email-config?workspaceId=` | Ler branding/SMTP (sem password) |
+| PUT | `/billing/moloni/email-config` | Guardar branding/SMTP |
+| POST | `/billing/moloni/email-test` | Teste SMTP de facturação `{ workspaceId, to }` |
+| POST | `/invoices/:id/send-email` | Enviar fatura |
 
 ---
 
-## 6. Audit
-
-| Acção | Quando |
-|-------|--------|
-| `invoice.send_email` | Após envio bem-sucedido |
-
----
-
-## Outros templates da plataforma
-
-Códigos 2FA, confirmação eliminar tenant, reset password, calendário, CarModule: [docs/17-email-transacional-templates.md](../../docs/17-email-transacional-templates.md)
-
----
-
-## 7. Código relevante
+## 6. Código relevante
 
 | Ficheiro | Função |
 |----------|--------|
+| `apps/api/src/services/billing-email.service.ts` | Branding, SMTP workspace, envio |
 | `apps/api/src/services/billing.service.ts` | `sendInvoiceEmail()` |
-| `apps/api/src/services/email.service.ts` | `sendTemplateEmail()`, `EMAIL_TEMPLATE_KEYS.invoice` |
-| `apps/api/src/services/invoice-email-template.ts` | HTML por defeito |
-| `apps/web/src/components/settings/settings-smtp-panel.tsx` | Editor UI |
+| `apps/api/src/services/invoice-download-token.service.ts` | Token + limite de downloads |
+| `apps/api/src/services/invoice-download-page.ts` | HTML público |
+| `apps/web/src/components/moloni-billing-email-panel.tsx` | UI Moloni |
 
 ---
 
-## 8. Checklist produção
+## 7. Checklist
 
-- [ ] SMTP tenant ou plataforma testado (botão «Enviar teste»)
-- [ ] Template **Faturas** revisto (logo, cores, texto legal)
-- [ ] `NEXT_PUBLIC_APP_NAME` correcto
-- [ ] Entidades fiscais com **email** preenchido
-- [ ] Moloni ligado (PDF obtido na emissão)
+- [ ] Marca + rodapé preenchidos em Configurações → Moloni
+- [ ] SMTP de facturação testado («Enviar email de teste»)
+- [ ] Reenviar fatura e confirmar cabeçalho/rodapé (não «TVDE.»)
+- [ ] Abrir link «Descarregar fatura»: botão explícito; refresh não re-descarrega
+- [ ] Após 3 downloads: mensagem de limite
+- [ ] Autofatura calendário usa o mesmo branding/SMTP

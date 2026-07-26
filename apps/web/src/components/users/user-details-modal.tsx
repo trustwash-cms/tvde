@@ -246,6 +246,8 @@ export function UserDetailsModal({
             userId={user.id}
             documents={documents}
             onDocumentsChange={setDocuments}
+            canUpload
+            canDelete
           />
 
           {error ? <p className="text-sm text-red-600">{error}</p> : null}

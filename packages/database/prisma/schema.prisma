@@ -220,6 +220,9 @@ model User {
   email        String      @unique
   username     String?     @unique
   fullName     String?     @map("full_name")
+  avatarStorageKey String? @map("avatar_storage_key")
+  avatarMimeType   String? @map("avatar_mime_type")
+  avatarUpdatedAt  DateTime? @map("avatar_updated_at")
   passwordHash String      @map("password_hash")
   role         UserRole    @default(staff)
   status       UserStatus  @default(pending)
@@ -269,6 +272,7 @@ model User {
   uberPaymentsImported             UberPayment[] @relation("UberPaymentImportedBy")
   paymentReports                   PaymentReport[] @relation("PaymentReportUser")
   paymentReportsCreated            PaymentReport[] @relation("PaymentReportCreatedBy")
+  impersonatedSessions             Session[] @relation("SessionImpersonator")
 
   @@index([tenantId])
   @@index([workspaceId])
@@ -446,21 +450,27 @@ model ElectricityCharge {
 // ─── Auth & Sessions ────────────────────────────────────────────────────────
 
 model Session {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  tenantId   String?  @map("tenant_id") @db.Uuid
-  tokenHash  String   @map("token_hash")
-  ipAddress  String?  @map("ip_address")
-  deviceInfo String?  @map("device_info")
-  userAgent  String?  @map("user_agent")
-  isActive   Boolean  @default(true) @map("is_active")
-  expiresAt  DateTime @map("expires_at")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id                      String   @id @default(uuid()) @db.Uuid
+  userId                  String   @map("user_id") @db.Uuid
+  tenantId                String?  @map("tenant_id") @db.Uuid
+  tokenHash               String   @map("token_hash")
+  ipAddress               String?  @map("ip_address")
+  deviceInfo              String?  @map("device_info")
+  userAgent               String?  @map("user_agent")
+  isActive                Boolean  @default(true) @map("is_active")
+  expiresAt               DateTime @map("expires_at")
+  createdAt               DateTime @default(now()) @map("created_at")
+  /** MASTER que iniciou a personificação (null = sessão normal) */
+  impersonatorId          String?  @map("impersonator_id") @db.Uuid
+  /** Sessão do MASTER a restaurar ao sair */
+  originalMasterSessionId String?  @map("original_master_session_id") @db.Uuid
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user         User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  impersonator User? @relation("SessionImpersonator", fields: [impersonatorId], references: [id], onDelete: SetNull)
 
   @@index([userId])
   @@index([tokenHash])
+  @@index([impersonatorId])
   @@map("sessions")
 }
 
@@ -716,11 +726,13 @@ model Invoice {
 }
 
 model InvoiceDownloadToken {
-  id        String   @id @default(uuid()) @db.Uuid
-  invoiceId String   @map("invoice_id") @db.Uuid
-  tokenHash String   @unique @map("token_hash")
-  expiresAt DateTime @map("expires_at")
-  createdAt DateTime @default(now()) @map("created_at")
+  id                 String    @id @default(uuid()) @db.Uuid
+  invoiceId          String    @map("invoice_id") @db.Uuid
+  tokenHash          String    @unique @map("token_hash")
+  expiresAt          DateTime  @map("expires_at")
+  downloadCount      Int       @default(0) @map("download_count")
+  firstDownloadedAt  DateTime? @map("first_downloaded_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
 
   invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
@@ -835,12 +847,25 @@ model BillingConnection {
   encryptedAccessToken  String?   @map("encrypted_access_token")
   encryptedRefreshToken String?   @map("encrypted_refresh_token")
   tokenExpiresAt        DateTime? @map("token_expires_at")
-  companyId             Int?      @map("company_id")
-  documentSetId         Int?      @map("document_set_id")
-  redirectUri           String?   @map("redirect_uri")
-  connectedAt           DateTime? @map("connected_at")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  companyId                  Int?      @map("company_id")
+  documentSetId              Int?      @map("document_set_id")
+  /** Categoria Moloni por defeito para artigos criados a partir de linhas manuais */
+  defaultProductCategoryId   Int?      @map("default_product_category_id")
+  redirectUri                String?   @map("redirect_uri")
+  connectedAt                DateTime? @map("connected_at")
+  /** Branding + SMTP do email de faturas (isolado do SMTP/templates TVDE do sistema) */
+  emailBrandName                 String?  @map("email_brand_name") @db.VarChar(255)
+  emailFooterText                String?  @map("email_footer_text") @db.Text
+  emailSupportEmail              String?  @map("email_support_email") @db.VarChar(255)
+  emailSmtpHost                  String?  @map("email_smtp_host")
+  emailSmtpPort                  Int?     @map("email_smtp_port")
+  emailSmtpUsername              String?  @map("email_smtp_username")
+  emailSmtpEncryptedPassword     String?  @map("email_smtp_encrypted_password")
+  emailSmtpFromEmail             String?  @map("email_smtp_from_email") @db.VarChar(255)
+  emailSmtpFromName              String?  @map("email_smtp_from_name") @db.VarChar(255)
+  emailSmtpTls                   Boolean  @default(true) @map("email_smtp_tls")
+  createdAt                  DateTime  @default(now()) @map("created_at")
+  updatedAt                  DateTime  @updatedAt @map("updated_at")
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 

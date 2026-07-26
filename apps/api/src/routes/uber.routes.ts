@@ -40,7 +40,13 @@ export async function uberRoutes(fastify: FastifyInstance) {
       const query = z
         .object({ q: z.string().optional(), page: z.coerce.number().optional() })
         .parse(request.query);
-      const data = await listUberPayments(fastify.db, tenantId, query);
+      const data = await listUberPayments(
+        fastify.db,
+        tenantId,
+        request.user.sub,
+        request.user.role as Role,
+        query
+      );
       return reply.send({ success: true, data });
     } catch (err) {
       return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });

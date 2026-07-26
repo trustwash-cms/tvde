@@ -120,6 +120,12 @@ export const WEB_ROUTES = {
     pagamentos: {
       root: '/dashboard/pagamentos',
     },
+    meusPagamentos: {
+      root: '/dashboard/meus-pagamentos',
+    },
+    documentos: {
+      root: '/dashboard/documentos',
+    },
     settings: {
       root: '/dashboard/settings',
       geral: '/dashboard/settings/geral',
@@ -164,6 +170,8 @@ export const API_PATHS = {
     me: '/auth/me',
     sessions: '/auth/sessions',
     sessionById: (id: string) => `/auth/sessions/${id}`,
+    impersonate: '/auth/impersonate',
+    impersonateStop: '/auth/impersonate/stop',
     forgotPassword: '/auth/forgot-password',
     resetPassword: '/auth/reset-password',
     changePassword: '/auth/change-password',
@@ -450,6 +458,8 @@ export const API_PATHS = {
     moloniCompanies: '/billing/moloni/companies',
     moloniDiagnostics: '/billing/moloni/diagnostics',
     moloniConfig: '/billing/moloni/config',
+    moloniEmailConfig: '/billing/moloni/email-config',
+    moloniEmailTest: '/billing/moloni/email-test',
     moloniApplyDocumentSet: '/billing/moloni/document-set/apply-recommended',
     moloniAuthUrl: '/billing/moloni/auth-url',
     moloniCallback: '/billing/moloni/callback',
@@ -467,6 +477,7 @@ export const API_PATHS = {
     syncEntities: '/billing/sync/entities',
     syncAll: '/billing/sync/all',
     moloniResetLinks: '/billing/moloni/reset-links',
+    moloniPurgeDemoData: '/billing/moloni/purge-demo-data',
     syncCatalog: '/billing/sync/catalog',
     syncDocuments: '/billing/sync/documents',
     catalog: '/billing/catalog',
@@ -532,6 +543,9 @@ export const API_PATHS = {
     reportPaid: (id: string) => `/pagamentos/reports/${id}/paid`,
     reportById: (id: string) => `/pagamentos/reports/${id}`,
   },
+  dashboardApi: {
+    driverSummary: '/dashboard/driver-summary',
+  },
   portalConnections: {
     list: '/portal-connections',
     byPortal: (portal: string) => `/portal-connections/${portal}`,
@@ -541,6 +555,8 @@ export const API_PATHS = {
     /** Uber: listar relatórios no Supplier (Playwright) */
     reports: (portal: string) => `/portal-connections/${portal}/reports`,
     clearMessages: (portal: string) => `/portal-connections/${portal}/clear-messages`,
+    /** Remove só passwordEncrypted (mantém username + sessão) */
+    forgetPassword: (portal: string) => `/portal-connections/${portal}/forget-password`,
     disconnect: (portal: string) => `/portal-connections/${portal}`,
     job: (portal: string, jobId: string) => `/portal-connections/${portal}/jobs/${jobId}`,
   },
@@ -550,6 +566,7 @@ export const API_PATHS = {
     deleteConfirmation: (id: string) => `/users/${id}/delete-confirmation`,
     status: (id: string) => `/users/${id}/status`,
     meProfile: '/users/me/profile',
+    meAvatar: '/users/me/avatar',
     meDocumentUpload: '/users/me/documents/upload',
     meDocumentDownload: (docId: string) => `/users/me/documents/${docId}/download`,
     meDocumentById: (docId: string) => `/users/me/documents/${docId}`,

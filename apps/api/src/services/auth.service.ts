@@ -170,11 +170,18 @@ export async function buildJwtPayload(
   userId: string,
   sessionId: string
 ): Promise<JwtPayload | null> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { tenant: true },
-  });
+  const [user, session] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      include: { tenant: true },
+    }),
+    prisma.session.findUnique({
+      where: { id: sessionId },
+      select: { impersonatorId: true, isActive: true },
+    }),
+  ]);
   if (!user || user.status !== 'active') return null;
+  if (!session || !session.isActive) return null;
 
   try {
     assertTenantActiveForLogin(user);
@@ -182,7 +189,7 @@ export async function buildJwtPayload(
     return null;
   }
 
-  return {
+  const payload: JwtPayload = {
     sub: user.id,
     email: user.email,
     role: user.role as JwtPayload['role'],
@@ -190,6 +197,260 @@ export async function buildJwtPayload(
     workspaceId: user.workspaceId,
     siteId: user.tenant?.siteId ?? null,
     sessionId,
+  };
+
+  if (session.impersonatorId) {
+    payload.impersonatorId = session.impersonatorId;
+  }
+
+  return payload;
+}
+
+export class ImpersonationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ImpersonationError';
+  }
+}
+
+export async function startImpersonation(input: {
+  masterId: string;
+  masterRole: string;
+  masterSessionId: string;
+  targetUserId: string;
+  ipAddress: string;
+  userAgent?: string;
+}): Promise<{
+  refreshToken: string;
+  sessionId: string;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    tenantId: string | null;
+    workspaceId: string | null;
+    siteId: string | null;
+    mustChangePassword: boolean;
+  };
+}> {
+  if (input.masterRole !== 'master') {
+    throw new ImpersonationError('Apenas o MASTER pode personificar utilizadores');
+  }
+
+  const masterSession = await prisma.session.findFirst({
+    where: {
+      id: input.masterSessionId,
+      userId: input.masterId,
+      isActive: true,
+      expiresAt: { gt: new Date() },
+    },
+  });
+
+  if (!masterSession) {
+    throw new ImpersonationError('Sessão MASTER inválida');
+  }
+
+  if (masterSession.impersonatorId) {
+    throw new ImpersonationError('Já está em modo de personificação — saia primeiro');
+  }
+
+  if (input.targetUserId === input.masterId) {
+    throw new ImpersonationError('Não pode personificar a sua própria conta');
+  }
+
+  const target = await prisma.user.findUnique({
+    where: { id: input.targetUserId },
+    include: { tenant: true },
+  });
+
+  if (!target || target.status !== 'active') {
+    throw new ImpersonationError('Utilizador alvo inválido ou inactivo');
+  }
+
+  if (target.role === 'master') {
+    throw new ImpersonationError('Não é permitido personificar outro MASTER');
+  }
+
+  try {
+    assertTenantActiveForLogin(target);
+  } catch (err) {
+    throw new ImpersonationError(err instanceof Error ? err.message : 'Tenant inactivo');
+  }
+
+  const refreshToken = generateToken(48);
+  const expiresAt = new Date(Date.now() + getSessionRefreshExpiresMs());
+
+  const session = await prisma.session.create({
+    data: {
+      userId: target.id,
+      tenantId: target.tenantId,
+      tokenHash: hashToken(refreshToken),
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent ?? null,
+      deviceInfo: input.userAgent?.slice(0, 100) ?? null,
+      expiresAt,
+      impersonatorId: input.masterId,
+      originalMasterSessionId: input.masterSessionId,
+    },
+  });
+
+  await createAuditLog({
+    tenantId: target.tenantId,
+    userId: input.masterId,
+    action: 'auth.impersonation_start',
+    entityType: 'session',
+    entityId: session.id,
+    afterJson: {
+      targetUserId: target.id,
+      targetRole: target.role,
+      targetEmail: target.email,
+      originalMasterSessionId: input.masterSessionId,
+      impersonationSessionId: session.id,
+    },
+    ipAddress: input.ipAddress,
+  });
+
+  return {
+    refreshToken,
+    sessionId: session.id,
+    user: {
+      id: target.id,
+      email: target.email,
+      role: target.role,
+      tenantId: target.tenantId,
+      workspaceId: target.workspaceId,
+      siteId: target.tenant?.siteId ?? null,
+      mustChangePassword: target.mustChangePassword,
+    },
+  };
+}
+
+export async function stopImpersonation(input: {
+  currentUserId: string;
+  currentSessionId: string;
+  impersonatorId: string;
+  ipAddress: string;
+  accessToken?: string;
+}): Promise<{
+  refreshToken: string;
+  sessionId: string;
+  user: {
+    id: string;
+    email: string;
+    role: string;
+    tenantId: string | null;
+    workspaceId: string | null;
+    siteId: string | null;
+    mustChangePassword: boolean;
+  };
+}> {
+  const currentSession = await prisma.session.findFirst({
+    where: {
+      id: input.currentSessionId,
+      userId: input.currentUserId,
+      isActive: true,
+    },
+  });
+
+  if (
+    !currentSession?.impersonatorId ||
+    !currentSession.originalMasterSessionId ||
+    currentSession.impersonatorId !== input.impersonatorId
+  ) {
+    throw new ImpersonationError('Não está em modo de personificação');
+  }
+
+  if (input.accessToken) {
+    try {
+      await revokeAccessToken(input.accessToken);
+    } catch (err) {
+      console.error('[blacklist] Falha ao revogar token no stop impersonation:', err);
+    }
+  }
+
+  await prisma.session.update({
+    where: { id: currentSession.id },
+    data: { isActive: false },
+  });
+
+  let masterSession = await prisma.session.findFirst({
+    where: {
+      id: currentSession.originalMasterSessionId,
+      userId: currentSession.impersonatorId,
+      isActive: true,
+      expiresAt: { gt: new Date() },
+    },
+  });
+
+  const master = await prisma.user.findUnique({
+    where: { id: currentSession.impersonatorId },
+    include: { tenant: true },
+  });
+
+  if (!master || master.status !== 'active' || master.role !== 'master') {
+    throw new ImpersonationError('Conta MASTER original indisponível — faça login novamente');
+  }
+
+  const refreshToken = generateToken(48);
+  const expiresAt = new Date(Date.now() + getSessionRefreshExpiresMs());
+
+  if (masterSession) {
+    await prisma.session.update({
+      where: { id: masterSession.id },
+      data: {
+        tokenHash: hashToken(refreshToken),
+        expiresAt,
+        ipAddress: input.ipAddress,
+        userAgent: currentSession.userAgent,
+      },
+    });
+  } else {
+    masterSession = await prisma.session.create({
+      data: {
+        userId: master.id,
+        tenantId: master.tenantId,
+        tokenHash: hashToken(refreshToken),
+        ipAddress: input.ipAddress,
+        userAgent: currentSession.userAgent,
+        deviceInfo: currentSession.deviceInfo,
+        expiresAt,
+      },
+    });
+  }
+
+  const targetUser = await prisma.user.findUnique({
+    where: { id: input.currentUserId },
+    select: { email: true, role: true },
+  });
+
+  await createAuditLog({
+    tenantId: currentSession.tenantId,
+    userId: master.id,
+    action: 'auth.impersonation_stop',
+    entityType: 'session',
+    entityId: currentSession.id,
+    afterJson: {
+      targetUserId: input.currentUserId,
+      targetEmail: targetUser?.email ?? null,
+      targetRole: targetUser?.role ?? null,
+      restoredMasterSessionId: masterSession.id,
+      impersonationSessionId: currentSession.id,
+    },
+    ipAddress: input.ipAddress,
+  });
+
+  return {
+    refreshToken,
+    sessionId: masterSession.id,
+    user: {
+      id: master.id,
+      email: master.email,
+      role: master.role,
+      tenantId: master.tenantId,
+      workspaceId: master.workspaceId,
+      siteId: master.tenant?.siteId ?? null,
+      mustChangePassword: master.mustChangePassword,
+    },
   };
 }
 
@@ -217,7 +478,12 @@ export async function logout(sessionId: string, userId: string, ip?: string, acc
 
 export async function getActiveSessions(userId: string) {
   return prisma.session.findMany({
-    where: { userId, isActive: true, expiresAt: { gt: new Date() } },
+    where: {
+      userId,
+      isActive: true,
+      expiresAt: { gt: new Date() },
+      impersonatorId: null,
+    },
     select: {
       id: true,
       ipAddress: true,

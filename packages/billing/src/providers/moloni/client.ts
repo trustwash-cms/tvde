@@ -203,8 +203,23 @@ export class MoloniClient {
       errors?: unknown;
     };
 
+    const errorsText = (() => {
+      if (Array.isArray(data.errors)) {
+        return data.errors.map((item) => String(item)).join('; ');
+      }
+      if (data.errors && typeof data.errors === 'object') {
+        return Object.entries(data.errors as Record<string, unknown>)
+          .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`)
+          .join('; ');
+      }
+      return '';
+    })();
+
     const moloniMessage =
-      data.error_description ?? data.error ?? `Moloni HTTP ${res.status}`;
+      data.error_description ??
+      data.error ??
+      (errorsText || undefined) ??
+      `Moloni HTTP ${res.status}`;
 
     if (!res.ok) {
       throw new MoloniApiError(moloniMessage, res.status, json);

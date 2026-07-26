@@ -71,6 +71,8 @@ export interface UserProfileDetailUser {
   lastLoginAt: string | null;
   createdAt: string;
   twoFaMethod: string | null;
+  avatarStorageKey: string | null;
+  avatarUpdatedAt: string | null;
   tenant?: { id: string; siteId: string; name: string } | null;
 }
 

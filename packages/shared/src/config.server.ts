@@ -94,6 +94,11 @@ export function getServerConfig() {
     adminMgmtMaxAttachmentBytes: parseInt(envOr('ADMIN_MGMT_MAX_ATTACHMENT_BYTES', '10485760'), 10),
     pickupTokenExpiresMs: parseDurationMs(envOr('PICKUP_TOKEN_EXPIRES', '30d')),
     invoiceDownloadTokenExpiresMs: parseDurationMs(envOr('INVOICE_DOWNLOAD_TOKEN_EXPIRES', '90d')),
+    /** Máximo de descarregamentos PDF por link público (HTML da página não conta). */
+    invoiceDownloadMaxCount: Math.max(
+      1,
+      parseInt(envOr('INVOICE_DOWNLOAD_MAX_COUNT', '3'), 10) || 3
+    ),
     brandingUploadDir: envOr('BRANDING_UPLOAD_DIR', 'uploads/branding'),
     brandingMaxLogoBytes: parseInt(envOr('BRANDING_MAX_LOGO_BYTES', '2097152'), 10),
     brandingMaxWallpaperBytes: parseInt(envOr('BRANDING_MAX_WALLPAPER_BYTES', '8388608'), 10),

@@ -89,6 +89,7 @@ export async function adminMgmtRoutes(fastify: FastifyInstance) {
 
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', fastify.requireModule('admin_mgmt'));
+  fastify.addHook('preHandler', fastify.requireRole('superadmin'));
 
   fastify.get('/admin-mgmt/status', async (request, reply) => {
     const query = request.query as { workspaceId?: string };

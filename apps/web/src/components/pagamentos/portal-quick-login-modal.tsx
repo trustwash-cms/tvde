@@ -5,6 +5,7 @@ import { Loader2 } from 'lucide-react';
 import { PORTAL_KIND_LABELS, type PortalKind } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { AntiAutofillInput, AutofillDecoys } from '@/components/anti-autofill';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 
 type Props = {
@@ -20,6 +21,8 @@ type Conn = {
   lastError?: string | null;
   lastJobMessage?: string | null;
   otpHint?: string | null;
+  hasPassword?: boolean;
+  usernameMasked?: string | null;
 };
 
 function sleep(ms: number) {
@@ -34,6 +37,7 @@ function isAwaitingOtp(data: Conn | null | undefined): boolean {
 /**
  * Login rápido a um portal RPA (Via Verde / MyPRIO / Uber) a partir do sync de pagamentos.
  * Se o portal já estiver à espera de OTP, abre directamente o formulário do código.
+ * Se há password guardada, oferece reutilização sem voltar a digitar.
  */
 export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Props) {
   const [username, setUsername] = useState('');
@@ -42,8 +46,12 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [awaitingOtp, setAwaitingOtp] = useState(false);
+  const [useStored, setUseStored] = useState(false);
+  const [hasPassword, setHasPassword] = useState(false);
+  const [usernameMasked, setUsernameMasked] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
+  const { confirm, confirmDialog } = useConfirmDialog();
 
   const label = portal ? PORTAL_KIND_LABELS[portal] : 'Portal';
 
@@ -55,6 +63,9 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     setOtp('');
     setBusy(false);
     setAwaitingOtp(false);
+    setUseStored(false);
+    setHasPassword(false);
+    setUsernameMasked(null);
     setError('');
     setHint('');
     setChecking(true);
@@ -68,6 +79,8 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       if (cancelled) return;
       setChecking(false);
       if (!res.success || !res.data) return;
+      setHasPassword(Boolean(res.data.hasPassword));
+      setUsernameMasked(res.data.usernameMasked ?? null);
       if (isAwaitingOtp(res.data)) {
         setAwaitingOtp(true);
         setHint(
@@ -79,6 +92,8 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       } else if (res.data.status === 'connected') {
         onSuccess(portal);
         onClose();
+      } else if (res.data.hasPassword) {
+        setUseStored(true);
       }
     })();
 
@@ -120,14 +135,16 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     throw new Error('Timeout a autenticar no portal');
   }
 
-  async function handleConnect(e: FormEvent) {
-    e.preventDefault();
+  async function startConnect(body: {
+    username?: string;
+    password?: string;
+    useStoredCredentials?: boolean;
+  }) {
     if (!portal) return;
     setBusy(true);
     setError('');
     setAwaitingOtp(false);
 
-    // Revalidar: se entretanto ficou à espera de OTP, não criar outro job
     const pre = await apiFetch<Conn>(
       API_PATHS.portalConnections.byPortal(portal),
       {},
@@ -147,12 +164,11 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       API_PATHS.portalConnections.connect(portal),
       {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(body),
       },
       getStoredToken()
     );
     if (!res.success) {
-      // Job OTP já activo — mostrar formulário OTP em vez de erro seco
       if (/espera de OTP|awaiting_otp|já existe um job|em curso/i.test(res.error || '')) {
         const st = await apiFetch<Conn>(
           API_PATHS.portalConnections.byPortal(portal),
@@ -182,6 +198,44 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       setBusy(false);
       setError(err instanceof Error ? err.message : 'Erro');
     }
+  }
+
+  async function handleConnectStored(e: FormEvent) {
+    e.preventDefault();
+    await startConnect({ useStoredCredentials: true });
+  }
+
+  async function handleConnectManual(e: FormEvent) {
+    e.preventDefault();
+    await startConnect({ username, password });
+  }
+
+  async function handleForgetPassword() {
+    if (!portal) return;
+    const ok = await confirm({
+      title: 'Esquecer password',
+      message:
+        'Remover a password guardada deste portal? O utilizador e a sessão (se existir) mantêm-se. No próximo login terá de introduzir a password.',
+      confirmLabel: 'Esquecer',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    const res = await apiFetch(
+      API_PATHS.portalConnections.forgetPassword(portal),
+      { method: 'POST', body: JSON.stringify({}) },
+      getStoredToken()
+    );
+    setBusy(false);
+    if (!res.success) {
+      setError(res.error || 'Não foi possível esquecer a password');
+      return;
+    }
+    setHasPassword(false);
+    setUseStored(false);
+    setPassword('');
   }
 
   async function handleOtp(e: FormEvent) {
@@ -238,6 +292,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       closeOnEscape={!busy && !checking}
       panelClassName="max-w-md"
     >
+      {confirmDialog}
       {checking ? (
         <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
           <Loader2 className="h-4 w-4 animate-spin" />
@@ -273,8 +328,57 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
             </button>
           </div>
         </form>
+      ) : useStored && hasPassword ? (
+        <form onSubmit={(e) => void handleConnectStored(e)} className="relative space-y-3" autoComplete="off">
+          {busy ? (
+            <div className="flex items-start gap-2 rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+              <Loader2 className="mt-0.5 h-4 w-4 shrink-0 animate-spin" />
+              A autenticar no portal… pode demorar cerca de 1 minuto.
+            </div>
+          ) : (
+            <p className="text-sm text-slate-600">
+              Credenciais guardadas (encriptadas) para{' '}
+              <span className="font-medium text-slate-800">{usernameMasked || label}</span>.
+              Continuar sem voltar a digitar a password
+              {portal === 'myprio' || portal === 'uber' ? ' — o portal pode pedir OTP SMS a seguir' : ''}.
+            </p>
+          )}
+          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+            <div className="flex flex-wrap gap-3 text-xs">
+              <button
+                type="button"
+                className="text-slate-600 underline-offset-2 hover:underline disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  setUseStored(false);
+                  setError('');
+                }}
+              >
+                Introduzir outra password
+              </button>
+              <button
+                type="button"
+                className="text-red-600 underline-offset-2 hover:underline disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void handleForgetPassword()}
+              >
+                Esquecer password
+              </button>
+            </div>
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>
+                Cancelar
+              </button>
+              <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Continuar
+              </button>
+            </div>
+          </div>
+        </form>
       ) : (
-        <form onSubmit={(e) => void handleConnect(e)} className="relative space-y-3" autoComplete="off">
+        <form onSubmit={(e) => void handleConnectManual(e)} className="relative space-y-3" autoComplete="off">
           <AutofillDecoys />
           {busy ? (
             <div className="flex items-start gap-2 rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-sm text-sky-900">
@@ -284,6 +388,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
           ) : (
             <p className="text-sm text-slate-500">
               Sessão expirada ou timeout — volte a autenticar para continuar o sincronismo.
+              A password fica guardada encriptada neste tenant.
             </p>
           )}
           <label className="block text-sm">
@@ -320,14 +425,31 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
             />
           </label>
           {error ? <p className="text-sm text-red-600">{error}</p> : null}
-          <div className="flex justify-end gap-2 pt-2">
-            <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Ligar
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            {hasPassword ? (
+              <button
+                type="button"
+                className="text-xs text-slate-600 underline-offset-2 hover:underline disabled:opacity-50"
+                disabled={busy}
+                onClick={() => {
+                  setUseStored(true);
+                  setError('');
+                }}
+              >
+                Usar password guardada
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="flex gap-2">
+              <button type="button" className="btn-secondary" disabled={busy} onClick={onClose}>
+                Cancelar
+              </button>
+              <button type="submit" className="btn-primary inline-flex items-center gap-2" disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Ligar
+              </button>
+            </div>
           </div>
         </form>
       )}

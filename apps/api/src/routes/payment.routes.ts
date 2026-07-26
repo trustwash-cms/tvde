@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { defaultPaymentWeekRange } from '@tvde/shared';
+import { defaultPaymentWeekRange, isDriverRole, type Role } from '@tvde/shared';
 import {
   calculateDriverPayment,
   listPaymentDrivers,
@@ -25,17 +25,21 @@ export async function paymentRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', fastify.requireModule('pagamentos'));
 
-  fastify.get('/pagamentos/drivers', async (request, reply) => {
-    try {
-      const tenantId = requireTenant(request);
-      const data = await listPaymentDrivers(fastify.db, tenantId);
-      return reply.send({ success: true, data });
-    } catch (err) {
-      return reply
-        .status(400)
-        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+  fastify.get(
+    '/pagamentos/drivers',
+    { preHandler: [fastify.requireRole('superadmin')] },
+    async (request, reply) => {
+      try {
+        const tenantId = requireTenant(request);
+        const data = await listPaymentDrivers(fastify.db, tenantId);
+        return reply.send({ success: true, data });
+      } catch (err) {
+        return reply
+          .status(400)
+          .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+      }
     }
-  });
+  );
 
   fastify.get('/pagamentos/default-range', async (_request, reply) => {
     return reply.send({ success: true, data: defaultPaymentWeekRange() });
@@ -45,7 +49,10 @@ export async function paymentRoutes(fastify: FastifyInstance) {
     return reply.send({ success: true, data: [...DEFAULT_PAYMENT_METHODS] });
   });
 
-  fastify.get('/pagamentos/reports', async (request, reply) => {
+  fastify.get(
+    '/pagamentos/reports',
+    { preHandler: [fastify.requireRole('admin')] },
+    async (request, reply) => {
     try {
       const tenantId = requireTenant(request);
       const q = z
@@ -64,14 +71,17 @@ export async function paymentRoutes(fastify: FastifyInstance) {
       if (q.isPaid === 'true' || q.isPaid === '1') isPaid = true;
       if (q.isPaid === 'false' || q.isPaid === '0') isPaid = false;
 
+      const driverOnly = isDriverRole(request.user.role as Role);
+
       const data = await listPaymentReports(fastify.db, tenantId, {
         periodStart: q.periodStart,
         periodEnd: q.periodEnd,
-        search: q.search,
+        search: driverOnly ? undefined : q.search,
         isPaid,
         paymentMethod: q.paymentMethod,
         page: q.page,
         perPage: q.perPage,
+        userId: driverOnly ? request.user.sub : undefined,
       });
       return reply.send({ success: true, data });
     } catch (err) {
@@ -83,7 +93,7 @@ export async function paymentRoutes(fastify: FastifyInstance) {
 
   fastify.post(
     '/pagamentos/calculate',
-    { preHandler: [fastify.requireRole('admin')] },
+    { preHandler: [fastify.requireRole('superadmin')] },
     async (request, reply) => {
       try {
         const tenantId = requireTenant(request);
@@ -115,7 +125,7 @@ export async function paymentRoutes(fastify: FastifyInstance) {
 
   fastify.post(
     '/pagamentos/confirm',
-    { preHandler: [fastify.requireRole('admin')] },
+    { preHandler: [fastify.requireRole('superadmin')] },
     async (request, reply) => {
       try {
         const tenantId = requireTenant(request);
@@ -148,11 +158,17 @@ export async function paymentRoutes(fastify: FastifyInstance) {
     }
   );
 
-  fastify.get('/pagamentos/reports/:id', async (request, reply) => {
+  fastify.get(
+    '/pagamentos/reports/:id',
+    { preHandler: [fastify.requireRole('admin')] },
+    async (request, reply) => {
     try {
       const tenantId = requireTenant(request);
       const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
       const data = await getPaymentReport(fastify.db, tenantId, id);
+      if (isDriverRole(request.user.role as Role) && data.userId !== request.user.sub) {
+        return reply.status(404).send({ success: false, error: 'Relatório não encontrado' });
+      }
       return reply.send({ success: true, data });
     } catch (err) {
       return reply
@@ -163,7 +179,7 @@ export async function paymentRoutes(fastify: FastifyInstance) {
 
   fastify.patch(
     '/pagamentos/reports/:id/paid',
-    { preHandler: [fastify.requireRole('admin')] },
+    { preHandler: [fastify.requireRole('superadmin')] },
     async (request, reply) => {
       try {
         const tenantId = requireTenant(request);
@@ -193,7 +209,7 @@ export async function paymentRoutes(fastify: FastifyInstance) {
 
   fastify.delete(
     '/pagamentos/reports/:id',
-    { preHandler: [fastify.requireRole('admin')] },
+    { preHandler: [fastify.requireRole('superadmin')] },
     async (request, reply) => {
       try {
         const tenantId = requireTenant(request);

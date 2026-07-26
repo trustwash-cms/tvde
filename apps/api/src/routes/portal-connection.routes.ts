@@ -4,6 +4,7 @@ import { PORTAL_KINDS, type PortalKind } from '@tvde/shared';
 import {
   clearPortalMessages,
   disconnectPortal,
+  forgetPortalPassword,
   getPortalConnectionDetail,
   getPortalJob,
   listPortalConnections,
@@ -59,13 +60,33 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
       const { portal } = portalParam.parse(request.params);
       const body = z
         .object({
-          username: z.string().min(1),
+          username: z.string().optional().default(''),
           password: z.string().optional().default(''),
+          useStoredCredentials: z.boolean().optional().default(false),
         })
         .parse(request.body);
 
-      if ((portal as PortalKind) !== 'uber' && !body.password) {
-        return reply.status(400).send({ success: false, error: 'Password em falta' });
+      const existing = await getPortalConnectionDetail(
+        fastify.db,
+        tenantId,
+        portal as PortalKind
+      );
+      const useStored =
+        body.useStoredCredentials ||
+        ((!body.username || !body.password) && existing.hasPassword);
+
+      if (!useStored) {
+        if (!body.username?.trim()) {
+          return reply.status(400).send({ success: false, error: 'Utilizador em falta' });
+        }
+        if ((portal as PortalKind) !== 'uber' && !body.password) {
+          return reply.status(400).send({ success: false, error: 'Password em falta' });
+        }
+      } else if (!existing.hasPassword && (portal as PortalKind) !== 'uber' && !body.password) {
+        return reply.status(400).send({
+          success: false,
+          error: 'Não há password guardada — introduza a password',
+        });
       }
 
       const data = await startPortalConnect(
@@ -74,7 +95,8 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
         portal as PortalKind,
         body.username,
         body.password,
-        request.user.sub
+        request.user.sub,
+        { useStoredCredentials: useStored }
       );
       return reply.send({ success: true, data, message: 'Ligação iniciada' });
     } catch (err) {
@@ -167,6 +189,20 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
       const { portal } = portalParam.parse(request.params);
       const data = await clearPortalMessages(fastify.db, tenantId, portal as PortalKind);
       return reply.send({ success: true, data, message: 'Mensagens limpas' });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  fastify.post('/portal-connections/:portal/forget-password', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { portal } = portalParam.parse(request.params);
+      const data = await forgetPortalPassword(fastify.db, tenantId, portal as PortalKind);
+      return reply.send({ success: true, data, message: 'Password esquecida' });
     } catch (err) {
       return reply.status(400).send({
         success: false,

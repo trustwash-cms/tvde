@@ -1,5 +1,9 @@
 import { prisma, Prisma } from '@tvde/database';
-import { isMoloniLocalRedirect, type MoloniDocumentSetHealth } from '@tvde/shared';
+import {
+  isMoloniDemoCompany,
+  isMoloniLocalRedirect,
+  type MoloniDocumentSetHealth,
+} from '@tvde/shared';
 import {
   computeInvoiceTotals,
   computeLine,
@@ -16,10 +20,12 @@ import {
   type InvoiceMoloniMetadata,
   type MoloniDocumentTypeId,
 } from '@tvde/billing';
-import { getServerConfig } from '@tvde/shared/server';
 import { decrypt, encrypt } from '../lib/crypto';
 import { env } from '../config/env';
-import { EMAIL_TEMPLATE_KEYS, resolveSmtpConnection, sendTemplateEmail } from './email.service';
+import {
+  getBillingEmailPublicSettings,
+  sendBillingInvoiceTemplateEmail,
+} from './billing-email.service';
 import { createInvoiceDownloadLink } from './invoice-download-token.service';
 import { createHash } from 'crypto';
 import { ensureMoloniAccessToken, getBillingConnection } from './moloni-connection.service';
@@ -34,6 +40,8 @@ import {
   unlinkEntitiesNotInMoloniSet,
   unlinkStaleMoloniBillingData,
 } from './billing-moloni-reset.service';
+import { syncCatalogFromMoloni } from './billing-sync.service';
+import { enrichInvoiceLinesWithMoloniProducts } from './billing-moloni-line-enrichment.service';
 
 const MOLONI_STATE_TTL_MS = 15 * 60_000;
 
@@ -59,6 +67,7 @@ export async function upsertMoloniConfig(input: {
   clientSecret?: string;
   companyId?: number;
   documentSetId?: number;
+  defaultProductCategoryId?: number | null;
   redirectUri: string;
 }) {
   const existing = await getBillingConnection(input.workspaceId);
@@ -82,6 +91,7 @@ export async function upsertMoloniConfig(input: {
       encryptedClientSecret,
       companyId: input.companyId ?? null,
       documentSetId: input.documentSetId ?? null,
+      defaultProductCategoryId: input.defaultProductCategoryId ?? null,
       redirectUri: input.redirectUri.trim(),
     },
     update: {
@@ -89,6 +99,9 @@ export async function upsertMoloniConfig(input: {
       encryptedClientSecret,
       companyId: input.companyId ?? undefined,
       documentSetId: input.documentSetId ?? undefined,
+      ...(input.defaultProductCategoryId !== undefined
+        ? { defaultProductCategoryId: input.defaultProductCategoryId }
+        : {}),
       redirectUri: input.redirectUri.trim(),
     },
     select: {
@@ -98,6 +111,7 @@ export async function upsertMoloniConfig(input: {
       clientId: true,
       companyId: true,
       documentSetId: true,
+      defaultProductCategoryId: true,
       redirectUri: true,
       connectedAt: true,
       tokenExpiresAt: true,
@@ -282,17 +296,20 @@ export async function getMoloniPublicStatus(workspaceId: string, options?: { pro
   }
 
   const connected = Boolean(row.encryptedAccessToken && row.connectedAt);
+  const emailSettings = await getBillingEmailPublicSettings(workspaceId);
   const base = {
     configured: true,
     connected,
     clientId: row.clientId,
     companyId: row.companyId,
     documentSetId: row.documentSetId,
+    defaultProductCategoryId: row.defaultProductCategoryId,
     redirectUri: row.redirectUri,
     connectedAt: row.connectedAt,
     healthy: false as boolean,
     statusMessage: 'Não configurado',
     documentSetHealth: null as MoloniDocumentSetHealth | null,
+    emailSettings,
     ...moduleFlags,
   };
 
@@ -344,6 +361,7 @@ export async function getMoloniPublicStatus(workspaceId: string, options?: { pro
       ? documentSetHealth!.userMessage
       : probe.message,
     companyName: probe.companyName,
+    isDemoCompany: isMoloniDemoCompany(probe.companyName),
     moloniCustomerCount: probe.moloniCustomerCount,
     moloniInvoiceCount: probe.moloniInvoiceCount,
     documentSetHealth,
@@ -410,6 +428,15 @@ export async function completeMoloniOAuth(code: string, state: string) {
       connectedAt: new Date(),
     },
   });
+
+  // Importa séries + impostos para o dropdown de Facturação (não bloqueia OAuth se falhar).
+  if (companyId) {
+    try {
+      await syncCatalogFromMoloni(workspaceId);
+    } catch {
+      // Utilizador pode sincronizar manualmente em Configurações → Moloni.
+    }
+  }
 
   return { workspaceId, companyId };
 }
@@ -784,20 +811,40 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
     });
   }
 
-  const draft: InvoiceDraft = {
-    clientId: entity.cmsClientId ?? entity.id,
-    clientName: entity.name,
-    clientNif: entity.vat ?? undefined,
-    clientEmail: entity.email ?? undefined,
-    documentType: invoice.documentType as MoloniDocumentTypeId,
-    lines: invoice.lines.map((l) => ({
+  // Moloni exige product_id em cada linha — criar artigo CMS para linhas manuais.
+  const enrichedLines = await enrichInvoiceLinesWithMoloniProducts(
+    invoice.workspaceId,
+    invoice.lines.map((l) => ({
       description: l.description,
       quantity: l.quantity,
       unitPrice: Number(l.unitPrice),
       vatRate: Number(l.vatRate),
       moloniProductId: l.externalProductId ? Number(l.externalProductId) : undefined,
       moloniTaxId: l.externalTaxId ? Number(l.externalTaxId) : undefined,
-    })),
+    }))
+  );
+
+  await Promise.all(
+    invoice.lines.map((l, index) => {
+      const enriched = enrichedLines[index];
+      if (!enriched?.moloniProductId) return Promise.resolve();
+      return prisma.invoiceLine.update({
+        where: { id: l.id },
+        data: {
+          externalProductId: String(enriched.moloniProductId),
+          externalTaxId: enriched.moloniTaxId != null ? String(enriched.moloniTaxId) : null,
+        },
+      });
+    })
+  );
+
+  const draft: InvoiceDraft = {
+    clientId: entity.cmsClientId ?? entity.id,
+    clientName: entity.name,
+    clientNif: entity.vat ?? undefined,
+    clientEmail: entity.email ?? undefined,
+    documentType: invoice.documentType as MoloniDocumentTypeId,
+    lines: enrichedLines,
     dueDate: invoice.dueDate?.toISOString(),
     notes: invoice.notes ?? undefined,
     yourReference: metadata.yourReference ?? invoice.number,
@@ -826,6 +873,16 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
     result = await provider.issueInvoice(draft, config);
   } catch (err) {
     const raw = err instanceof Error ? err.message : 'Falha ao emitir no Moloni';
+    console.error('[billing] Moloni emit failed', {
+      invoiceId: invoice.id,
+      number: invoice.number,
+      error: raw,
+      lines: enrichedLines.map((l) => ({
+        description: l.description,
+        moloniProductId: l.moloniProductId,
+        moloniTaxId: l.moloniTaxId,
+      })),
+    });
     throw new Error(formatMoloniDocumentSetError(raw));
   }
 
@@ -903,12 +960,6 @@ export async function downloadInvoicePdf(invoiceId: string, tenantId: string) {
   return { buffer, filename: `fatura-${label}.pdf` };
 }
 
-function splitAppName(name: string): { prefix: string; suffix: string } {
-  const dot = name.indexOf('.');
-  if (dot > 0) return { prefix: name.slice(0, dot), suffix: name.slice(dot + 1) };
-  return { prefix: name, suffix: '' };
-}
-
 function formatDatePt(date: Date | null | undefined): string {
   if (!date) return '—';
   return date.toLocaleDateString('pt-PT', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -945,27 +996,27 @@ export async function sendInvoiceEmail(
     invoiceId,
     tenantId
   );
-  const { appName, smtpFrom } = getServerConfig();
-  const { prefix: appNamePrefix, suffix: appNameSuffix } = splitAppName(appName);
   const issueAt = invoice.issuedAt ?? new Date();
   const periodDescription = issueAt.toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' });
 
-  let supportEmail = smtpFrom || '';
+  let moloniCompanyName: string | null = null;
   try {
-    const smtp = await resolveSmtpConnection(tenantId);
-    supportEmail = smtp.from;
+    const conn = await getBillingConnection(invoice.workspaceId);
+    if (conn?.companyId) {
+      const { moloniClient } = await ensureMoloniAccessToken(invoice.workspaceId);
+      const companies = await moloniClient.getCompanies();
+      moloniCompanyName = companies.find((c) => c.company_id === conn.companyId)?.name ?? null;
+    }
   } catch {
-    /* usa fallback do .env */
+    /* fallback de brand sem nome Moloni */
   }
 
-  await sendTemplateEmail({
+  await sendBillingInvoiceTemplateEmail({
+    workspaceId: invoice.workspaceId,
     tenantId,
     to,
-    templateKey: EMAIL_TEMPLATE_KEYS.invoice,
+    moloniCompanyName,
     variables: {
-      appName,
-      appNamePrefix,
-      appNameSuffix,
       recipientName: entityName,
       periodDescription,
       invoiceNumber: invoice.number,
@@ -977,7 +1028,7 @@ export async function sendInvoiceEmail(
       downloadUrl,
       downloadExpiresIn,
       attachmentCta: 'Descarregar fatura',
-      supportEmail,
+      supportEmail: '',
       currentYear: String(new Date().getFullYear()),
       footerAddress: '',
     },

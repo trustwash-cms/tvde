@@ -21,11 +21,21 @@ import {
   Plug,
   Fuel,
   Wallet,
+  FileText,
+  Eye,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
-import { WEB_ROUTES, canAccessDashboardArea, canAccessClientsDashboard, type Role, ADMIN_MGMT_MODULE_NAME, getRoleLabel } from '@tvde/shared';
-import { apiFetch, clearTokens, getStoredToken, getStoredRefreshToken, API_PATHS, appName, getApiUrl } from '@/lib/api';
+import {
+  WEB_ROUTES,
+  canAccessDashboardArea,
+  canAccessClientsDashboard,
+  isDriverRole,
+  type Role,
+  ADMIN_MGMT_MODULE_NAME,
+  getRoleLabel,
+} from '@tvde/shared';
+import { apiFetch, clearTokens, getStoredToken, getStoredRefreshToken, storeTokens, API_PATHS, appName, getApiUrl } from '@/lib/api';
 import { useSessionKeepAlive } from '@/hooks/use-session-keep-alive';
 import { hasActiveModule, type ModuleCapabilities } from '@/lib/module-access';
 
@@ -59,6 +69,19 @@ const navItems = [
     area: 'pagamentos' as const,
     moduleKey: 'pagamentos',
   },
+  {
+    href: WEB_ROUTES.dashboard.meusPagamentos.root,
+    label: 'Meus Pagamentos',
+    icon: Wallet,
+    area: 'meus_pagamentos' as const,
+    moduleKey: 'pagamentos',
+  },
+  {
+    href: WEB_ROUTES.dashboard.documentos.root,
+    label: 'Documentos',
+    icon: FileText,
+    area: 'documentos' as const,
+  },
   { href: WEB_ROUTES.dashboard.calendar, label: 'Calendário', icon: CalendarDays, area: 'calendar' as const, moduleKey: 'calendar' },
   { href: WEB_ROUTES.dashboard.adminMgmt.root, label: ADMIN_MGMT_MODULE_NAME, icon: Briefcase, area: 'admin_mgmt' as const, moduleKey: 'admin_mgmt' },
   { href: WEB_ROUTES.dashboard.users, label: 'Utilizadores', icon: Users, area: 'users' as const },
@@ -68,9 +91,18 @@ const navItems = [
 interface User {
   email: string;
   role: Role;
+  fullName?: string | null;
+  username?: string | null;
+  avatarStorageKey?: string | null;
+  avatarUpdatedAt?: string | null;
   mustChangePassword?: boolean;
   tenant?: { siteId: string; name: string } | null;
   capabilities?: ModuleCapabilities;
+  impersonation?: {
+    active: boolean;
+    impersonatorId: string;
+    impersonatorEmail: string | null;
+  } | null;
 }
 
 interface TenantBrandingInfo {
@@ -78,11 +110,21 @@ interface TenantBrandingInfo {
   logo: { hasLogo: boolean; updatedAt?: string };
 }
 
-function userInitials(email: string): string {
-  const local = email.split('@')[0] ?? email;
+function userInitials(user: User): string {
+  const name = user.fullName?.trim() || user.username?.trim();
+  if (name) {
+    const parts = name.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+    return name.slice(0, 2).toUpperCase();
+  }
+  const local = user.email.split('@')[0] ?? user.email;
   const parts = local.split(/[._-]/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
   return local.slice(0, 2).toUpperCase();
+}
+
+function displayName(user: User): string {
+  return user.fullName?.trim() || user.username?.trim() || user.email.split('@')[0] || user.email;
 }
 
 function isNavActive(pathname: string, href: string, area: string) {
@@ -95,9 +137,45 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (area === 'eletricidade' && pathname.startsWith('/dashboard/eletricidade')) return true;
   if (area === 'combustivel' && pathname.startsWith('/dashboard/combustivel')) return true;
   if (area === 'pagamentos' && pathname.startsWith('/dashboard/pagamentos')) return true;
+  if (area === 'meus_pagamentos' && pathname.startsWith('/dashboard/meus-pagamentos')) return true;
+  if (area === 'documentos' && pathname.startsWith('/dashboard/documentos')) return true;
   if (area === 'calendar' && pathname.startsWith('/dashboard/calendar')) return true;
   if (area === 'admin_mgmt' && pathname.startsWith('/dashboard/admin-mgmt')) return true;
   return false;
+}
+
+function AvatarBubble({
+  user,
+  avatarUrl,
+  sizeClass = 'h-10 w-10',
+  textClass = 'text-sm',
+}: {
+  user: User;
+  avatarUrl: string | null;
+  sizeClass?: string;
+  textClass?: string;
+}) {
+  if (avatarUrl) {
+    return (
+      <img
+        src={avatarUrl}
+        alt={displayName(user)}
+        className={clsx(sizeClass, 'shrink-0 rounded-full object-cover')}
+      />
+    );
+  }
+  return (
+    <div
+      className={clsx(
+        sizeClass,
+        textClass,
+        'flex shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-light)] font-semibold text-[var(--color-primary)]'
+      )}
+      title={user.email}
+    >
+      {userInitials(user)}
+    </div>
+  );
 }
 
 export default function DashboardShell({ children }: { children: React.ReactNode }) {
@@ -107,6 +185,8 @@ export default function DashboardShell({ children }: { children: React.ReactNode
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [branding, setBranding] = useState<TenantBrandingInfo | null>(null);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [impersonationBusy, setImpersonationBusy] = useState(false);
 
   useSessionKeepAlive(Boolean(getStoredToken()));
 
@@ -177,6 +257,35 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     };
   }, [branding?.logo.hasLogo, branding?.logo.updatedAt]);
 
+  useEffect(() => {
+    if (!user?.avatarStorageKey) {
+      setAvatarUrl(null);
+      return;
+    }
+
+    const token = getStoredToken();
+    const version = user.avatarUpdatedAt ?? String(Date.now());
+    const url = `${getApiUrl()}${API_PATHS.users.meAvatar}?v=${encodeURIComponent(version)}`;
+    let objectUrl: string | null = null;
+
+    fetch(url, {
+      cache: 'no-store',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => (res.ok ? res.blob() : null))
+      .then((blob) => {
+        if (blob) {
+          objectUrl = URL.createObjectURL(blob);
+          setAvatarUrl(objectUrl);
+        }
+      })
+      .catch(() => setAvatarUrl(null));
+
+    return () => {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [user?.avatarStorageKey, user?.avatarUpdatedAt]);
+
   function logout() {
     const token = getStoredToken();
     if (token) apiFetch(API_PATHS.auth.logout, { method: 'POST' }, token);
@@ -184,16 +293,41 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     router.replace(WEB_ROUTES.login);
   }
 
+  async function stopImpersonation() {
+    if (impersonationBusy) return;
+    setImpersonationBusy(true);
+    const res = await apiFetch<{
+      accessToken: string;
+      refreshToken: string;
+    }>(API_PATHS.auth.impersonateStop, { method: 'POST' });
+    setImpersonationBusy(false);
+
+    if (!res.success || !res.data?.accessToken || !res.data.refreshToken) {
+      clearTokens();
+      router.replace(WEB_ROUTES.login);
+      return;
+    }
+
+    storeTokens(res.data.accessToken, res.data.refreshToken);
+    window.location.href = WEB_ROUTES.dashboard.users;
+  }
+
   const visibleNav = navItems.filter((item) => {
     if (!user) return false;
     if (item.area === 'workspaces' && user.role !== 'master') return false;
     if (item.area === 'clients' && !canAccessClientsDashboard(user.role)) return false;
+    // Motorista: Meus Pagamentos; gestor+: Pagamentos gestão
+    if (item.area === 'meus_pagamentos' && !isDriverRole(user.role)) return false;
+    if (item.area === 'documentos' && !isDriverRole(user.role)) return false;
+    if (item.area === 'pagamentos' && isDriverRole(user.role)) return false;
     if (!canAccessDashboardArea(user.role, item.area)) return false;
     if (item.moduleKey && !hasActiveModule(user.role, user.capabilities, item.moduleKey)) return false;
     return true;
   });
 
   const companyLabel = branding?.companyName ?? user?.tenant?.name ?? appName;
+  const driverMode = user ? isDriverRole(user.role) : false;
+  const impersonating = Boolean(user?.impersonation?.active);
 
   if (user?.mustChangePassword) {
     return (
@@ -221,10 +355,43 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         )}
         style={{ width: 'var(--sidebar-width)' }}
       >
-        <div className="border-b border-slate-200 px-5 py-4">
+        <div
+          className={clsx(
+            'border-b px-5 py-4',
+            impersonating ? 'border-amber-300 bg-amber-50' : 'border-slate-200'
+          )}
+        >
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0 flex-1">
-              {logoUrl ? (
+              {driverMode && user ? (
+                <div className="flex items-center gap-3">
+                  <AvatarBubble user={user} avatarUrl={avatarUrl} sizeClass="h-11 w-11" />
+                  <div className="min-w-0">
+                    <div className="truncate text-base font-bold leading-tight text-[var(--color-primary)]">
+                      {displayName(user)}
+                    </div>
+                    <div className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+                      {getRoleLabel(user.role)}
+                    </div>
+                    {impersonating ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <span className="inline-flex items-center gap-1 rounded bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                          <Eye size={10} />
+                          Personificação
+                        </span>
+                        <button
+                          type="button"
+                          disabled={impersonationBusy}
+                          onClick={() => void stopImpersonation()}
+                          className="text-[10px] font-semibold uppercase tracking-wide text-amber-800 underline underline-offset-2 hover:text-amber-950 disabled:opacity-50"
+                        >
+                          {impersonationBusy ? 'A sair…' : 'Voltar ao Master'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : logoUrl ? (
                 <img
                   src={logoUrl}
                   alt={companyLabel}
@@ -233,9 +400,30 @@ export default function DashboardShell({ children }: { children: React.ReactNode
               ) : (
                 <div className="text-lg font-bold leading-tight text-[var(--color-primary)]">{appName}</div>
               )}
-              {user?.tenant && (
+              {!driverMode && user?.tenant && (
                 <div className="mt-1 truncate text-xs text-slate-500">{companyLabel}</div>
               )}
+              {!driverMode && impersonating && user ? (
+                <div className="mt-2 rounded-lg border border-amber-300 bg-white/70 p-2">
+                  <div className="flex items-center gap-2">
+                    <AvatarBubble user={user} avatarUrl={avatarUrl} sizeClass="h-8 w-8" textClass="text-xs" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold text-slate-800">{displayName(user)}</div>
+                      <div className="text-[10px] uppercase tracking-wide text-amber-700">
+                        Personificação · {getRoleLabel(user.role)}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={impersonationBusy}
+                    onClick={() => void stopImpersonation()}
+                    className="mt-2 w-full rounded-md bg-amber-500 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-white hover:bg-amber-600 disabled:opacity-50"
+                  >
+                    {impersonationBusy ? 'A sair…' : 'Voltar ao Master'}
+                  </button>
+                </div>
+              ) : null}
             </div>
             <button
               type="button"
@@ -267,22 +455,29 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         </nav>
 
         <div className="border-t border-slate-200 p-4">
-          {user && (
+          {user && !driverMode && !impersonating ? (
             <div className="mb-3 flex items-center gap-3">
-              <div
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[var(--color-primary-light)] text-sm font-semibold text-[var(--color-primary)]"
-                title={user.email}
-              >
-                {userInitials(user.email)}
-              </div>
+              <AvatarBubble user={user} avatarUrl={avatarUrl} />
               <div className="min-w-0 flex-1">
+                <div className="truncate text-xs font-medium text-slate-700">{displayName(user)}</div>
                 <div className="truncate text-xs text-slate-500">{user.email}</div>
                 <span className="mt-0.5 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[10px] uppercase text-slate-500">
                   {getRoleLabel(user.role)}
                 </span>
               </div>
             </div>
-          )}
+          ) : null}
+          {impersonating ? (
+            <button
+              type="button"
+              disabled={impersonationBusy}
+              onClick={() => void stopImpersonation()}
+              className="mb-2 flex w-full items-center gap-2 rounded-lg bg-amber-500 px-3 py-2 text-sm font-medium text-white hover:bg-amber-600 disabled:opacity-50"
+            >
+              <Eye size={16} />
+              {impersonationBusy ? 'A sair…' : 'Sair da personificação'}
+            </button>
+          ) : null}
           <Link
             href={WEB_ROUTES.dashboard.me}
             className="mb-2 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
@@ -301,6 +496,25 @@ export default function DashboardShell({ children }: { children: React.ReactNode
       </aside>
 
       <div className="flex min-h-screen flex-1 flex-col lg:ml-[var(--sidebar-width)]">
+        {impersonating && user ? (
+          <div className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-2 border-b border-amber-300 bg-amber-100 px-4 py-2 text-sm text-amber-950">
+            <span>
+              Está a personificar <strong>{displayName(user)}</strong>
+              {user.impersonation?.impersonatorEmail
+                ? ` (MASTER: ${user.impersonation.impersonatorEmail})`
+                : ''}
+              .
+            </span>
+            <button
+              type="button"
+              disabled={impersonationBusy}
+              onClick={() => void stopImpersonation()}
+              className="rounded-md bg-amber-600 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white hover:bg-amber-700 disabled:opacity-50"
+            >
+              {impersonationBusy ? 'A sair…' : 'Voltar ao Master'}
+            </button>
+          </div>
+        ) : null}
         <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-4 py-3 lg:hidden">
           <button
             type="button"
@@ -311,7 +525,21 @@ export default function DashboardShell({ children }: { children: React.ReactNode
             <Menu size={22} />
           </button>
           <div className="min-w-0 flex-1">
-            {logoUrl ? (
+            {driverMode && user ? (
+              <div className="flex items-center gap-2">
+                <AvatarBubble user={user} avatarUrl={avatarUrl} sizeClass="h-8 w-8" textClass="text-xs" />
+                <div className="min-w-0">
+                  <span className="truncate text-sm font-semibold text-[var(--color-primary)]">
+                    {displayName(user)}
+                  </span>
+                  {impersonating ? (
+                    <div className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+                      Personificação
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : logoUrl ? (
               <img src={logoUrl} alt={companyLabel} className="h-8 w-auto max-w-[140px] object-contain object-left" />
             ) : (
               <span className="truncate text-sm font-semibold text-[var(--color-primary)]">{companyLabel}</span>

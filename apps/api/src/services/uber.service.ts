@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient } from '@tvde/database';
 import { getMonthUtcRange, parseUberCsv, type Role } from '@tvde/shared';
+import { getDriverFleetScope } from './user-vehicle-matching.service';
 
 function decimalToString(value: Prisma.Decimal | number | string): string {
   return String(value);
@@ -22,16 +23,46 @@ export interface UberPaymentItem {
   isPaid: boolean;
 }
 
+async function buildUberWhere(
+  db: PrismaClient,
+  tenantId: string,
+  actorId: string,
+  actorRole: Role,
+  filters: { q?: string } = {}
+): Promise<Prisma.UberPaymentWhereInput> {
+  const where: Prisma.UberPaymentWhereInput = { tenantId };
+  if (filters.q?.trim()) {
+    where.OR = [
+      { driverUuid: { contains: filters.q.trim(), mode: 'insensitive' } },
+      { firstName: { contains: filters.q.trim(), mode: 'insensitive' } },
+      { lastName: { contains: filters.q.trim(), mode: 'insensitive' } },
+    ];
+  }
+
+  const scope = await getDriverFleetScope(db, tenantId, actorId, actorRole);
+  if (scope) {
+    const scoped: Prisma.UberPaymentWhereInput[] = [{ userId: actorId }];
+    if (scope.uuidUber.length) {
+      scoped.push({ driverUuid: { in: scope.uuidUber } });
+    }
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      { OR: scoped },
+    ];
+  }
+
+  return where;
+}
+
 export async function getUberDashboard(
   db: PrismaClient,
   tenantId: string,
-  _actorId: string,
+  actorId: string,
   actorRole: Role,
   monthKey?: string
 ): Promise<UberDashboardStats> {
-  void actorRole;
   const { start, endExclusive, key } = getMonthUtcRange(monthKey);
-  const baseWhere = { tenantId };
+  const baseWhere = await buildUberWhere(db, tenantId, actorId, actorRole);
 
   const [totalPayments, monthAgg] = await Promise.all([
     db.uberPayment.count({ where: baseWhere }),
@@ -51,18 +82,13 @@ export async function getUberDashboard(
 export async function listUberPayments(
   db: PrismaClient,
   tenantId: string,
+  actorId: string,
+  actorRole: Role,
   filters: { q?: string; page?: number }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = 50;
-  const where: Prisma.UberPaymentWhereInput = { tenantId };
-  if (filters.q?.trim()) {
-    where.OR = [
-      { driverUuid: { contains: filters.q.trim(), mode: 'insensitive' } },
-      { firstName: { contains: filters.q.trim(), mode: 'insensitive' } },
-      { lastName: { contains: filters.q.trim(), mode: 'insensitive' } },
-    ];
-  }
+  const where = await buildUberWhere(db, tenantId, actorId, actorRole, filters);
 
   const [total, rows] = await Promise.all([
     db.uberPayment.count({ where }),

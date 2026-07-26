@@ -50,7 +50,7 @@ export class EmailNotConfiguredError extends Error {
   }
 }
 
-interface SmtpConnection {
+export interface SmtpConnection {
   host: string;
   port: number;
   username: string;
@@ -58,7 +58,7 @@ interface SmtpConnection {
   tls: boolean;
   from: string;
   fromName: string | null;
-  source: 'tenant' | 'platform' | 'env';
+  source: 'tenant' | 'platform' | 'env' | 'billing';
 }
 
 interface SendEmailInput {
@@ -69,6 +69,10 @@ interface SendEmailInput {
   /** Nome visível na caixa de entrada (ex.: «ARC», «Edições19deAbril»). */
   fromName?: string | null;
   attachments?: Array<{ filename: string; content: Buffer; cid?: string }>;
+  /** SMTP explícito (ex.: facturação Moloni) — não usa tenant/plataforma/env. */
+  smtpOverride?: SmtpConnection;
+  /** Quando true com smtpOverride, não aplica CC/BCC do SMTP do sistema. */
+  skipDefaultCopies?: boolean;
 }
 
 interface SendTemplateEmailInput {
@@ -189,6 +193,10 @@ function smtpOwnerFilter(tenantId: string | null) {
 
 function renderTemplate(text: string, variables: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => variables[key] ?? '');
+}
+
+export function renderEmailTemplate(text: string, variables: Record<string, string>): string {
+  return renderTemplate(text, variables);
 }
 
 /** Cabeçalho From: «Nome da Loja» <email@dominio.pt> */
@@ -367,9 +375,12 @@ function createTransport(config: SmtpConnection): Transporter {
 }
 
 export async function sendEmail(input: SendEmailInput): Promise<{ messageId: string; source: string }> {
-  const smtp = await resolveSmtpConnection(input.tenantId);
+  const smtp = input.smtpOverride ?? (await resolveSmtpConnection(input.tenantId));
   const transport = createTransport(smtp);
-  const defaultCopies = await resolveDefaultEmailCopies(input.tenantId);
+  const useSystemCopies = !input.skipDefaultCopies && !input.smtpOverride;
+  const defaultCopies = useSystemCopies
+    ? await resolveDefaultEmailCopies(input.tenantId)
+    : { cc: [] as string[], bcc: [] as string[] };
   const copies = mergeCopyRecipients(input.to, defaultCopies.cc, defaultCopies.bcc);
   const fromName = input.fromName ?? smtp.fromName ?? getServerConfig().appName;
 

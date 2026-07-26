@@ -10,6 +10,7 @@ import {
   ToggleLeft,
   ToggleRight,
   Trash2,
+  UserRoundSearch,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -67,11 +68,13 @@ export function UserListCard({
   canToggle,
   canDetails,
   canVehicles,
+  canImpersonate,
   onEdit,
   onDelete,
   onToggleStatus,
   onDetails,
   onVehicles,
+  onImpersonate,
 }: {
   user: UserListItem;
   canEdit?: boolean;
@@ -79,11 +82,13 @@ export function UserListCard({
   canToggle?: boolean;
   canDetails?: boolean;
   canVehicles?: boolean;
+  canImpersonate?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
   onToggleStatus?: () => void;
   onDetails?: () => void;
   onVehicles?: () => void;
+  onImpersonate?: () => void;
 }) {
   const isActive = user.status === 'active';
   const siteId = user.tenant?.siteId;
@@ -127,6 +132,20 @@ export function UserListCard({
           >
             <Info size={15} />
             Details
+          </button>
+        ) : null}
+
+        {canImpersonate ? (
+          <button
+            type="button"
+            title="Personificar"
+            aria-label="Personificar"
+            disabled={!onImpersonate}
+            onClick={onImpersonate}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <UserRoundSearch size={15} />
+            Personificar
           </button>
         ) : null}
 

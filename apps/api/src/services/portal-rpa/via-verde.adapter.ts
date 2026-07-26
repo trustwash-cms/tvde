@@ -168,9 +168,11 @@ async function applyLast30DaysFilter(page: Page) {
   await page.waitForTimeout(1800);
 }
 
-/** Clica «Ver mais» até carregar todos os movimentos do filtro (ex. 358). */
-async function loadAllMovimentosPages(page: Page, maxClicks = 80) {
+/** Clica «Ver mais» até carregar movimentos (orçamento de tempo ~45s). */
+async function loadAllMovimentosPages(page: Page, maxClicks = 40) {
+  const deadline = Date.now() + 45_000;
   for (let i = 0; i < maxClicks; i += 1) {
+    if (Date.now() > deadline) break;
     const btn = page.locator('a, button, span').filter({ hasText: /^\s*Ver mais\s*$/i }).first();
     if (!(await btn.isVisible().catch(() => false))) break;
 
@@ -181,7 +183,7 @@ async function loadAllMovimentosPages(page: Page, maxClicks = 80) {
       .catch(() => '');
 
     await btn.click({ force: true }).catch(() => undefined);
-    await page.waitForTimeout(900);
+    await page.waitForTimeout(700);
 
     const after = await page
       .evaluate(
@@ -458,7 +460,7 @@ export const viaVerdeAdapter: PortalAdapter = {
     try {
       const nav = await gotoMovimentosPage(page);
       if (!nav.ok) {
-        if (await usernameFieldReady(page)) {
+        if (await usernameFieldReady(page) || /login_modal/i.test(nav.debug)) {
           return { status: 'expired', message: 'Sessão Via Verde expirada — volte a ligar a conta' };
         }
         return {

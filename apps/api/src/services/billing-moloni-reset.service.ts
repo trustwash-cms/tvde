@@ -1,4 +1,117 @@
 import { prisma } from '@tvde/database';
+import { isMoloniDemoCompany } from '@tvde/shared';
+import { ensureMoloniAccessToken } from './moloni-connection.service';
+
+export class MoloniDemoPurgeError extends Error {
+  constructor(
+    message: string,
+    public readonly code: 'not_demo' | 'not_connected' | 'no_company' = 'not_demo'
+  ) {
+    super(message);
+    this.name = 'MoloniDemoPurgeError';
+  }
+}
+
+export async function resolveMoloniCompanyName(workspaceId: string): Promise<{
+  companyId: number | null;
+  companyName: string | null;
+  isDemoCompany: boolean;
+}> {
+  try {
+    const { row, moloniClient } = await ensureMoloniAccessToken(workspaceId);
+    if (!row.companyId) {
+      return { companyId: null, companyName: null, isDemoCompany: false };
+    }
+    const companies = await moloniClient.getCompanies();
+    const company = companies.find((c) => c.company_id === row.companyId);
+    const companyName = company?.name ?? null;
+    return {
+      companyId: row.companyId,
+      companyName,
+      isDemoCompany: isMoloniDemoCompany(companyName),
+    };
+  } catch {
+    return { companyId: null, companyName: null, isDemoCompany: false };
+  }
+}
+
+/**
+ * Limpa artefactos locais de testes em modo demonstração Moloni.
+ * Apaga documentos, catálogo local e entidades de facturação (clientes/fornecedores).
+ * Não apaga dados na cloud Moloni; não desliga OAuth nem altera email/SMTP/série documental.
+ * Limpa `default_product_category_id` (fica inválido após wipe do catálogo).
+ */
+export async function purgeMoloniDemoData(workspaceId: string) {
+  const company = await resolveMoloniCompanyName(workspaceId);
+  if (!company.companyId) {
+    throw new MoloniDemoPurgeError(
+      'Empresa Moloni não seleccionada — impossível confirmar modo demonstração.',
+      'no_company'
+    );
+  }
+  if (!company.isDemoCompany) {
+    throw new MoloniDemoPurgeError(
+      company.companyName
+        ? `A empresa ligada («${company.companyName}») não é de demonstração. Esta acção só está disponível com uma empresa Moloni demo.`
+        : 'A empresa Moloni ligada não é de demonstração. Esta acção só está disponível em modo demo.',
+      'not_demo'
+    );
+  }
+
+  const invoiceIds = (
+    await prisma.invoice.findMany({
+      where: { workspaceId },
+      select: { id: true },
+    })
+  ).map((i) => i.id);
+
+  if (invoiceIds.length > 0) {
+    await prisma.adminMgmtFatura.updateMany({
+      where: { workspaceId, billingInvoiceId: { in: invoiceIds } },
+      data: { billingInvoiceId: null },
+    });
+  }
+
+  const invoices = await prisma.invoice.deleteMany({ where: { workspaceId } });
+
+  const catalog = await prisma.billingCatalogItem.deleteMany({ where: { workspaceId } });
+
+  const linkedCmsClients = await prisma.billingEntity.findMany({
+    where: { workspaceId, cmsClientId: { not: null } },
+    select: { cmsClientId: true },
+  });
+  const cmsClientIds = linkedCmsClients
+    .map((e) => e.cmsClientId)
+    .filter((id): id is string => Boolean(id));
+  if (cmsClientIds.length > 0) {
+    await prisma.client.updateMany({
+      where: { id: { in: cmsClientIds } },
+      data: { externalCustomerId: null, billingProvider: null },
+    });
+  }
+
+  await prisma.billingSyncConflict.deleteMany({ where: { workspaceId } });
+
+  // Hard-delete: entidades de facturação (clientes/fornecedores) do workspace.
+  // Cascata Prisma: calendar_scheduled_invoices; SetNull em carwash/admin_mgmt.
+  // Não toca no módulo CRM «Clientes» (tabela clients), só limpa ligação de facturação.
+  const entities = await prisma.billingEntity.deleteMany({ where: { workspaceId } });
+
+  await prisma.billingConnection.updateMany({
+    where: { workspaceId },
+    data: { defaultProductCategoryId: null },
+  });
+
+  return {
+    companyId: company.companyId,
+    companyName: company.companyName,
+    invoicesDeleted: invoices.count,
+    catalogCleared: catalog.count,
+    entitiesDeleted: entities.count,
+    defaultProductCategoryCleared: true as const,
+    moloniCloudUntouched: true as const,
+  };
+}
 
 export async function unlinkStaleMoloniBillingData(
   workspaceId: string,
@@ -31,7 +144,7 @@ export async function unlinkStaleMoloniBillingData(
   if (options?.resetDocumentSet !== false) {
     await prisma.billingConnection.updateMany({
       where: { workspaceId },
-      data: { documentSetId: null },
+      data: { documentSetId: null, defaultProductCategoryId: null },
     });
     documentSetReset = true;
   }

@@ -6,7 +6,7 @@ import { hasMinRole } from './roles';
  *
  * MASTER     → dono da plataforma; vê e acede a tudo
  * superadmin → Gestor de Frota; gere frota, motoristas e staff
- * admin      → Motorista; acede ao que o gestor de frota autorizar
+ * admin      → Motorista; self-service (próprios dados / UUIDs / viaturas)
  * staff      → Staff; acede ao que o motorista/gestor autorizar
  */
 
@@ -46,33 +46,52 @@ export function canToggleUserStatus(actor: Role): boolean {
   return actor === 'master' || actor === 'superadmin';
 }
 
+/** Role interno `admin` = Motorista (self-service). */
+export function isDriverRole(role: Role): boolean {
+  return role === 'admin';
+}
+
+/**
+ * Áreas do dashboard e role mínimo.
+ * Motorista (`admin`) só passa em dashboard + módulos operacionais self-service + meus_pagamentos.
+ * Gestão (users, billing, admin_mgmt, settings, audit, pagamentos gestão) → superadmin+.
+ */
 export const DASHBOARD_ACCESS: Record<string, Role> = {
   dashboard: 'staff',
   tenants: 'master',
   workspaces: 'superadmin',
   clients: 'staff',
-  billing: 'staff',
+  billing: 'superadmin',
   bolt: 'staff',
   uber: 'staff',
   via_verde: 'staff',
   eletricidade: 'staff',
   combustivel: 'staff',
-  pagamentos: 'staff',
+  /** Gestão completa de pagamentos (calculadora / sync) — só gestor+ */
+  pagamentos: 'superadmin',
+  /** Lista dos próprios payment_reports — motorista e acima */
+  meus_pagamentos: 'admin',
+  /** Documentos pessoais do motorista (consulta) */
+  documentos: 'admin',
   calendar: 'staff',
-  admin_mgmt: 'staff',
-  users: 'admin',
+  admin_mgmt: 'superadmin',
+  users: 'superadmin',
   modules: 'superadmin',
-  audit: 'admin',
-  settings: 'staff',
+  audit: 'superadmin',
+  settings: 'superadmin',
 };
 
 export function canAccessDashboardArea(actor: Role, area: keyof typeof DASHBOARD_ACCESS): boolean {
   return hasMinRole(actor, DASHBOARD_ACCESS[area]);
 }
 
-/** Clientes: motoristas e staff. MASTER → Tenants; Gestor de Frota → Utilizadores. */
+/** Clientes: staff (não motorista). MASTER → Tenants; Gestor → Utilizadores. */
 export function canAccessClientsDashboard(actor: Role): boolean {
-  if (actor === 'master' || actor === 'superadmin') return false;
+  if (actor === 'master' || actor === 'superadmin' || isDriverRole(actor)) return false;
   return hasMinRole(actor, DASHBOARD_ACCESS.clients);
 }
 
+/** Motorista: self-service (Uber/Bolt/VV/etc. filtrados + meus pagamentos + perfil). */
+export function canAccessDriverSelfService(actor: Role): boolean {
+  return isDriverRole(actor);
+}

@@ -3,6 +3,7 @@ import {
   USER_DOCUMENT_MAX_BYTES,
   canEditUserProfile,
   canViewUserProfile,
+  hasMinRole,
   isAllowedUserDocumentMime,
   type Role,
   type UserDocumentItem,
@@ -50,6 +51,8 @@ const userSelect = {
   createdAt: true,
   twoFaMethod: true,
   tenantId: true,
+  avatarStorageKey: true,
+  avatarUpdatedAt: true,
   tenant: { select: { id: true, siteId: true, name: true } },
 } satisfies Prisma.UserSelect;
 
@@ -125,6 +128,18 @@ function assertTenantScope(
   }
 }
 
+/** MASTER não aparece na gestão de outros users; pode aceder ao próprio perfil. */
+function assertProfileTargetVisible(
+  user: { role: string } | null,
+  actorId: string,
+  targetUserId: string
+): asserts user is NonNullable<typeof user> {
+  if (!user) throw new UserProfileNotFoundError();
+  if (user.role === 'master' && actorId !== targetUserId) {
+    throw new UserProfileNotFoundError();
+  }
+}
+
 export async function getUserProfileDetail(
   db: PrismaClient,
   actorId: string,
@@ -133,13 +148,11 @@ export async function getUserProfileDetail(
   targetUserId: string
 ): Promise<UserProfileDetail> {
   const user = await getTargetUser(db, targetUserId);
-  if (!user || user.role === 'master') {
-    throw new UserProfileNotFoundError();
-  }
+  assertProfileTargetVisible(user, actorId, targetUserId);
 
   assertTenantScope(actorRole, actorTenantId, user.tenantId);
 
-  if (!canViewUserProfile(actorId, actorRole, user.id, user.role)) {
+  if (!canViewUserProfile(actorId, actorRole, user.id, user.role as Role)) {
     throw new UserProfileAccessError();
   }
 
@@ -163,6 +176,8 @@ export async function getUserProfileDetail(
       lastLoginAt: user.lastLoginAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(),
       twoFaMethod: user.twoFaMethod,
+      avatarStorageKey: user.avatarStorageKey,
+      avatarUpdatedAt: user.avatarUpdatedAt?.toISOString() ?? null,
       tenant: user.tenant,
     },
     profile: mapProfile(profile),
@@ -193,13 +208,11 @@ export async function updateUserProfile(
   ipAddress?: string
 ): Promise<UserProfileDetail> {
   const user = await getTargetUser(db, targetUserId);
-  if (!user || user.role === 'master') {
-    throw new UserProfileNotFoundError();
-  }
+  assertProfileTargetVisible(user, actorId, targetUserId);
 
   assertTenantScope(actorRole, actorTenantId, user.tenantId);
 
-  if (!canEditUserProfile(actorId, actorRole, user.id, user.role)) {
+  if (!canEditUserProfile(actorId, actorRole, user.id, user.role as Role)) {
     throw new UserProfileAccessError();
   }
 
@@ -271,6 +284,10 @@ export async function uploadUserDocument(
 
   assertTenantScope(actorRole, actorTenantId, user.tenantId);
 
+  if (!hasMinRole(actorRole, 'superadmin')) {
+    throw new UserProfileAccessError('Apenas gestores podem carregar documentos');
+  }
+
   if (!canEditUserProfile(actorId, actorRole, user.id, user.role)) {
     throw new UserProfileAccessError();
   }
@@ -341,6 +358,10 @@ export async function deleteUserDocument(
   }
 
   assertTenantScope(actorRole, actorTenantId, user.tenantId);
+
+  if (!hasMinRole(actorRole, 'superadmin')) {
+    throw new UserProfileAccessError('Apenas gestores podem eliminar documentos');
+  }
 
   if (!canEditUserProfile(actorId, actorRole, user.id, user.role)) {
     throw new UserProfileAccessError();

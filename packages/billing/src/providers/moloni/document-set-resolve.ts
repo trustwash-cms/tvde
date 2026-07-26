@@ -172,12 +172,27 @@ export function assessMoloniDocumentSet(
   };
 }
 
-/** Mensagem legível para erros Moloni de série documental / AT. */
+/** Mensagem legível para erros Moloni de série documental / AT / categoria / produto. */
 export function formatMoloniDocumentSetError(message: string): string {
-  if (!/document_set_id|document_set_wsat_id/i.test(message)) return message;
-  return (
-    'Série documental Moloni inválida ou não comunicada à AT. ' +
-    'Em Definições → Moloni, seleccione a série correcta (ex. M2026) e confirme a comunicação à Autoridade Tributária. ' +
-    `Detalhe Moloni: ${message}`
-  );
+  if (/document_set_id|document_set_wsat_id/i.test(message)) {
+    return (
+      'Série documental Moloni inválida ou não comunicada à AT. ' +
+      'Em Definições → Moloni, seleccione a série correcta (ex. M2026) e confirme a comunicação à Autoridade Tributária. ' +
+      `Detalhe Moloni: ${message}`
+    );
+  }
+  if (/categor|category_id/i.test(message) && !/categoria por defeito/i.test(message)) {
+    return (
+      'Categoria Moloni em falta ou inválida na linha do documento. ' +
+      'Seleccione uma categoria por defeito em Configurações → Moloni (necessária para linhas manuais). ' +
+      `Detalhe: ${message}`
+    );
+  }
+  if (/product_id/i.test(message) && !/sem product_id/i.test(message)) {
+    return (
+      'Artigo Moloni em falta na linha — para linhas manuais configure a categoria por defeito em Configurações → Moloni. ' +
+      `Detalhe: ${message}`
+    );
+  }
+  return message;
 }

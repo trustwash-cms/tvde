@@ -22,6 +22,11 @@ import {
   searchMoloniProducts,
   upsertMoloniConfig,
 } from '../services/billing.service';
+import {
+  getBillingEmailPublicSettings,
+  sendBillingSmtpTestEmail,
+  upsertBillingEmailSettings,
+} from '../services/billing-email.service';
 import { applyRecommendedMoloniDocumentSet } from '../services/moloni-document-set-health.service';
 import {
   archiveBillingEntity,
@@ -62,7 +67,11 @@ import {
   syncDocumentsFromMoloni,
   syncEntitiesFromMoloni,
 } from '../services/billing-sync.service';
-import { unlinkStaleMoloniBillingData } from '../services/billing-moloni-reset.service';
+import {
+  MoloniDemoPurgeError,
+  purgeMoloniDemoData,
+  unlinkStaleMoloniBillingData,
+} from '../services/billing-moloni-reset.service';
 import { dedupeBillingEntitiesInWorkspace } from '../services/billing-entity-dedupe.service';
 
 const metadataSchema = z
@@ -850,6 +859,44 @@ export async function billingRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.post('/billing/moloni/purge-demo-data', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+
+    try {
+      const data = await purgeMoloniDemoData(workspaceId);
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'billing.moloni_demo_purge',
+        entityType: 'billing_connection',
+        entityId: workspaceId,
+        ipAddress: request.ip,
+        afterJson: data,
+      });
+      return reply.send({
+        success: true,
+        data,
+        message:
+          `Dados locais do modo demonstração limpos (${data.invoicesDeleted} documentos, ` +
+          `${data.entitiesDeleted} entidades de facturação, ${data.catalogCleared} itens de catálogo). ` +
+          'A ligação OAuth, a série documental e as definições de email/SMTP mantêm-se; a categoria por defeito foi limpa. ' +
+          'Documentos, entidades e produtos na conta demo Moloni (cloud) podem continuar a existir — limpe-os na interface Moloni se necessário. ' +
+          'Use «Sincronizar agora» para reimportar catálogo e entidades.',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao limpar dados demo';
+      const status = err instanceof MoloniDemoPurgeError && err.code === 'not_demo' ? 403 : 400;
+      return reply.status(status).send({ success: false, error: message, message });
+    }
+  });
+
   fastify.post('/billing/sync/catalog', async (request, reply) => {
     const query = request.query as { workspaceId?: string };
     const { workspaceId } = await resolveWorkspaceTenantScope(
@@ -1319,6 +1366,9 @@ export async function billingRoutes(fastify: FastifyInstance) {
         clientSecret: z.string().min(1).optional(),
         companyId: z.coerce.number().int().optional(),
         documentSetId: z.coerce.number().int().optional(),
+        defaultProductCategoryId: z
+          .union([z.coerce.number().int().positive(), z.null()])
+          .optional(),
         redirectUri: z.string().url(),
       })
       .parse(request.body);
@@ -1335,6 +1385,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
       clientSecret: body.clientSecret,
       companyId: body.companyId,
       documentSetId: body.documentSetId,
+      defaultProductCategoryId: body.defaultProductCategoryId,
       redirectUri: body.redirectUri,
     });
 
@@ -1348,6 +1399,112 @@ export async function billingRoutes(fastify: FastifyInstance) {
     });
 
     return reply.send({ success: true, data: config, message: 'Moloni configurado' });
+  });
+
+  fastify.get('/billing/moloni/email-config', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const { workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      (request.query as { workspaceId?: string }).workspaceId
+    );
+    const data = await getBillingEmailPublicSettings(workspaceId);
+    return reply.send({ success: true, data });
+  });
+
+  fastify.put('/billing/moloni/email-config', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        brandName: z.string().max(255).nullable().optional(),
+        footerText: z.string().max(2000).nullable().optional(),
+        supportEmail: z
+          .union([z.string().email(), z.literal(''), z.null()])
+          .optional(),
+        smtpHost: z.string().max(255).nullable().optional(),
+        smtpPort: z.coerce.number().int().min(1).max(65535).nullable().optional(),
+        smtpUsername: z.string().max(255).nullable().optional(),
+        smtpPassword: z.string().min(1).optional(),
+        smtpFromEmail: z
+          .union([z.string().email(), z.literal(''), z.null()])
+          .optional(),
+        smtpFromName: z.string().max(255).nullable().optional(),
+        smtpTls: z.boolean().optional(),
+        clearSmtpPassword: z.boolean().optional(),
+      })
+      .parse(request.body);
+
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+
+    try {
+      const data = await upsertBillingEmailSettings(workspaceId, {
+        brandName: body.brandName,
+        footerText: body.footerText,
+        supportEmail: body.supportEmail === '' ? null : body.supportEmail,
+        smtpHost: body.smtpHost,
+        smtpPort: body.smtpPort,
+        smtpUsername: body.smtpUsername,
+        smtpPassword: body.smtpPassword,
+        smtpFromEmail: body.smtpFromEmail === '' ? null : body.smtpFromEmail,
+        smtpFromName: body.smtpFromName,
+        smtpTls: body.smtpTls,
+        clearSmtpPassword: body.clearSmtpPassword,
+      });
+
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'billing.email_config_updated',
+        entityType: 'billing_connection',
+        entityId: workspaceId,
+        ipAddress: request.ip,
+      });
+
+      return reply.send({ success: true, data, message: 'Email de facturação guardado' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao guardar email de facturação';
+      return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.post('/billing/moloni/email-test', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        to: z.string().email(),
+      })
+      .parse(request.body);
+
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+
+    try {
+      const result = await sendBillingSmtpTestEmail({
+        workspaceId,
+        tenantId,
+        to: body.to,
+      });
+      return reply.send({
+        success: true,
+        data: result,
+        message: 'Email de teste enviado',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha no teste SMTP';
+      return reply.status(400).send({ success: false, error: message });
+    }
   });
 
   fastify.get('/billing/moloni/auth-url', {

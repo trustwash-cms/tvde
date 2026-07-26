@@ -38,6 +38,8 @@ export interface PortalConnectionPublic {
   status: PortalConnectionStatus;
   usernameMasked: string | null;
   hasSession: boolean;
+  /** Password AES-GCM guardada no servidor (nunca devolvida em claro) */
+  hasPassword: boolean;
   lastLoginAt: string | null;
   lastSyncAt: string | null;
   lastError: string | null;
@@ -59,8 +61,12 @@ export interface PortalConnectionPublic {
 }
 
 export interface PortalConnectInput {
-  username: string;
-  password: string;
+  /** Opcional se já há username guardado e useStoredCredentials */
+  username?: string;
+  /** Opcional se já há password guardada e useStoredCredentials */
+  password?: string;
+  /** Reutilizar username/password encriptados no servidor */
+  useStoredCredentials?: boolean;
 }
 
 export interface PortalOtpInput {

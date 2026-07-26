@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { login, logout, getActiveSessions, revokeSession, buildJwtPayload, requestPasswordReset, resetPassword, changePassword, verifyUserPassword } from '../services/auth.service';
+import { login, logout, getActiveSessions, revokeSession, buildJwtPayload, requestPasswordReset, resetPassword, changePassword, verifyUserPassword, startImpersonation, stopImpersonation, ImpersonationError } from '../services/auth.service';
 import {
   setup2fa,
   verify2faSetup,
@@ -121,8 +121,106 @@ export async function authRoutes(fastify: FastifyInstance) {
       request.user.workspaceId
     );
 
+    let impersonation: {
+      active: true;
+      impersonatorId: string;
+      impersonatorEmail: string | null;
+    } | null = null;
+
+    if (request.user.impersonatorId) {
+      const master = await fastify.db.user.findUnique({
+        where: { id: request.user.impersonatorId },
+        select: { id: true, email: true },
+      });
+      if (master) {
+        impersonation = {
+          active: true,
+          impersonatorId: master.id,
+          impersonatorEmail: master.email,
+        };
+      }
+    }
+
     const { passwordHash, twoFaSecret, backupCodes, ...safe } = user!;
-    return reply.send({ success: true, data: { ...safe, capabilities } });
+    return reply.send({
+      success: true,
+      data: { ...safe, capabilities, impersonation },
+    });
+  });
+
+  fastify.post('/auth/impersonate', {
+    preHandler: [fastify.authenticate, fastify.requireRole('master')],
+  }, async (request, reply) => {
+    const body = z.object({ userId: z.string().uuid() }).parse(request.body);
+
+    try {
+      const result = await startImpersonation({
+        masterId: request.user.sub,
+        masterRole: request.user.role,
+        masterSessionId: request.user.sessionId,
+        targetUserId: body.userId,
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      const payload = await buildJwtPayload(result.user.id, result.sessionId);
+      if (!payload) {
+        return reply.status(400).send({ success: false, error: 'Não foi possível criar a sessão personificada' });
+      }
+
+      const accessToken = fastify.jwt.sign(payload);
+      return reply.send({
+        success: true,
+        data: {
+          accessToken,
+          refreshToken: result.refreshToken,
+          user: result.user,
+        },
+        message: 'Personificação iniciada',
+      });
+    } catch (err) {
+      const message = err instanceof ImpersonationError ? err.message : 'Falha ao personificar';
+      const status = err instanceof ImpersonationError ? 403 : 400;
+      return reply.status(status).send({ success: false, error: message });
+    }
+  });
+
+  fastify.post('/auth/impersonate/stop', {
+    preHandler: [fastify.authenticate],
+  }, async (request, reply) => {
+    if (!request.user.impersonatorId) {
+      return reply.status(400).send({ success: false, error: 'Não está em modo de personificação' });
+    }
+
+    try {
+      const result = await stopImpersonation({
+        currentUserId: request.user.sub,
+        currentSessionId: request.user.sessionId,
+        impersonatorId: request.user.impersonatorId,
+        ipAddress: request.ip,
+        accessToken: getBearerToken(request) ?? undefined,
+      });
+
+      const payload = await buildJwtPayload(result.user.id, result.sessionId);
+      if (!payload) {
+        return reply.status(400).send({ success: false, error: 'Não foi possível restaurar a sessão MASTER' });
+      }
+
+      const accessToken = fastify.jwt.sign(payload);
+      return reply.send({
+        success: true,
+        data: {
+          accessToken,
+          refreshToken: result.refreshToken,
+          user: result.user,
+        },
+        message: 'Personificação terminada',
+      });
+    } catch (err) {
+      const message = err instanceof ImpersonationError ? err.message : 'Falha ao sair da personificação';
+      const status = err instanceof ImpersonationError ? 403 : 400;
+      return reply.status(status).send({ success: false, error: message });
+    }
   });
 
   fastify.get('/auth/sessions', { preHandler: [fastify.authenticate] }, async (request, reply) => {

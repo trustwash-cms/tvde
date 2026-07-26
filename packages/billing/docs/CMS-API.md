@@ -404,6 +404,8 @@ Fila de conflitos (`status=open` por defeito).
 | PUT | `/billing/moloni/config` | **superadmin** | Guardar credenciais + company + série |
 | GET | `/billing/moloni/auth-url` | **superadmin** | URL OAuth + state assinado |
 | GET | `/billing/moloni/callback` | — | Callback OAuth (redirect browser) |
+| POST | `/billing/moloni/reset-links` | **superadmin** | Remover IDs Moloni locais (entidades + catálogo) |
+| POST | `/billing/moloni/purge-demo-data` | **superadmin** | Limpar documentos/tokens/catálogo/entidades locais (só empresa demo) |
 
 ### `PUT /billing/moloni/config`
 
@@ -418,6 +420,26 @@ Fila de conflitos (`status=open` por defeito).
 ```
 
 **Audit:** `billing.moloni_config_updated`
+
+### `POST /billing/moloni/purge-demo-data?workspaceId=`
+
+Limpa artefactos **locais** criados ao testar com a empresa Moloni de demonstração.
+
+**Pré-requisito:** a empresa seleccionada tem nome que corresponde a `/demonstra/i` (ex. «Empresa de Demonstração»). Caso contrário responde **403**.
+
+**Apaga / limpa no CMS:**
+
+- todos os `invoices` do workspace (rascunhos + emitidos) e linhas / tokens de download (cascade)
+- cache `billing_catalog_items` (séries, impostos)
+- **hard-delete** de `billing_entities` (clientes e fornecedores de facturação) e respetivos `billing_sync_conflicts`
+- `default_product_category_id` → null
+- desliga `clients.external_customer_id` / `billing_provider` quando a entidade tinha `cms_client_id`
+
+**Mantém:** OAuth, `company_id`, série (`document_set_id`), branding/SMTP de email de faturas, utilizadores, módulo CRM «Clientes», calendário (exceto agendamentos de fatura ligados às entidades apagadas), etc.
+
+**Não** apaga documentos/entidades/categorias na cloud Moloni (a API demo pode reter dados — limpar na UI Moloni se necessário).
+
+**Audit:** `billing.moloni_demo_purge`
 
 ---
 
@@ -470,4 +492,5 @@ Ver [EMAIL.md](./EMAIL.md).
 | `invoice.issue_moloni` | POST /invoices/:id/issue |
 | `invoice.send_email` | POST /invoices/:id/send-email |
 | `billing.moloni_config_updated` | PUT /billing/moloni/config |
+| `billing.moloni_demo_purge` | POST /billing/moloni/purge-demo-data |
 | `billing_entity.create` | POST /billing/entities |

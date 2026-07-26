@@ -102,8 +102,9 @@ Ao confirmar: movimentos Via Verde / eletricidade / combustível / Uber / Bolt i
 Sequência: Uber → Bolt → Via Verde → Prio (frota + electricidade).
 
 - Uber: lista relatórios; se há match no intervalo → escolher último existente ou gerar novo.
-- Em erro de timeout/sessão: botões **Login** + **Repetir** por linha.
-- Se o portal já está em **`awaiting_otp`** (ex. MyPRIO SMS): **Login** abre o modal do código OTP (igual ao Combustível/Eletricidade), sem criar outro job de connect. Depois de validar, o sync desse fornecedor retoma. `POST …/sync` com job OTP activo devolve mensagem clara («Portal à espera de OTP…») em vez de «já existe um job».
+- Em erro: **Repetir** sempre. **Login** só se a API indicar sessão expirada / desligada / OTP — **não** em timeout genérico («Timeout Playwright» / poll). Se fosse falta de login, o sync Via Verde falha cedo (`expired`), não após 5 minutos.
+- Se o portal já está em **`awaiting_otp`** (ex. MyPRIO SMS): **Login** abre o modal do código OTP, sem criar outro job de connect.
+- Se há **password guardada** (`hasPassword`): **Login** oferece **Continuar** sem digitar; opções **Introduzir outra password** e **Esquecer password**. **Desligar** remove password + sessão; **Esquecer** remove só a password.
 - Contas portal: botão **Limpar** remove avisos persistentes sem desligar.
 - Confirmações destrutivas (eliminar pagamento, marcar pendente) usam **`ConfirmDialog`** da app — nunca `window.confirm`.
 
@@ -140,4 +141,4 @@ Hoje o cálculo usa o **mesmo cartão PRIO** (`numCartaoPrio`) / nome para eletr
 
 ---
 
-*Actualizado 2026-07-22 — OTP no sync de Pagamentos; ConfirmDialog (sem window.confirm).*
+*Actualizado 2026-07-22 — reutilizar password guardada no Login; Esquecer password; ConfirmDialog.*

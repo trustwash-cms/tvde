@@ -221,16 +221,19 @@ Copiar `.env.example` → `.env` na **raiz** do projecto. Todos os workspaces le
 
 ### Moloni + Cloudflare Tunnel (produção)
 
-Moloni **não aceita** `localhost` no callback OAuth. Com túnel Cloudflare:
+Moloni **não aceita** `localhost` no callback OAuth. Com túnel Cloudflare (`tvde.one`):
 
 ```env
-NEXT_PUBLIC_API_PUBLIC_URL="https://api.seudominio.pt/api/v1"
-NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.seudominio.pt/api/v1/billing/moloni/callback"
-CORS_ORIGIN="https://app.seudominio.pt"
-WEB_PUBLIC_URL="https://app.seudominio.pt"
-NEXT_PUBLIC_API_URL="https://api.seudominio.pt/api/v1"
+NEXT_PUBLIC_API_PUBLIC_URL="https://api.tvde.one/api/v1"
+NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.tvde.one/api/v1/billing/moloni/callback"
+API_PUBLIC_URL="https://api.tvde.one/api/v1"
+CORS_ORIGIN="https://fleet.tvde.one"
+WEB_PUBLIC_URL="https://fleet.tvde.one"
+NEXT_PUBLIC_API_URL="https://api.tvde.one/api/v1"
 BILLING_SYNC_SECRET="secret-forte-para-cron-sync"
 ```
+
+**URI a registar no Moloni Developer:** `https://api.tvde.one/api/v1/billing/moloni/callback`
 
 ### Seed (só desenvolvimento / primeira instalação)
 
@@ -600,8 +603,8 @@ No `.env` de produção, todas as URLs públicas devem usar `https://app.seudomi
 
 ### 13.4 Moloni em produção
 
-1. Configurar app Moloni com redirect URI = `NEXT_PUBLIC_MOLONI_REDIRECT_URI`
-2. No dashboard: Config → Moloni → ligar conta por workspace
+1. Configurar app Moloni com redirect URI = `https://api.tvde.one/api/v1/billing/moloni/callback`
+2. No dashboard: Config → Moloni → confirmar Redirect URI → Guardar → ligar conta por workspace
 3. Cron sync (opcional): chamar `POST /api/v1/billing/sync/cron` com header `X-Billing-Sync-Secret`
 
 ### 13.5 Checklist pós-deploy
