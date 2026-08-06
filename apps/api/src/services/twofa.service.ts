@@ -4,7 +4,7 @@ import { getServerConfig } from '@tvde/shared/server';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
 import type { TwoFaMethod } from '@prisma/client';
-import { decrypt, encrypt, generateToken, hashToken } from '../lib/crypto';
+import { decrypt, encrypt, generateToken, hashToken, isCryptoAuthFailure } from '../lib/crypto';
 import { verifyPassword } from '../lib/password';
 import { createAuditLog } from './audit.service';
 import { assertLoginSiteId } from '../lib/login-site-id';
@@ -130,12 +130,27 @@ export async function get2faMethodOptions(userId: string, role: string): Promise
     await resolveSmtpConnection(user?.tenantId ?? null);
     emailOk = true;
   } catch (err) {
-    if (!(err instanceof EmailNotConfiguredError)) throw err;
-    try {
-      await resolveSmtpConnection(null);
-      emailOk = true;
-    } catch (inner) {
-      if (!(inner instanceof EmailNotConfiguredError)) throw inner;
+    if (err instanceof EmailNotConfiguredError) {
+      try {
+        await resolveSmtpConnection(null);
+        emailOk = true;
+      } catch (inner) {
+        if (!(inner instanceof EmailNotConfiguredError)) {
+          // Password SMTP ilegível (ENCRYPTION_KEY) — não bloquear TOTP/SMS.
+          emailReason =
+            isCryptoAuthFailure(inner)
+              ? 'SMTP ilegível (ENCRYPTION_KEY) — volte a guardar a password em Configurações → SMTP'
+              : inner instanceof Error
+                ? inner.message
+                : emailReason;
+        }
+      }
+    } else {
+      emailReason = isCryptoAuthFailure(err)
+        ? 'SMTP ilegível (ENCRYPTION_KEY) — volte a guardar a password em Configurações → SMTP'
+        : err instanceof Error
+          ? err.message
+          : emailReason;
     }
   }
 
