@@ -313,6 +313,75 @@ export async function deleteAdminMgmtFatura(id: string, workspaceId: string, ten
   return true;
 }
 
+function uniqueIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+}
+
+export async function bulkMarkAdminMgmtFaturasPaid(
+  ids: string[],
+  workspaceId: string,
+  tenantId: string,
+  input: { dataPagamento: string; metodoPagamento: string }
+) {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) throw new Error('Seleccione pelo menos uma fatura');
+
+  let updated = 0;
+  let skipped = 0;
+  for (const id of unique) {
+    const data = await markAdminMgmtFaturaPaid(id, workspaceId, tenantId, input);
+    if (data) updated++;
+    else skipped++;
+  }
+  return { updated, skipped, requested: unique.length };
+}
+
+export async function bulkMarkAdminMgmtFaturasPending(
+  ids: string[],
+  workspaceId: string,
+  tenantId: string,
+  options: { pin: string }
+) {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) throw new Error('Seleccione pelo menos uma fatura');
+
+  const settings = await getAdminMgmtSettings(workspaceId, tenantId);
+  if (!settings.securityPinConfigured) {
+    throw new Error('Defina o PIN de Segurança em Configurações antes de reverter pagamentos');
+  }
+  const pin = options.pin?.trim() ?? '';
+  if (!pin) throw new Error('PIN de Segurança é obrigatório');
+  const valid = await verifyAdminMgmtSecurityPin(workspaceId, tenantId, pin);
+  if (!valid) throw new Error('PIN de Segurança incorrecto');
+
+  let updated = 0;
+  let skipped = 0;
+  for (const id of unique) {
+    const data = await markAdminMgmtFaturaPending(id, workspaceId, tenantId, { internal: true });
+    if (data) updated++;
+    else skipped++;
+  }
+  return { updated, skipped, requested: unique.length };
+}
+
+export async function bulkDeleteAdminMgmtFaturas(
+  ids: string[],
+  workspaceId: string,
+  tenantId: string
+) {
+  const unique = uniqueIds(ids);
+  if (unique.length === 0) throw new Error('Seleccione pelo menos uma fatura');
+
+  let deleted = 0;
+  let skipped = 0;
+  for (const id of unique) {
+    const ok = await deleteAdminMgmtFatura(id, workspaceId, tenantId);
+    if (ok) deleted++;
+    else skipped++;
+  }
+  return { deleted, skipped, requested: unique.length };
+}
+
 export async function uploadFaturaAnexo(
   faturaId: string,
   workspaceId: string,

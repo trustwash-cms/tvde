@@ -53,6 +53,9 @@ import {
   markAdminMgmtFaturaPaid,
   markAdminMgmtFaturaPending,
   deleteAdminMgmtFatura,
+  bulkMarkAdminMgmtFaturasPaid,
+  bulkMarkAdminMgmtFaturasPending,
+  bulkDeleteAdminMgmtFaturas,
   uploadFaturaAnexo,
   deleteFaturaAnexo,
   getFaturaAnexoForDownload,
@@ -629,6 +632,58 @@ export async function adminMgmtRoutes(fastify: FastifyInstance) {
     try {
       const data = await createAdminMgmtFatura(workspaceId, tenantId, body);
       return reply.status(201).send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  const faturaIdsBody = z.object({
+    workspaceId: z.string().uuid().optional(),
+    ids: z.array(z.string().uuid()).min(1).max(200),
+  });
+
+  fastify.post('/admin-mgmt/faturas/bulk/mark-paid', async (request, reply) => {
+    const body = faturaIdsBody
+      .extend({
+        dataPagamento: z.string(),
+        metodoPagamento: z.string(),
+      })
+      .parse(request.body);
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId);
+    try {
+      const data = await bulkMarkAdminMgmtFaturasPaid(body.ids, workspaceId, tenantId, {
+        dataPagamento: body.dataPagamento,
+        metodoPagamento: body.metodoPagamento,
+      });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/admin-mgmt/faturas/bulk/mark-pending', async (request, reply) => {
+    const body = faturaIdsBody
+      .extend({
+        pin: z.string().min(4).max(12),
+      })
+      .parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId);
+    try {
+      const data = await bulkMarkAdminMgmtFaturasPending(body.ids, workspaceId, tenantId, {
+        pin: body.pin,
+      });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/admin-mgmt/faturas/bulk/delete', async (request, reply) => {
+    const body = faturaIdsBody.parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId);
+    try {
+      const data = await bulkDeleteAdminMgmtFaturas(body.ids, workspaceId, tenantId);
+      return reply.send({ success: true, data });
     } catch (err) {
       return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
     }

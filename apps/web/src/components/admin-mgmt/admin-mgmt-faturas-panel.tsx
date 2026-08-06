@@ -109,10 +109,13 @@ export function AdminMgmtFaturasPanel() {
   const [viewFatura, setViewFatura] = useState<FaturaRow | null>(null);
   const [paidModal, setPaidModal] = useState<FaturaRow | null>(null);
   const [pendingModal, setPendingModal] = useState<FaturaRow | null>(null);
+  const [bulkPaidOpen, setBulkPaidOpen] = useState(false);
+  const [bulkPendingOpen, setBulkPendingOpen] = useState(false);
   const [pendingPin, setPendingPin] = useState('');
   const [anexosModal, setAnexosModal] = useState<FaturaRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const anexoInputRef = useRef<HTMLInputElement>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
@@ -413,6 +416,34 @@ export function AdminMgmtFaturasPanel() {
     } else setError(getApiErrorMessage(res));
   }
 
+  async function submitBulkPaid(e: FormEvent) {
+    e.preventDefault();
+    if (!workspaceId || selectedRows.length === 0) return;
+    setSaving(true);
+    setBulkBusy(true);
+    setError('');
+    const res = await apiFetch(
+      API_PATHS.adminMgmt.faturasBulkMarkPaid,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId,
+          ids: selectedRows.map((r) => r.id),
+          dataPagamento: paidForm.dataPagamento,
+          metodoPagamento: paidForm.metodoPagamento,
+        }),
+      },
+      getStoredToken()
+    );
+    setSaving(false);
+    setBulkBusy(false);
+    if (res.success) {
+      setBulkPaidOpen(false);
+      setSelectedIds(new Set());
+      load();
+    } else setError(getApiErrorMessage(res));
+  }
+
   async function submitMarkPending(e: FormEvent) {
     e.preventDefault();
     if (!workspaceId || !pendingModal) return;
@@ -437,10 +468,87 @@ export function AdminMgmtFaturasPanel() {
     } else setError(getApiErrorMessage(res));
   }
 
+  async function submitBulkMarkPending(e: FormEvent) {
+    e.preventDefault();
+    if (!workspaceId || selectedRows.length === 0) return;
+    const pin = pendingPin.trim();
+    if (!pin) {
+      setError('Introduza o PIN de Segurança');
+      return;
+    }
+    setSaving(true);
+    setBulkBusy(true);
+    setError('');
+    const res = await apiFetch(
+      API_PATHS.adminMgmt.faturasBulkMarkPending,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId,
+          ids: selectedRows.map((r) => r.id),
+          pin,
+        }),
+      },
+      getStoredToken()
+    );
+    setSaving(false);
+    setBulkBusy(false);
+    if (res.success) {
+      setBulkPendingOpen(false);
+      setPendingPin('');
+      setSelectedIds(new Set());
+      load();
+    } else setError(getApiErrorMessage(res));
+  }
+
   function openMarkPending(fatura: FaturaRow) {
     setPendingPin('');
     setError('');
     setPendingModal(fatura);
+  }
+
+  function openBulkPaid() {
+    setPaidForm({
+      dataPagamento: new Date().toISOString().slice(0, 10),
+      metodoPagamento: 'transferencia',
+    });
+    setError('');
+    setBulkPaidOpen(true);
+  }
+
+  function openBulkPending() {
+    setPendingPin('');
+    setError('');
+    setBulkPendingOpen(true);
+  }
+
+  async function removeBulk() {
+    if (!workspaceId || selectedRows.length === 0) return;
+    const ok = await confirm({
+      title: 'Eliminar faturas',
+      message: `Eliminar ${selectedRows.length} fatura(s) seleccionada(s)? Esta acção não pode ser anulada.`,
+      confirmLabel: 'Eliminar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    const res = await apiFetch(
+      API_PATHS.adminMgmt.faturasBulkDelete,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId,
+          ids: selectedRows.map((r) => r.id),
+        }),
+      },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (res.success) {
+      setSelectedIds(new Set());
+      load();
+    } else setError(getApiErrorMessage(res));
   }
 
   async function toggleNotificarCliente(fatura: FaturaRow) {
@@ -613,7 +721,34 @@ export function AdminMgmtFaturasPanel() {
             <button
               type="button"
               className="btn-secondary inline-flex items-center gap-1.5 text-xs"
-              disabled={exporting !== null}
+              disabled={bulkBusy || saving}
+              onClick={openBulkPaid}
+            >
+              <CheckCircle size={13} />
+              Marcar como pago
+            </button>
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+              disabled={bulkBusy || saving}
+              onClick={openBulkPending}
+            >
+              <RotateCcw size={13} />
+              Marcar como pendente
+            </button>
+            <button
+              type="button"
+              className="btn-danger inline-flex items-center gap-1.5 text-xs"
+              disabled={bulkBusy || saving}
+              onClick={() => void removeBulk()}
+            >
+              <Trash2 size={13} />
+              Apagar
+            </button>
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+              disabled={exporting !== null || bulkBusy}
               onClick={() => void handleExport('excel')}
             >
               <FileSpreadsheet size={13} />
@@ -622,7 +757,7 @@ export function AdminMgmtFaturasPanel() {
             <button
               type="button"
               className="btn-secondary inline-flex items-center gap-1.5 text-xs"
-              disabled={exporting !== null}
+              disabled={exporting !== null || bulkBusy}
               onClick={() => void handleExport('pdf')}
             >
               <FileDown size={13} />
@@ -631,6 +766,7 @@ export function AdminMgmtFaturasPanel() {
             <button
               type="button"
               className="text-xs text-slate-500 hover:text-slate-700"
+              disabled={bulkBusy}
               onClick={() => setSelectedIds(new Set())}
             >
               Limpar selecção
@@ -1045,6 +1181,49 @@ export function AdminMgmtFaturasPanel() {
         )}
       </Modal>
 
+      <Modal
+        open={bulkPaidOpen}
+        onClose={() => setBulkPaidOpen(false)}
+        title="Marcar como pago"
+        panelClassName="max-w-sm"
+      >
+        <form onSubmit={(e) => void submitBulkPaid(e)} className="space-y-3">
+          <p className="text-sm text-slate-600">
+            Aplicar a {selectedCount} fatura(s) seleccionada(s).
+          </p>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Data pagamento *</label>
+            <input
+              className="input"
+              type="date"
+              value={paidForm.dataPagamento}
+              onChange={(e) => setPaidForm({ ...paidForm, dataPagamento: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">Método *</label>
+            <select
+              className="input"
+              value={paidForm.metodoPagamento}
+              onChange={(e) => setPaidForm({ ...paidForm, metodoPagamento: e.target.value })}
+            >
+              {enumOptions(ADMIN_MGMT_FATURA_METODOS_PAGAMENTO, metodoLabels).map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" className="btn-secondary" onClick={() => setBulkPaidOpen(false)}>
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={saving}>
+              {saving ? 'A guardar…' : 'Confirmar'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
       <Modal open={Boolean(pendingModal)} onClose={() => { setPendingModal(null); setPendingPin(''); }} title="Marcar como pendente" panelClassName="max-w-sm">
         {pendingModal && (
           <form onSubmit={(e) => void submitMarkPending(e)} className="space-y-3">
@@ -1074,6 +1253,48 @@ export function AdminMgmtFaturasPanel() {
             </div>
           </form>
         )}
+      </Modal>
+
+      <Modal
+        open={bulkPendingOpen}
+        onClose={() => { setBulkPendingOpen(false); setPendingPin(''); }}
+        title="Marcar como pendente"
+        panelClassName="max-w-sm"
+      >
+        <form onSubmit={(e) => void submitBulkMarkPending(e)} className="space-y-3">
+          <p className="text-sm text-slate-600">
+            Reverter pagamento de {selectedCount} fatura(s) seleccionada(s).
+          </p>
+          <p className="text-xs text-amber-700">
+            Esta acção reverte o estado de pagamento. Introduza o PIN de Segurança definido em Configurações.
+          </p>
+          <div>
+            <label className="mb-1 block text-sm text-slate-600">PIN de Segurança *</label>
+            <input
+              className="input font-mono tracking-widest"
+              type="password"
+              inputMode="numeric"
+              pattern="\d{4,12}"
+              autoComplete="off"
+              value={pendingPin}
+              onChange={(e) => setPendingPin(e.target.value.replace(/\D/g, '').slice(0, 12))}
+              required
+              placeholder="••••"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => { setBulkPendingOpen(false); setPendingPin(''); }}
+            >
+              Cancelar
+            </button>
+            <button type="submit" className="btn-primary" disabled={saving || pendingPin.length < 4}>
+              {saving ? 'A guardar…' : 'Confirmar'}
+            </button>
+          </div>
+        </form>
       </Modal>
 
       <Modal open={Boolean(anexosModal)} onClose={() => setAnexosModal(null)} title="Documentos PDF" panelClassName="max-w-md">
