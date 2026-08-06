@@ -30,6 +30,16 @@ body {
   .input {
     @apply w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary-light)];
   }
+  /* Hide native number spinners (Qtd / Preço / IVA, discounts, etc.) */
+  .input[type='number']::-webkit-outer-spin-button,
+  .input[type='number']::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  .input[type='number'] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
   .card {
     @apply rounded-xl border border-slate-200 bg-white p-6 shadow-sm;
   }

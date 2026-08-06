@@ -23,13 +23,16 @@ export function BillingProductPicker({
   onSearch,
   onSelect,
   disabled,
+  theme = 'light',
 }: {
   products: BillingProductOption[];
   loading?: boolean;
   onSearch: (q: string) => void;
   onSelect: (product: BillingProductOption) => void;
   disabled?: boolean;
+  theme?: 'light' | 'dark';
 }) {
+  const dark = theme === 'dark';
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
@@ -68,24 +71,42 @@ export function BillingProductPicker({
             onSearch(e.target.value);
           }}
           onFocus={() => setOpen(true)}
-          placeholder="Pesquisar em artigos…"
+          placeholder="Pesquisar por nome ou Ref.ª Artigo…"
           disabled={disabled}
           autoComplete="off"
         />
       </div>
 
       {open && !disabled && (
-        <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
+        <ul
+          className={
+            dark
+              ? 'absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-lg'
+              : 'absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-lg'
+          }
+        >
           {loading ? (
-            <li className="px-3 py-2 text-sm text-slate-500">A carregar artigos…</li>
+            <li className={`px-3 py-2 text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+              A carregar artigos…
+            </li>
+          ) : !search.trim() ? (
+            <li className={`px-3 py-2 text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Escreva para pesquisar no catálogo Moloni…
+            </li>
           ) : filtered.length === 0 ? (
-            <li className="px-3 py-2 text-sm text-slate-500">Sem artigos — sincronize no Moloni</li>
+            <li className={`px-3 py-2 text-sm ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
+              Sem resultados — tente outra pesquisa
+            </li>
           ) : (
             filtered.map((p) => (
               <li key={p.productId}>
                 <button
                   type="button"
-                  className="w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                  className={
+                    dark
+                      ? 'w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-slate-800'
+                      : 'w-full px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50'
+                  }
                   onClick={() => {
                     onSelect(p);
                     setSearch('');

@@ -20,7 +20,7 @@ import {
   type InvoiceMoloniMetadata,
   type MoloniDocumentTypeId,
 } from '@tvde/billing';
-import { decrypt, encrypt } from '../lib/crypto';
+import { canDecrypt, encrypt, isCryptoAuthFailure } from '../lib/crypto';
 import { env } from '../config/env';
 import {
   getBillingEmailPublicSettings,
@@ -28,7 +28,14 @@ import {
 } from './billing-email.service';
 import { createInvoiceDownloadLink } from './invoice-download-token.service';
 import { createHash } from 'crypto';
-import { ensureMoloniAccessToken, getBillingConnection } from './moloni-connection.service';
+import {
+  assertMoloniClientSecretReadable,
+  clearMoloniOAuthTokens,
+  ensureMoloniAccessToken,
+  getBillingConnection,
+  MOLONI_CRYPTO_REAUTH_MESSAGE,
+  moloniSecretNeedsResave,
+} from './moloni-connection.service';
 import { syncAdminMgmtFromBillingInvoice } from './admin-mgmt-moloni-sync.service';
 import { getMoloniDocumentSetHealth } from './moloni-document-set-health.service';
 import {
@@ -77,6 +84,9 @@ export async function upsertMoloniConfig(input: {
   }
   if (!encryptedClientSecret) {
     throw new Error('Client Secret Moloni obrigatório');
+  }
+  if (!input.clientSecret && moloniSecretNeedsResave(encryptedClientSecret)) {
+    throw new Error(MOLONI_CRYPTO_REAUTH_MESSAGE);
   }
 
   const previousCompanyId = existing?.companyId ?? null;
@@ -295,7 +305,18 @@ export async function getMoloniPublicStatus(workspaceId: string, options?: { pro
     };
   }
 
-  const connected = Boolean(row.encryptedAccessToken && row.connectedAt);
+  const secretReadable = canDecrypt(row.encryptedClientSecret);
+  const tokensPresent = Boolean(row.encryptedAccessToken && row.connectedAt);
+  const tokensReadable =
+    tokensPresent &&
+    canDecrypt(row.encryptedAccessToken) &&
+    canDecrypt(row.encryptedRefreshToken);
+
+  if (tokensPresent && !tokensReadable) {
+    await clearMoloniOAuthTokens(workspaceId);
+  }
+
+  const connected = tokensPresent && tokensReadable && secretReadable;
   const emailSettings = await getBillingEmailPublicSettings(workspaceId);
   const base = {
     configured: true,
@@ -305,11 +326,12 @@ export async function getMoloniPublicStatus(workspaceId: string, options?: { pro
     documentSetId: row.documentSetId,
     defaultProductCategoryId: row.defaultProductCategoryId,
     redirectUri: row.redirectUri,
-    connectedAt: row.connectedAt,
+    connectedAt: connected ? row.connectedAt : null,
     healthy: false as boolean,
     statusMessage: 'Não configurado',
     documentSetHealth: null as MoloniDocumentSetHealth | null,
     emailSettings,
+    secretNeedsResave: !secretReadable,
     ...moduleFlags,
   };
 
@@ -321,11 +343,21 @@ export async function getMoloniPublicStatus(workspaceId: string, options?: { pro
     };
   }
 
+  if (!secretReadable) {
+    return {
+      ...base,
+      healthy: false,
+      statusMessage: MOLONI_CRYPTO_REAUTH_MESSAGE,
+    };
+  }
+
   if (!connected) {
     return {
       ...base,
       healthy: false,
-      statusMessage: 'OAuth pendente — ligue a conta Moloni',
+      statusMessage: tokensPresent && !tokensReadable
+        ? MOLONI_CRYPTO_REAUTH_MESSAGE
+        : 'OAuth pendente — ligue a conta Moloni',
     };
   }
 
@@ -382,10 +414,20 @@ export async function completeMoloniOAuth(code: string, state: string) {
   const row = await getBillingConnection(workspaceId);
   if (!row?.redirectUri) throw new Error('Configuração Moloni em falta');
 
+  let clientSecret: string;
+  try {
+    clientSecret = assertMoloniClientSecretReadable(row.encryptedClientSecret);
+  } catch (err) {
+    if (isCryptoAuthFailure(err) || (err instanceof Error && err.message === MOLONI_CRYPTO_REAUTH_MESSAGE)) {
+      throw new Error(MOLONI_CRYPTO_REAUTH_MESSAGE);
+    }
+    throw err;
+  }
+
   const tokens = await exchangeAuthorizationCode(
     {
       clientId: row.clientId,
-      clientSecret: decrypt(row.encryptedClientSecret),
+      clientSecret,
       redirectUri: row.redirectUri,
     },
     code
@@ -522,11 +564,13 @@ export async function duplicateInvoice(invoiceId: string, tenantId: string) {
   const sourceMetadata = (source.metadataJson ?? {}) as InvoiceMoloniMetadata;
   let lines: Array<{
     description: string;
+    summary?: string;
     quantity: number;
     unitPrice: number;
     vatRate?: number;
     moloniProductId?: number;
     moloniTaxId?: number;
+    productReference?: string;
     moloniExemptionReason?: string;
   }> = [];
   let metadata: InvoiceMoloniMetadata = { ...sourceMetadata };
@@ -534,11 +578,13 @@ export async function duplicateInvoice(invoiceId: string, tenantId: string) {
   if (source.lines.length > 0) {
     lines = source.lines.map((line) => ({
       description: line.description,
+      summary: line.summary?.trim() || undefined,
       quantity: Number(line.quantity),
       unitPrice: Number(line.unitPrice),
       vatRate: Number(line.vatRate),
       moloniProductId: line.externalProductId ? Number(line.externalProductId) : undefined,
       moloniTaxId: line.externalTaxId ? Number(line.externalTaxId) : undefined,
+      productReference: line.productReference ?? undefined,
     }));
   } else if (source.externalId && source.provider === 'moloni') {
     const { row, accessToken } = await ensureMoloniAccessToken(source.workspaceId);
@@ -593,12 +639,14 @@ export async function updateInvoiceDraft(
     entityType?: string;
     lines: Array<{
       description: string;
+      summary?: string;
       quantity: number;
       unitPrice: number;
       vatRate?: number;
       productId?: string;
       moloniProductId?: number;
       moloniTaxId?: number;
+      productReference?: string;
       moloniExemptionReason?: string;
     }>;
     dueDate?: string;
@@ -651,11 +699,13 @@ export async function updateInvoiceDraft(
             const c = computeLine(line);
             return {
               description: line.description,
+              summary: line.summary?.trim().slice(0, 250) || null,
               quantity: c.quantity,
               unitPrice: line.unitPrice,
               vatRate: c.vatRate ?? 23,
               lineTotal: c.lineTotal,
               productId: line.productId ?? null,
+              productReference: line.productReference?.trim() || null,
               externalProductId:
                 line.moloniProductId != null ? String(line.moloniProductId) : null,
               externalTaxId: line.moloniTaxId != null ? String(line.moloniTaxId) : null,
@@ -695,12 +745,14 @@ export async function createInvoice(input: {
   entityType?: string;
   lines: Array<{
     description: string;
+    summary?: string;
     quantity: number;
     unitPrice: number;
     vatRate?: number;
     productId?: string;
     moloniProductId?: number;
     moloniTaxId?: number;
+    productReference?: string;
     moloniExemptionReason?: string;
   }>;
   dueDate?: string;
@@ -749,11 +801,13 @@ export async function createInvoice(input: {
           const c = computeLine(line);
           return {
             description: line.description,
+            summary: line.summary?.trim().slice(0, 250) || null,
             quantity: c.quantity,
             unitPrice: line.unitPrice,
             vatRate: c.vatRate ?? 23,
             lineTotal: c.lineTotal,
             productId: line.productId ?? null,
+            productReference: line.productReference?.trim() || null,
             externalProductId:
               line.moloniProductId != null ? String(line.moloniProductId) : null,
             externalTaxId: line.moloniTaxId != null ? String(line.moloniTaxId) : null,
@@ -784,7 +838,9 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
   const entity = invoice.billingEntity;
   if (!entity) throw new Error('Entidade de facturação em falta');
 
-  const { row, accessToken } = await ensureMoloniAccessToken(invoice.workspaceId);
+  const { row, accessToken, clientSecret, refreshToken } = await ensureMoloniAccessToken(
+    invoice.workspaceId
+  );
   if (!row.companyId) throw new Error('company_id Moloni em falta na configuração');
 
   const partyId = await ensureMoloniPartyId(
@@ -811,16 +867,18 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
     });
   }
 
-  // Moloni exige product_id em cada linha — criar artigo CMS para linhas manuais.
+  // Moloni exige product_id em cada linha — criar/reutilizar artigo com Ref.ª explícita.
   const enrichedLines = await enrichInvoiceLinesWithMoloniProducts(
     invoice.workspaceId,
     invoice.lines.map((l) => ({
       description: l.description,
+      summary: l.summary?.trim() || undefined,
       quantity: l.quantity,
       unitPrice: Number(l.unitPrice),
       vatRate: Number(l.vatRate),
       moloniProductId: l.externalProductId ? Number(l.externalProductId) : undefined,
       moloniTaxId: l.externalTaxId ? Number(l.externalTaxId) : undefined,
+      productReference: l.productReference ?? undefined,
     }))
   );
 
@@ -833,6 +891,7 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
         data: {
           externalProductId: String(enriched.moloniProductId),
           externalTaxId: enriched.moloniTaxId != null ? String(enriched.moloniTaxId) : null,
+          productReference: enriched.productReference?.trim() || l.productReference,
         },
       });
     })
@@ -855,10 +914,10 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
 
   const provider = new MoloniBillingProvider({
     clientId: row.clientId,
-    clientSecret: decrypt(row.encryptedClientSecret),
+    clientSecret,
     redirectUri: row.redirectUri ?? '',
     accessToken,
-    refreshToken: decrypt(row.encryptedRefreshToken!),
+    refreshToken,
     companyId: row.companyId,
     documentSetId: resolvedDocumentSetId,
   });

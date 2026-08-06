@@ -30,6 +30,7 @@ export interface MoloniInvoicePayload {
   products: Array<{
     product_id?: number;
     name: string;
+    summary?: string;
     qty: number;
     price: number;
     exemption_reason?: string;
@@ -81,6 +82,9 @@ export function mapDraftToMoloniInvoice(
       return {
         product_id: line.moloniProductId,
         name: line.description,
+        ...(line.summary?.trim()
+          ? { summary: line.summary.trim().slice(0, 250) }
+          : {}),
         qty: computed.quantity,
         price: computed.unitPrice,
         ...(exemptionReason ? { exemption_reason: exemptionReason } : {}),
@@ -124,11 +128,13 @@ export function mapMoloniProductsToInvoiceLines(
 ): InvoiceLineInput[] {
   return products.map((product) => ({
     description: product.name,
+    summary: product.summary?.trim() || undefined,
     quantity: Number(product.qty) || 1,
     unitPrice: Number(product.price) || 0,
     vatRate: product.taxes?.[0]?.value != null ? Number(product.taxes[0].value) : 0,
     moloniProductId: product.product_id,
     moloniTaxId: product.taxes?.[0]?.tax_id,
+    productReference: product.reference || undefined,
     moloniExemptionReason: product.exemption_reason || undefined,
   }));
 }

@@ -7,7 +7,9 @@ export type BillingEmailSettingsData = {
   brandName: string | null;
   footerText: string | null;
   supportEmail: string | null;
+  emailBcc: string | null;
   smtpConfigured: boolean;
+  smtpNeedsResave?: boolean;
   brandingConfigured: boolean;
   smtp: {
     host: string | null;
@@ -44,6 +46,7 @@ export function MoloniBillingEmailPanel({
     brandName: '',
     footerText: '',
     supportEmail: '',
+    emailBcc: '',
     smtpHost: '',
     smtpPort: '587',
     smtpUsername: '',
@@ -53,14 +56,17 @@ export function MoloniBillingEmailPanel({
     smtpTls: true,
   });
   const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [smtpNeedsResave, setSmtpNeedsResave] = useState(false);
 
   useEffect(() => {
     if (!initial) return;
     setSmtpConfigured(initial.smtpConfigured);
+    setSmtpNeedsResave(Boolean(initial.smtpNeedsResave));
     setForm({
       brandName: initial.brandName ?? '',
       footerText: initial.footerText ?? '',
       supportEmail: initial.supportEmail ?? '',
+      emailBcc: initial.emailBcc ?? '',
       smtpHost: initial.smtp?.host ?? '',
       smtpPort: String(initial.smtp?.port ?? 587),
       smtpUsername: initial.smtp?.username ?? '',
@@ -74,6 +80,12 @@ export function MoloniBillingEmailPanel({
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!workspaceId) return;
+    if (smtpNeedsResave && !form.smtpPassword.trim()) {
+      onError?.(
+        'A password SMTP está ilegível — volte a colá-la e guarde (ENCRYPTION_KEY alterada ou dados corrompidos).'
+      );
+      return;
+    }
     setLoading(true);
     const token = getStoredToken();
     const payload: Record<string, unknown> = {
@@ -81,6 +93,7 @@ export function MoloniBillingEmailPanel({
       brandName: form.brandName.trim() || null,
       footerText: form.footerText.trim() || null,
       supportEmail: form.supportEmail.trim() || null,
+      emailBcc: form.emailBcc.trim() || null,
       smtpHost: form.smtpHost.trim() || null,
       smtpPort: form.smtpHost.trim() ? Number(form.smtpPort) || 587 : null,
       smtpUsername: form.smtpUsername.trim() || null,
@@ -101,7 +114,8 @@ export function MoloniBillingEmailPanel({
       return;
     }
     setSmtpConfigured(res.data.smtpConfigured);
-    setForm((f) => ({ ...f, smtpPassword: '' }));
+    setSmtpNeedsResave(Boolean(res.data.smtpNeedsResave));
+    setForm((f) => ({ ...f, smtpPassword: '', emailBcc: res.data!.emailBcc ?? '' }));
     onSaved?.(res.data);
     onSuccess?.('Email de facturação guardado');
   }
@@ -124,7 +138,10 @@ export function MoloniBillingEmailPanel({
       onError?.(getApiErrorMessage(res) || 'Falha no teste SMTP');
       return;
     }
-    onSuccess?.(`Email de teste enviado para ${to}`);
+    const bccHint = form.emailBcc.trim()
+      ? ` (BCC: ${form.emailBcc.trim()})`
+      : '';
+    onSuccess?.(`Email de teste enviado para ${to}${bccHint}`);
   }
 
   const brandHint = companyName
@@ -187,7 +204,12 @@ export function MoloniBillingEmailPanel({
             Se não configurar, usa o SMTP do sistema como fallback. Recomendado: SMTP da empresa
             emissora.
           </p>
-          {smtpConfigured ? (
+          {smtpNeedsResave ? (
+            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              Password SMTP ilegível (ENCRYPTION_KEY alterada ou dados corrompidos). Volte a colar a
+              password e guarde. Depois pode reenviar emails de faturas falhados.
+            </div>
+          ) : smtpConfigured ? (
             <p className="mt-1 text-xs text-emerald-700">SMTP de facturação configurado</p>
           ) : (
             <p className="mt-1 text-xs text-amber-700">SMTP de facturação ainda não configurado</p>
@@ -221,11 +243,18 @@ export function MoloniBillingEmailPanel({
         <input
           className="input"
           type="password"
-          placeholder={smtpConfigured ? 'Nova password (opcional)' : 'Password SMTP'}
+          placeholder={
+            smtpNeedsResave
+              ? 'Password SMTP (obrigatória)'
+              : smtpConfigured
+                ? 'Nova password (opcional)'
+                : 'Password SMTP'
+          }
           value={form.smtpPassword}
           onChange={(e) => setForm({ ...form, smtpPassword: e.target.value })}
           disabled={disabled || !workspaceId}
           autoComplete="new-password"
+          required={smtpNeedsResave}
         />
         <input
           className="input"
@@ -242,6 +271,23 @@ export function MoloniBillingEmailPanel({
           onChange={(e) => setForm({ ...form, smtpFromName: e.target.value })}
           disabled={disabled || !workspaceId}
         />
+        <div className="md:col-span-2 space-y-1">
+          <label className="block text-xs font-medium text-slate-600">
+            Cópia oculta (BCC) — opcional
+          </label>
+          <input
+            className="input"
+            type="email"
+            placeholder="contabilidade@empresa.pt"
+            value={form.emailBcc}
+            onChange={(e) => setForm({ ...form, emailBcc: e.target.value })}
+            disabled={disabled || !workspaceId}
+          />
+          <p className="text-xs text-slate-500">
+            Se preenchido, todos os emails de faturas (emissão Moloni, autofaturação do calendário e
+            reenvio) incluem este endereço em BCC. O email de teste SMTP também o usa.
+          </p>
+        </div>
         <label className="flex items-center gap-2 text-sm text-slate-700 md:col-span-2">
           <input
             type="checkbox"
@@ -264,7 +310,19 @@ export function MoloniBillingEmailPanel({
             type="button"
             className="btn-secondary"
             onClick={() => void sendTest()}
-            disabled={loading || testing || disabled || !workspaceId || !smtpConfigured}
+            disabled={
+              loading ||
+              testing ||
+              disabled ||
+              !workspaceId ||
+              !smtpConfigured ||
+              smtpNeedsResave
+            }
+            title={
+              smtpNeedsResave
+                ? 'Guarde novamente a password SMTP antes de testar'
+                : undefined
+            }
           >
             Enviar email de teste
           </button>

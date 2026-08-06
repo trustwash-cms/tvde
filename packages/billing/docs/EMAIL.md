@@ -14,6 +14,7 @@ O envio de faturas por email (emissão Moloni e **autofaturação do calendário
 | Texto do rodapé / empresa | Copyright no rodapé (ex.: `Fatura123 Unip. LDA`) |
 | Email de suporte | Link de contacto no corpo do email |
 | SMTP (host, porta, user, pass, from, TLS) | Remetente da facturação (por workspace) |
+| **Cópia oculta (BCC)** | Opcional — `email_bcc` em `billing_connections`; aplicado a **todos** os emails de faturas (emissão, reenvio, autofatura calendário e teste SMTP) |
 
 Persistência: colunas `email_*` em `billing_connections` (1:1 com o workspace).
 
@@ -88,12 +89,15 @@ POST /invoices/:id/send-email
   ├─ Valida: emitida, external_id, email destinatário
   ├─ createInvoiceDownloadLink()
   ├─ resolve branding + SMTP de facturação (workspace)
+  ├─ BCC opcional (`email_bcc`) se configurado
   ├─ template invoice-email-template.ts (não email_templates do sistema)
-  ├─ sendEmail(smtpOverride se SMTP Moloni)
+  ├─ sendEmail(smtpOverride se SMTP Moloni, bcc se email_bcc)
   └─ UPDATE invoices SET email_sent_at = NOW()
 ```
 
 **Destinatário:** `billing_entity.email` ?? `client.email` (calendário pode forçar `toEmail`).
+
+**BCC:** se `billing_connections.email_bcc` estiver preenchido, é enviado em cópia oculta em todos os caminhos que passam por `sendBillingInvoiceTemplateEmail()` / `sendInvoiceEmail()`, e também no «Enviar email de teste».
 
 ---
 
@@ -101,9 +105,9 @@ POST /invoices/:id/send-email
 
 | Método | Rota | Descrição |
 |--------|------|-----------|
-| GET | `/billing/moloni/email-config?workspaceId=` | Ler branding/SMTP (sem password) |
-| PUT | `/billing/moloni/email-config` | Guardar branding/SMTP |
-| POST | `/billing/moloni/email-test` | Teste SMTP de facturação `{ workspaceId, to }` |
+| GET | `/billing/moloni/email-config?workspaceId=` | Ler branding/SMTP/BCC (sem password) |
+| PUT | `/billing/moloni/email-config` | Guardar branding/SMTP/`emailBcc` |
+| POST | `/billing/moloni/email-test` | Teste SMTP de facturação `{ workspaceId, to }` (inclui BCC se configurado) |
 | POST | `/invoices/:id/send-email` | Enviar fatura |
 
 ---
@@ -124,7 +128,8 @@ POST /invoices/:id/send-email
 
 - [ ] Marca + rodapé preenchidos em Configurações → Moloni
 - [ ] SMTP de facturação testado («Enviar email de teste»)
+- [ ] BCC opcional preenchido e confirmado no teste / na caixa do destinatário BCC
 - [ ] Reenviar fatura e confirmar cabeçalho/rodapé (não «TVDE.»)
 - [ ] Abrir link «Descarregar fatura»: botão explícito; refresh não re-descarrega
 - [ ] Após 3 downloads: mensagem de limite
-- [ ] Autofatura calendário usa o mesmo branding/SMTP
+- [ ] Autofatura calendário usa o mesmo branding/SMTP/BCC

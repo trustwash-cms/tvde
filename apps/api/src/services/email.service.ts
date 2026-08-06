@@ -68,6 +68,8 @@ interface SendEmailInput {
   html: string;
   /** Nome visível na caixa de entrada (ex.: «ARC», «Edições19deAbril»). */
   fromName?: string | null;
+  /** BCC explícito (ex.: email_bcc do workspace de facturação). */
+  bcc?: string | string[];
   attachments?: Array<{ filename: string; content: Buffer; cid?: string }>;
   /** SMTP explícito (ex.: facturação Moloni) — não usa tenant/plataforma/env. */
   smtpOverride?: SmtpConnection;
@@ -381,7 +383,14 @@ export async function sendEmail(input: SendEmailInput): Promise<{ messageId: str
   const defaultCopies = useSystemCopies
     ? await resolveDefaultEmailCopies(input.tenantId)
     : { cc: [] as string[], bcc: [] as string[] };
-  const copies = mergeCopyRecipients(input.to, defaultCopies.cc, defaultCopies.bcc);
+  const explicitBcc = (Array.isArray(input.bcc) ? input.bcc : input.bcc ? [input.bcc] : [])
+    .map((e) => e.trim())
+    .filter(Boolean);
+  const copies = mergeCopyRecipients(
+    input.to,
+    defaultCopies.cc,
+    [...defaultCopies.bcc, ...explicitBcc]
+  );
   const fromName = input.fromName ?? smtp.fromName ?? getServerConfig().appName;
 
   const info = await transport.sendMail({

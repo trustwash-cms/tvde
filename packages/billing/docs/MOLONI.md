@@ -224,6 +224,8 @@ Implementação CMS: `MoloniClient.getDocument()` → `mapMoloniProductsToInvoic
 
 ### 3.4 Emitir documentos (insert)
 
+Linhas manuais no CMS: se não houver `product_id`, o CMS cria o artigo na categoria por defeito com a **Ref.ª Artigo** enviada em `productReference` (código curto do utilizador). **Não** gera referências do tipo `CMS-…` a partir da designação.
+
 ```
 POST .../invoices/insert/?access_token={TOKEN}
 ```

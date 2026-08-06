@@ -20,15 +20,44 @@ export const MISSING_DEFAULT_CATEGORY_MESSAGE =
 export const EMPTY_CATEGORIES_MESSAGE =
   'Não há categorias Moloni nesta empresa — sincronize o catálogo ou crie categorias no Moloni, depois seleccione a categoria por defeito';
 
-function slugReference(text: string): string {
-  const base = text
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 24)
-    .toUpperCase();
-  return base ? `CMS-${base}` : `CMS-${Date.now()}`;
+export const MISSING_PRODUCT_REFERENCE_MESSAGE =
+  'Linha manual sem Ref.ª Artigo — indique um código curto (ex. SERV-01) ou seleccione um artigo existente do catálogo';
+
+/** Normaliza a referência introduzida pelo utilizador (sem slugificar a descrição). */
+export function normalizeProductReference(raw: string | undefined | null): string {
+  return (raw ?? '').trim();
+}
+
+function isDuplicateReferenceError(message: string): boolean {
+  return /refer[eê]ncia|reference|duplic|já exist|already exist|unique/i.test(message);
+}
+
+async function findProductByReference(
+  moloniClient: Awaited<ReturnType<typeof ensureMoloniAccessToken>>['moloniClient'],
+  companyId: number,
+  reference: string,
+  preferredCategoryId?: number | null
+): Promise<MoloniProductRow | undefined> {
+  const needle = reference.toLowerCase();
+
+  const fromSearch = await moloniClient.searchProducts(companyId, reference, 0, 50);
+  const exact =
+    fromSearch.find((p) => (p.reference ?? '').toLowerCase() === needle) ??
+    fromSearch.find((p) => (p.reference ?? '').toLowerCase() === needle.replace(/\s+/g, ''));
+  if (exact?.product_id) return exact;
+
+  if (preferredCategoryId != null) {
+    const inCategory = await moloniClient.getAllProducts(
+      companyId,
+      preferredCategoryId,
+      0,
+      50,
+      1
+    );
+    return inCategory.find((p) => (p.reference ?? '').toLowerCase() === needle);
+  }
+
+  return undefined;
 }
 
 /** Resolve categoria por defeito: BillingConnection, com fallback ao setting do calendário. */
@@ -124,7 +153,8 @@ async function resolveMoloniTaxForVatRate(
 
 /**
  * Moloni invoices/insert exige product_id em cada linha.
- * Linhas manuais: cria/reutiliza artigo na categoria por defeito configurada.
+ * Linhas manuais: cria/reutiliza artigo na categoria por defeito com Ref.ª Artigo explícita
+ * (nunca gera referência a partir da descrição).
  */
 export async function enrichInvoiceLinesWithMoloniProducts<T extends InvoiceLineInput>(
   workspaceId: string,
@@ -176,6 +206,7 @@ export async function enrichInvoiceLinesWithMoloniProducts<T extends InvoiceLine
     const taxId = tax.taxId;
     const exemptionReason = line.moloniExemptionReason ?? tax.exemptionReason;
     let productId = line.moloniProductId;
+    let productReference = normalizeProductReference(line.productReference);
 
     if (!productId) {
       const description = line.description.trim();
@@ -183,26 +214,36 @@ export async function enrichInvoiceLinesWithMoloniProducts<T extends InvoiceLine
         throw new Error('Linha de fatura sem descrição — preencha o nome do artigo');
       }
 
-      const categoryId = defaultCategoryId!;
-      const reference = slugReference(description);
-      const existing = await moloniClient
-        .getAllProducts(row.companyId, categoryId, 0, 50, 1)
-        .then((products: MoloniProductRow[]) =>
-          products.find(
-            (p: MoloniProductRow) =>
-              p.reference === reference || p.name.toLowerCase() === description.toLowerCase()
-          )
+      if (!productReference) {
+        throw new Error(
+          `${MISSING_PRODUCT_REFERENCE_MESSAGE} (linha «${description.slice(0, 60)}»)`
         );
+      }
+
+      if (productReference.length > 30) {
+        throw new Error(
+          `Ref.ª Artigo demasiado longa («${productReference.slice(0, 40)}…») — use um código curto (máx. 30 caracteres)`
+        );
+      }
+
+      const categoryId = defaultCategoryId!;
+      const existing = await findProductByReference(
+        moloniClient,
+        row.companyId,
+        productReference,
+        categoryId
+      );
 
       if (existing?.product_id) {
         productId = existing.product_id;
+        productReference = existing.reference?.trim() || productReference;
       } else {
         try {
           const created = await createMoloniProduct(workspaceId, {
             categoryId,
             type: 2,
             name: description,
-            reference,
+            reference: productReference,
             price: line.unitPrice,
             unitId: defaultUnitId,
             taxId,
@@ -211,14 +252,32 @@ export async function enrichInvoiceLinesWithMoloniProducts<T extends InvoiceLine
             active: true,
           });
           productId = created.product_id;
+          productReference = created.reference?.trim() || productReference;
         } catch (err) {
           const raw = err instanceof Error ? err.message : String(err);
           if (/categor/i.test(raw) || /category/i.test(raw)) {
             throw new Error(MISSING_DEFAULT_CATEGORY_MESSAGE);
           }
-          throw new Error(
-            `Falha ao criar artigo Moloni para a linha «${description}»: ${raw}`
-          );
+          if (isDuplicateReferenceError(raw)) {
+            const reused = await findProductByReference(
+              moloniClient,
+              row.companyId,
+              productReference,
+              categoryId
+            );
+            if (reused?.product_id) {
+              productId = reused.product_id;
+              productReference = reused.reference?.trim() || productReference;
+            } else {
+              throw new Error(
+                `A Ref.ª Artigo «${productReference}» já existe no Moloni — escolha outro código ou seleccione o artigo existente`
+              );
+            }
+          } else {
+            throw new Error(
+              `Falha ao criar artigo Moloni para a linha «${description}» (ref. ${productReference}): ${raw}`
+            );
+          }
         }
       }
     }
@@ -227,6 +286,7 @@ export async function enrichInvoiceLinesWithMoloniProducts<T extends InvoiceLine
       ...line,
       moloniTaxId: taxId,
       moloniProductId: productId,
+      productReference: productReference || line.productReference,
       moloniExemptionReason: exemptionReason,
     });
   }

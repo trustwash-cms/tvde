@@ -136,8 +136,10 @@ const DOCUMENT_GET_ONE_ENDPOINTS: Record<MoloniDocumentTypeId, string> = {
 export interface MoloniDocumentProductRow {
   product_id?: number;
   name: string;
+  summary?: string;
   qty: number;
   price: number;
+  reference?: string;
   exemption_reason?: string;
   taxes?: Array<{ tax_id: number; value: number; order?: number; cumulative?: number }>;
 }

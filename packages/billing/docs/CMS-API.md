@@ -93,7 +93,8 @@ Cria rascunho local (`status=draft`, `provider=local`).
       "unitPrice": 100,
       "vatRate": 23,
       "moloniProductId": 456,
-      "moloniTaxId": 1
+      "moloniTaxId": 1,
+      "productReference": "SERV-01"
     }
   ]
 }
@@ -103,6 +104,7 @@ Cria rascunho local (`status=draft`, `provider=local`).
 |-------|-------------|
 | `billingEntityId` **ou** `clientId` | Sim (um dos dois) |
 | `lines` | Sim (mín. 1) |
+| `lines[].moloniProductId` **ou** `lines[].productReference` | Na **emissão**: um dos dois (artigo existente ou Ref.ª explícita para criar). A referência **não** é gerada a partir da descrição. |
 
 `clientId` legacy cria/liga `billing_entity` automaticamente.
 

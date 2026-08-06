@@ -4,7 +4,7 @@ import { FormEvent, Suspense, useCallback, useEffect, useMemo, useRef, useState,
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { ChevronDown } from 'lucide-react';
-import { type MoloniDocumentType, getDocumentTypeLabel, WEB_ROUTES } from '@tvde/shared';
+import { type MoloniDocumentType, getDocumentTypeLabel, WEB_ROUTES, INVOICE_LINE_SUMMARY_MAX_LENGTH } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
@@ -22,6 +22,7 @@ import {
   type BillingProductOption,
 } from '@/components/billing/billing-product-picker';
 import { Modal } from '@/components/modal';
+import { SoftDecimalInput } from '@/components/soft-decimal-input';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { normalizePhone } from '@/lib/phone-format';
 
@@ -51,11 +52,13 @@ interface MoloniStatus {
 
 interface InvoiceLineForm {
   description: string;
+  summary?: string;
   quantity: number;
   unitPrice: number;
   vatRate: number;
   moloniProductId?: number;
   moloniTaxId?: number;
+  productReference?: string;
 }
 
 function todayIso(): string {
@@ -64,13 +67,21 @@ function todayIso(): string {
 
 const emptyLine = (): InvoiceLineForm => ({
   description: '',
+  summary: '',
   quantity: 1,
   unitPrice: 0,
   vatRate: 23,
+  productReference: '',
 });
 
 function isEmptyLine(line: InvoiceLineForm): boolean {
-  return !line.description.trim() && line.unitPrice === 0 && !line.moloniProductId;
+  return (
+    !line.description.trim() &&
+    !line.summary?.trim() &&
+    line.unitPrice === 0 &&
+    !line.moloniProductId &&
+    !line.productReference?.trim()
+  );
 }
 
 function filledLines(lines: InvoiceLineForm[]): InvoiceLineForm[] {
@@ -132,11 +143,13 @@ interface InvoiceDraftResponse {
   } | null;
   lines: Array<{
     description: string;
+    summary?: string | null;
     quantity: string | number;
     unitPrice: string | number;
     vatRate: string | number;
     externalProductId: string | null;
     externalTaxId: string | null;
+    productReference?: string | null;
   }>;
   billingEntity?: BillingEntity | null;
 }
@@ -357,11 +370,13 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
         lines: res.data.lines.length
           ? res.data.lines.map((line) => ({
               description: line.description,
+              summary: line.summary ?? '',
               quantity: Number(line.quantity),
               unitPrice: Number(line.unitPrice),
               vatRate: Number(line.vatRate),
               moloniProductId: line.externalProductId ? Number(line.externalProductId) : undefined,
               moloniTaxId: line.externalTaxId ? Number(line.externalTaxId) : undefined,
+              productReference: line.productReference ?? '',
             }))
           : [emptyLine()],
       });
@@ -433,11 +448,13 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
       },
       lines: filledLines(form.lines).map((line) => ({
         description: line.description.trim(),
+        summary: line.summary?.trim() || undefined,
         quantity: line.quantity,
         unitPrice: line.unitPrice,
         vatRate: line.vatRate,
         moloniProductId: line.moloniProductId,
         moloniTaxId: line.moloniTaxId,
+        productReference: line.productReference?.trim() || undefined,
       })),
     };
   }
@@ -449,6 +466,9 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
     if (!form.documentSetId) return 'Seleccione a série do documento';
     for (const line of lines) {
       if (line.unitPrice < 0) return 'Preço inválido num artigo';
+      if (!line.moloniProductId && !line.productReference?.trim()) {
+        return `Linha «${line.description.slice(0, 40)}» — indique a Ref.ª Artigo ou seleccione um artigo existente`;
+      }
     }
     return null;
   }
@@ -634,10 +654,12 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
   function addProductLine(product: BillingProductOption) {
     const newLine: InvoiceLineForm = {
       description: product.name,
+      summary: '',
       quantity: 1,
       unitPrice: product.price ?? 0,
       vatRate: 23,
       moloniProductId: product.productId,
+      productReference: product.reference ?? '',
     };
     setForm((f) => {
       const emptyIdx = f.lines.findIndex(isEmptyLine);
@@ -647,6 +669,21 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
         return { ...f, lines };
       }
       return { ...f, lines: [...f.lines, newLine] };
+    });
+  }
+
+  function updateLine(index: number, patch: Partial<InvoiceLineForm>) {
+    setForm((f) => {
+      const lines = [...f.lines];
+      lines[index] = { ...lines[index], ...patch };
+      return { ...f, lines };
+    });
+  }
+
+  function clearCatalogLink(index: number) {
+    updateLine(index, {
+      moloniProductId: undefined,
+      productReference: '',
     });
   }
 
@@ -856,90 +893,165 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
 
           <FormSection title="Artigos" defaultOpen>
             {moloni?.healthy ? (
-              <BillingProductPicker
-                products={products}
-                loading={productsLoading}
-                onSearch={loadProducts}
-                onSelect={addProductLine}
-                disabled={!workspaceId}
-              />
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-slate-600">
+                  Pesquisar artigo existente (Moloni)
+                </label>
+                <BillingProductPicker
+                  products={products}
+                  loading={productsLoading}
+                  onSearch={loadProducts}
+                  onSelect={addProductLine}
+                  disabled={!workspaceId}
+                />
+                <p className="text-[11px] text-slate-500">
+                  Ao seleccionar, a linha usa a Ref.ª Artigo do catálogo — não cria um artigo novo.
+                </p>
+              </div>
             ) : (
               <p className="text-xs text-slate-500">Ligue o Moloni para pesquisar artigos.</p>
             )}
 
             {form.lines.map((line, i) => (
-              <div key={i} className="grid gap-2 rounded-lg border border-slate-100 p-3 md:grid-cols-6">
-                <input
-                  className="input md:col-span-2"
-                  placeholder="Descrição"
-                  value={line.description}
-                  onChange={(e) => {
-                    const lines = [...form.lines];
-                    lines[i] = { ...lines[i], description: e.target.value };
-                    setForm({ ...form, lines });
-                  }}
-                disabled={!workspaceId}
-              />
-              <input
-                className="input"
-                type="number"
-                min={1}
-                placeholder="Qtd"
-                  value={line.quantity}
-                  onChange={(e) => {
-                    const lines = [...form.lines];
-                    lines[i] = { ...lines[i], quantity: Number(e.target.value) };
-                    setForm({ ...form, lines });
-                  }}
-                  disabled={!workspaceId}
-                />
-                <input
-                  className="input"
-                  type="number"
-                  step="0.01"
-                  min={0}
-                  placeholder="Preço"
-                  value={line.unitPrice}
-                  onChange={(e) => {
-                    const lines = [...form.lines];
-                    lines[i] = { ...lines[i], unitPrice: Number(e.target.value) };
-                    setForm({ ...form, lines });
-                  }}
-                disabled={!workspaceId}
-              />
-                <select
-                  className="input"
-                  value={line.moloniTaxId ?? ''}
-                  onChange={(e) => {
-                    const lines = [...form.lines];
-                    lines[i] = {
-                      ...lines[i],
-                      moloniTaxId: e.target.value ? Number(e.target.value) : undefined,
-                      vatRate: taxes.find((t) => t.externalId === e.target.value)?.dataJson?.value ?? lines[i].vatRate,
-                    };
-                    setForm({ ...form, lines });
-                  }}
-                  disabled={!workspaceId}
-                >
-                  <option value="">IVA padrão</option>
-                  {taxes.map((t) => (
-                    <option key={t.id} value={t.externalId}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="btn-secondary text-xs"
-                  disabled={!workspaceId || form.lines.length <= 1}
-                  onClick={() =>
-                    setForm({ ...form, lines: form.lines.filter((_, idx) => idx !== i) })
-                  }
-                >
-                  Remover
-                </button>
+              <div key={i} className="space-y-2 rounded-lg border border-slate-100 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {line.moloniProductId ? (
+                    <span className="rounded bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-800">
+                      Artigo do catálogo
+                      {line.productReference ? ` · ${line.productReference}` : ''}
+                    </span>
+                  ) : (
+                    <span className="rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                      Novo artigo (linha manual)
+                    </span>
+                  )}
+                  {line.moloniProductId && (
+                    <button
+                      type="button"
+                      className="text-[11px] text-slate-500 underline"
+                      disabled={!workspaceId}
+                      onClick={() => clearCatalogLink(i)}
+                    >
+                      Converter em linha manual
+                    </button>
+                  )}
+                </div>
+                <div className="grid gap-2 md:grid-cols-6">
+                  <div className="md:col-span-1">
+                    <label className="mb-1 block text-[11px] text-slate-500">Ref.ª Artigo</label>
+                    <input
+                      className="input font-mono text-xs"
+                      placeholder="ex. SERV-01"
+                      value={line.productReference ?? ''}
+                      readOnly={Boolean(line.moloniProductId)}
+                      onChange={(e) =>
+                        updateLine(i, {
+                          productReference: e.target.value,
+                          moloniProductId: undefined,
+                        })
+                      }
+                      disabled={!workspaceId}
+                      title={
+                        line.moloniProductId
+                          ? 'Referência do artigo seleccionado'
+                          : 'Código curto — não é gerado a partir da descrição'
+                      }
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-[11px] text-slate-500">Designação</label>
+                    <input
+                      className="input"
+                      placeholder="Designação"
+                      value={line.description}
+                      onChange={(e) => updateLine(i, { description: e.target.value })}
+                      disabled={!workspaceId}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-500">Qtd</label>
+                    <SoftDecimalInput
+                      className="input"
+                      emptyAs={1}
+                      min={0.01}
+                      placeholder="Qtd"
+                      value={line.quantity}
+                      onValueChange={(quantity) => updateLine(i, { quantity })}
+                      disabled={!workspaceId}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] text-slate-500">Preço</label>
+                    <SoftDecimalInput
+                      className="input"
+                      emptyAs={0}
+                      min={0}
+                      placeholder="Preço"
+                      value={line.unitPrice}
+                      onValueChange={(unitPrice) => updateLine(i, { unitPrice })}
+                      disabled={!workspaceId}
+                    />
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <div className="min-w-0 flex-1">
+                      <label className="mb-1 block text-[11px] text-slate-500">IVA</label>
+                      <select
+                        className="input"
+                        value={line.moloniTaxId ?? ''}
+                        onChange={(e) => {
+                          updateLine(i, {
+                            moloniTaxId: e.target.value ? Number(e.target.value) : undefined,
+                            vatRate:
+                              taxes.find((t) => t.externalId === e.target.value)?.dataJson?.value ??
+                              line.vatRate,
+                          });
+                        }}
+                        disabled={!workspaceId}
+                      >
+                        <option value="">IVA padrão</option>
+                        {taxes.map((t) => (
+                          <option key={t.id} value={t.externalId}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn-secondary shrink-0 text-xs"
+                      disabled={!workspaceId || form.lines.length <= 1}
+                      onClick={() =>
+                        setForm({ ...form, lines: form.lines.filter((_, idx) => idx !== i) })
+                      }
+                    >
+                      Remover
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] text-slate-500">
+                    Resumo
+                    <span className="ml-1 font-normal text-slate-400">
+                      ({(line.summary ?? '').length}/{INVOICE_LINE_SUMMARY_MAX_LENGTH})
+                    </span>
+                  </label>
+                  <input
+                    className="input"
+                    placeholder="Ex.: mês A até mês B"
+                    value={line.summary ?? ''}
+                    maxLength={INVOICE_LINE_SUMMARY_MAX_LENGTH}
+                    onChange={(e) => updateLine(i, { summary: e.target.value })}
+                    disabled={!workspaceId}
+                    title="Texto curto sob a designação no documento Moloni"
+                  />
+                </div>
               </div>
             ))}
+
+            <p className="text-[11px] text-slate-500">
+              Linha manual: preencha a <strong>Ref.ª Artigo</strong> (código curto). A referência{' '}
+              <em>não</em> é gerada automaticamente a partir da designação.
+            </p>
 
             <button
               type="button"

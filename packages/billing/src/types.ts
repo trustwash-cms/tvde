@@ -6,12 +6,19 @@ export type InvoiceStatus = 'draft' | 'issued' | 'paid' | 'cancelled' | 'failed'
 
 export interface InvoiceLineInput {
   description: string;
+  /** Resumo Moloni da linha (0–250 chars) — ex. período de alojamento */
+  summary?: string;
   quantity: number;
   unitPrice: number;
   vatRate?: number;
   productId?: string;
   moloniProductId?: number;
   moloniTaxId?: number;
+  /**
+   * Ref.ª Artigo Moloni para linhas manuais (criação de produto).
+   * Obrigatória se não houver moloniProductId — nunca é gerada a partir da descrição.
+   */
+  productReference?: string;
   /** Código de isenção Moloni (M01–M99) — obrigatório quando vatRate é 0 */
   moloniExemptionReason?: string;
 }

@@ -100,12 +100,15 @@ const metadataSchema = z
 
 const lineSchema = z.object({
   description: z.string().min(1),
+  summary: z.string().max(250).optional(),
   quantity: z.coerce.number().int().min(1).default(1),
   unitPrice: z.coerce.number().min(0),
   vatRate: z.coerce.number().min(0).max(100).optional(),
   productId: z.string().uuid().optional(),
   moloniProductId: z.coerce.number().int().optional(),
   moloniTaxId: z.coerce.number().int().optional(),
+  productReference: z.string().max(30).optional(),
+  moloniExemptionReason: z.string().min(2).max(8).optional(),
 });
 
 const createInvoiceBodySchema = z
@@ -323,6 +326,11 @@ export async function billingRoutes(fastify: FastifyInstance) {
 
   fastify.post('/invoices/:id/send-email', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const body = z
+      .object({
+        toEmail: z.string().email().optional(),
+      })
+      .parse(request.body ?? {});
 
     const invoiceRef = await fastify.db.invoice.findUnique({
       where: { id },
@@ -335,7 +343,9 @@ export async function billingRoutes(fastify: FastifyInstance) {
     await resolveWorkspaceTenantScope(fastify, request.user, invoiceRef.workspaceId);
 
     try {
-      const result = await sendInvoiceEmail(id, invoiceRef.tenantId);
+      const result = await sendInvoiceEmail(id, invoiceRef.tenantId, {
+        toEmail: body.toEmail,
+      });
 
       await createAuditLog({
         tenantId: invoiceRef.tenantId,
@@ -344,13 +354,14 @@ export async function billingRoutes(fastify: FastifyInstance) {
         entityType: 'invoice',
         entityId: id,
         ipAddress: request.ip,
-        afterJson: { emailSentAt: result.emailSentAt },
+        afterJson: { emailSentAt: result.emailSentAt, toEmail: body.toEmail ?? null },
       });
 
       return reply.send({ success: true, data: result, message: 'Fatura enviada por email' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao enviar email';
-      const status = message.includes('SMTP') ? 503 : 400;
+      const status =
+        message.includes('SMTP') || message.includes('ilegível') ? 503 : 400;
       return reply.status(status).send({ success: false, error: message });
     }
   });
@@ -1424,6 +1435,9 @@ export async function billingRoutes(fastify: FastifyInstance) {
         supportEmail: z
           .union([z.string().email(), z.literal(''), z.null()])
           .optional(),
+        emailBcc: z
+          .union([z.string().email(), z.literal(''), z.null()])
+          .optional(),
         smtpHost: z.string().max(255).nullable().optional(),
         smtpPort: z.coerce.number().int().min(1).max(65535).nullable().optional(),
         smtpUsername: z.string().max(255).nullable().optional(),
@@ -1448,6 +1462,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
         brandName: body.brandName,
         footerText: body.footerText,
         supportEmail: body.supportEmail === '' ? null : body.supportEmail,
+        emailBcc: body.emailBcc === '' ? null : body.emailBcc,
         smtpHost: body.smtpHost,
         smtpPort: body.smtpPort,
         smtpUsername: body.smtpUsername,
@@ -1528,8 +1543,11 @@ export async function billingRoutes(fastify: FastifyInstance) {
 
 /** Callback OAuth Moloni — sem JWT; validado via state assinado */
 export async function billingMoloniCallbackRoutes(fastify: FastifyInstance) {
-  const settingsUi = (status: 'connected' | 'error') =>
-    `${env.webPublicUrl.replace(/\/$/, '')}/dashboard/settings/moloni?moloni=${status}`;
+  const settingsUi = (status: 'connected' | 'error', reason?: string) => {
+    const base = `${env.webPublicUrl.replace(/\/$/, '')}/dashboard/settings/moloni?moloni=${status}`;
+    if (!reason) return base;
+    return `${base}&reason=${encodeURIComponent(reason)}`;
+  };
 
   fastify.get('/billing/moloni/callback', async (request, reply) => {
     const { code, state, error } = z
@@ -1541,14 +1559,23 @@ export async function billingMoloniCallbackRoutes(fastify: FastifyInstance) {
       .parse(request.query);
 
     if (error || !code || !state) {
-      return reply.redirect(settingsUi('error'));
+      return reply.redirect(settingsUi('error', 'oauth_denied'));
     }
 
     try {
       await completeMoloniOAuth(code, state);
       return reply.redirect(settingsUi('connected'));
-    } catch {
-      return reply.redirect(settingsUi('error'));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha OAuth Moloni';
+      request.log.warn({ err }, 'Moloni OAuth callback failed');
+      const reason = message.includes('ENCRYPTION_KEY') || message.includes('ilegíveis')
+        ? 'crypto'
+        : message.includes('expirado')
+          ? 'state_expired'
+          : message.includes('State OAuth')
+            ? 'state_invalid'
+            : 'oauth_failed';
+      return reply.redirect(settingsUi('error', reason));
     }
   });
 }

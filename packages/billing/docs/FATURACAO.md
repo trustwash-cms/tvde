@@ -104,7 +104,7 @@ CRM (clients)          billing_entities          Moloni
 
 1. Conta Moloni com API activa (Developer ID + Secret)
 2. `ENCRYPTION_KEY` no `.env` (32+ chars — encripta tokens Moloni)
-3. Email de faturas configurado em **Configurações → Moloni** (marca + SMTP de facturação; fallback SMTP sistema)
+3. Email de faturas configurado em **Configurações → Moloni** (marca + SMTP de facturação; BCC opcional; fallback SMTP sistema)
 4. Em desenvolvimento: **túnel HTTPS** (ngrok / cloudflared) — Moloni rejeita `localhost`
 5. Em produção tvde.one: callback em `https://api.tvde.one/...` (não ngrok, não fleet)
 
@@ -218,7 +218,7 @@ Páginas por tipo: Faturas, FS, FR, Notas de débito — cada uma com `documentT
 | Clientes | Pesquisa entidade fiscal + **Novo cliente** (modal igual a Entidades) |
 | Dados financeiros | Vencimento, referências, descontos |
 | Documentos relacionados | Notas sobre associações |
-| Artigos | Pesquisa produtos Moloni + linhas com IVA |
+| Artigos | Pesquisa artigos Moloni existentes **ou** linha manual com **Ref.ª Artigo** explícita + designação, qtd, preço, IVA. A referência **não** é gerada a partir da designação. |
 | Entrega e transporte | Moradas carga/descarga, matrícula, método |
 | Observações | Texto livre |
 
@@ -271,10 +271,14 @@ sequenceDiagram
 ```
 
 1. Seleccionar **entidade fiscal** (ou criar via «Novo cliente»)
-2. Adicionar **linhas** (manual ou pesquisa artigos Moloni)
+2. Adicionar **linhas**:
+   - **Artigo existente** — pesquisar no catálogo Moloni e seleccionar (usa a Ref.ª / `product_id` do artigo; não cria duplicado)
+   - **Linha manual** — indicar **Ref.ª Artigo** (código curto, ex. `SERV-01`) + designação, qtd, preço, IVA. Na emissão, o CMS cria o artigo na categoria por defeito com essa referência — **nunca** slugifica a descrição (ex. já não gera `CMS-EBOOK-ATE-30-PAGINAS`)
 3. **Guardar rascunho** ou **Emitir no Moloni**
 4. Na emissão: cliente sem `external_id` é enviado ao Moloni automaticamente
 5. Número provisório (`DRAFT-…`) substituído pelo número Moloni
+
+O mesmo padrão de Ref.ª Artigo aplica-se às **linhas de autofatura do calendário**.
 
 ### 6.2 Descarregar PDF
 
@@ -564,6 +568,11 @@ npm run build -w @tvde/billing
 - Verificar `billing_connections` para o workspace
 - Re-authorizar OAuth (tokens expirados/revogados)
 - Confirmar `ENCRYPTION_KEY` não mudou (invalida tokens encriptados)
+- Se o erro for `Unsupported state or unable to authenticate data` / mensagem «Credenciais Moloni ilegíveis»:
+  1. Colar de novo o **Client Secret** em Configurações → Moloni → Guardar
+  2. Clicar **Ligar conta Moloni (OAuth)**
+  3. «Verificar ligação» deve mostrar empresa saudável
+  - Sem a chave antiga **não** é possível recuperar tokens; re-auth é obrigatório.
 
 ### Redirect URI inválido
 

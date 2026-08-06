@@ -1,6 +1,6 @@
 import { prisma } from '@tvde/database';
 import { getServerConfig } from '@tvde/shared/server';
-import { decrypt, encrypt } from '../lib/crypto';
+import { canDecrypt, decrypt, encrypt, isCryptoAuthFailure } from '../lib/crypto';
 import {
   EmailNotConfiguredError,
   resolveSmtpConnection,
@@ -12,11 +12,20 @@ import { INVOICE_EMAIL_TEMPLATE } from './invoice-email-template';
 import { splitAppNameForEmail } from './email-design-tokens';
 import { getBillingConnection } from './moloni-connection.service';
 
+/** Mensagem PT quando ENCRYPTION_KEY mudou ou ciphertext SMTP de facturação está corrompido. */
+export const BILLING_SMTP_CRYPTO_RESAVE_MESSAGE =
+  'Password SMTP de facturação ilegível (ENCRYPTION_KEY alterada ou dados corrompidos). ' +
+  'Volte a colar a password em Configurações → Moloni → Email de faturas e guarde.';
+
 export type BillingEmailPublicSettings = {
   brandName: string | null;
   footerText: string | null;
   supportEmail: string | null;
+  /** Cópia oculta (BCC) opcional em todos os emails de faturas. */
+  emailBcc: string | null;
   smtpConfigured: boolean;
+  /** Password SMTP encriptada ilegível — é preciso voltar a colá-la e guardar. */
+  smtpNeedsResave: boolean;
   smtp: {
     host: string | null;
     port: number | null;
@@ -52,19 +61,22 @@ export async function getBillingEmailPublicSettings(
       brandName: null,
       footerText: null,
       supportEmail: null,
+      emailBcc: null,
       smtpConfigured: false,
+      smtpNeedsResave: false,
       smtp: null,
       brandingConfigured: false,
     };
   }
 
-  const smtpConfigured = Boolean(row.emailSmtpHost && row.emailSmtpUsername && row.emailSmtpEncryptedPassword);
-  return {
-    brandName: row.emailBrandName,
-    footerText: row.emailFooterText,
-    supportEmail: row.emailSupportEmail,
-    smtpConfigured,
-    smtp: smtpConfigured
+  const hasSmtpPassword = Boolean(row.emailSmtpEncryptedPassword);
+  const smtpPasswordReadable = canDecrypt(row.emailSmtpEncryptedPassword);
+  const smtpNeedsResave = hasSmtpPassword && !smtpPasswordReadable;
+  const smtpConfigured = Boolean(
+    row.emailSmtpHost && row.emailSmtpUsername && hasSmtpPassword && smtpPasswordReadable
+  );
+  const smtpFields =
+    row.emailSmtpHost || row.emailSmtpUsername
       ? {
           host: row.emailSmtpHost,
           port: row.emailSmtpPort,
@@ -73,16 +85,15 @@ export async function getBillingEmailPublicSettings(
           fromName: row.emailSmtpFromName,
           tls: row.emailSmtpTls,
         }
-      : row.emailSmtpHost
-        ? {
-            host: row.emailSmtpHost,
-            port: row.emailSmtpPort,
-            username: row.emailSmtpUsername,
-            fromEmail: row.emailSmtpFromEmail,
-            fromName: row.emailSmtpFromName,
-            tls: row.emailSmtpTls,
-          }
-        : null,
+      : null;
+  return {
+    brandName: row.emailBrandName,
+    footerText: row.emailFooterText,
+    supportEmail: row.emailSupportEmail,
+    emailBcc: row.emailBcc,
+    smtpConfigured,
+    smtpNeedsResave,
+    smtp: smtpFields,
     brandingConfigured: Boolean(row.emailBrandName?.trim()),
   };
 }
@@ -93,6 +104,7 @@ export async function upsertBillingEmailSettings(
     brandName?: string | null;
     footerText?: string | null;
     supportEmail?: string | null;
+    emailBcc?: string | null;
     smtpHost?: string | null;
     smtpPort?: number | null;
     smtpUsername?: string | null;
@@ -123,6 +135,7 @@ export async function upsertBillingEmailSettings(
       ...(input.supportEmail !== undefined
         ? { emailSupportEmail: emptyToNull(input.supportEmail) }
         : {}),
+      ...(input.emailBcc !== undefined ? { emailBcc: emptyToNull(input.emailBcc) } : {}),
       ...(input.smtpHost !== undefined ? { emailSmtpHost: emptyToNull(input.smtpHost) } : {}),
       ...(input.smtpPort !== undefined ? { emailSmtpPort: input.smtpPort } : {}),
       ...(input.smtpUsername !== undefined
@@ -144,6 +157,23 @@ export async function upsertBillingEmailSettings(
   return getBillingEmailPublicSettings(workspaceId);
 }
 
+/** BCC configurado no workspace de facturação (vazio = sem BCC). */
+export async function resolveBillingEmailBcc(workspaceId: string): Promise<string | null> {
+  const row = await getBillingConnection(workspaceId);
+  return emptyToNull(row?.emailBcc ?? null);
+}
+
+function decryptBillingSmtpPassword(encryptedPassword: string): string {
+  try {
+    return decrypt(encryptedPassword);
+  } catch (err) {
+    if (isCryptoAuthFailure(err)) {
+      throw new Error(BILLING_SMTP_CRYPTO_RESAVE_MESSAGE);
+    }
+    throw err;
+  }
+}
+
 function billingSmtpFromRow(row: {
   emailSmtpHost: string | null;
   emailSmtpPort: number | null;
@@ -156,12 +186,15 @@ function billingSmtpFromRow(row: {
   if (!row.emailSmtpHost || !row.emailSmtpUsername || !row.emailSmtpEncryptedPassword) {
     return null;
   }
+  if (!canDecrypt(row.emailSmtpEncryptedPassword)) {
+    throw new Error(BILLING_SMTP_CRYPTO_RESAVE_MESSAGE);
+  }
   const port = row.emailSmtpPort ?? 587;
   return {
     host: row.emailSmtpHost,
     port,
     username: row.emailSmtpUsername,
-    password: decrypt(row.emailSmtpEncryptedPassword),
+    password: decryptBillingSmtpPassword(row.emailSmtpEncryptedPassword),
     tls: row.emailSmtpTls,
     from: row.emailSmtpFromEmail?.trim() || row.emailSmtpUsername,
     fromName: row.emailSmtpFromName?.trim() || null,
@@ -250,6 +283,8 @@ export async function sendBillingInvoiceTemplateEmail(input: {
   const subject = renderEmailTemplate(INVOICE_EMAIL_TEMPLATE.subject, variables);
   const html = renderEmailTemplate(INVOICE_EMAIL_TEMPLATE.htmlBody, variables);
 
+  const bcc = await resolveBillingEmailBcc(input.workspaceId);
+
   try {
     return await sendEmail({
       tenantId: input.tenantId,
@@ -257,6 +292,7 @@ export async function sendBillingInvoiceTemplateEmail(input: {
       subject,
       html,
       fromName: brand.fromName,
+      ...(bcc ? { bcc } : {}),
       smtpOverride: usingBillingSmtp ? smtp : undefined,
       skipDefaultCopies: usingBillingSmtp,
     });
@@ -285,14 +321,20 @@ export async function sendBillingSmtpTestEmail(input: {
     );
   }
   const brand = await resolveBillingEmailBrand(input.workspaceId, input.tenantId);
+  const bcc = await resolveBillingEmailBcc(input.workspaceId);
+  const bccNote = bcc
+    ? `<p>BCC (cópia oculta): <code>${bcc}</code></p>`
+    : '<p>BCC: não configurado.</p>';
   return sendEmail({
     tenantId: input.tenantId,
     to: input.to,
     subject: `Teste SMTP facturação — ${brand.brandName}`,
     html: `<p>Este é um email de teste do SMTP de <strong>facturação / Moloni</strong> do workspace.</p>
 <p>Remetente: ${brand.fromName}</p>
+${bccNote}
 <p>Se recebeu esta mensagem, a configuração está correcta.</p>`,
     fromName: brand.fromName,
+    ...(bcc ? { bcc } : {}),
     smtpOverride: smtp,
     skipDefaultCopies: true,
   });
