@@ -149,6 +149,14 @@ export function getApiErrorMessage(
   if (res.error) {
     const fromZodJson = formatZodErrorJson(res.error);
     if (fromZodJson) return fromZodJson;
+    // Fastify 404: prefer "Route … not found" over bare "Not Found"
+    if (
+      (res.error === 'Not Found' || res.statusCode === 404) &&
+      typeof res.message === 'string' &&
+      res.message.trim()
+    ) {
+      return res.message;
+    }
   }
 
   if (res.error_description) return res.error_description;

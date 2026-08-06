@@ -17,10 +17,12 @@ const NAV_ITEMS: Array<{
   { href: WEB_ROUTES.dashboard.settings.modules, label: 'Módulos', minRole: 'superadmin' },
   { href: WEB_ROUTES.dashboard.settings.sms, label: 'SMS', minRole: 'superadmin', moduleKey: 'sms' },
   { href: WEB_ROUTES.dashboard.settings.moloni, label: 'Moloni', minRole: 'superadmin', moduleKey: 'billing' },
+  { href: WEB_ROUTES.dashboard.settings.whmcs, label: 'WHMCS', minRole: 'superadmin', moduleKey: 'whmcs' },
   { href: WEB_ROUTES.dashboard.settings.bolt, label: 'Bolt API', minRole: 'superadmin', moduleKey: 'bolt' },
   { href: WEB_ROUTES.dashboard.settings.tvde.root, label: 'TVDE', minRole: 'superadmin' },
   { href: WEB_ROUTES.dashboard.settings.calendar, label: 'Calendário', minRole: 'superadmin', moduleKey: 'calendar' },
   { href: WEB_ROUTES.dashboard.settings.smtp, label: 'SMTP', minRole: 'superadmin' },
+  { href: WEB_ROUTES.dashboard.settings.twoFa, label: '2FA', minRole: 'staff' },
   { href: WEB_ROUTES.dashboard.settings.security, label: 'Segurança', minRole: 'master' },
   { href: WEB_ROUTES.dashboard.settings.audit, label: 'Audit Log', minRole: 'superadmin' },
 ];

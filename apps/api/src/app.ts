@@ -1,5 +1,6 @@
 import { getApiPrefix, getHealthPath } from '@tvde/shared/server';
 import { env } from './config/env';
+import { getPlaywrightReadinessSnapshot } from './services/portal-rpa/types';
 import databasePlugin from './plugins/database.plugin';
 import authPlugin from './plugins/auth.plugin';
 import modulePlugin from './plugins/module.plugin';
@@ -16,6 +17,7 @@ import { billingRoutes, billingMoloniCallbackRoutes } from './routes/billing.rou
 import { billingPublicRoutes } from './routes/billing-public.routes';
 import { billingSyncCronRoutes } from './routes/billing-sync-cron.routes';
 import { calendarSyncCronRoutes } from './routes/calendar-cron.routes';
+import { whmcsRoutes, whmcsSyncCronRoutes } from './routes/whmcs.routes';
 import {
   moduleRoutes,
   clientRoutes,
@@ -85,10 +87,21 @@ export async function buildApp() {
   await fastify.register(authPlugin);
   await fastify.register(modulePlugin);
 
-  fastify.get(getHealthPath(), async () => ({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-  }));
+  fastify.get(getHealthPath(), async () => {
+    const playwright = env.portalRpaMock
+      ? { ready: true, detail: 'mock', launchVerified: true }
+      : getPlaywrightReadinessSnapshot();
+    return {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      playwright: {
+        ready: playwright.ready,
+        detail: playwright.detail,
+        launchVerified: playwright.launchVerified,
+        mock: env.portalRpaMock,
+      },
+    };
+  });
 
   await fastify.register(async (api) => {
     await api.register(authRoutes);
@@ -113,6 +126,8 @@ export async function buildApp() {
     await api.register(billingSyncCronRoutes);
     await api.register(boltSyncCronRoutes);
     await api.register(calendarSyncCronRoutes);
+    await api.register(whmcsSyncCronRoutes);
+    await api.register(whmcsRoutes);
     await api.register(calendarPublicRoutes);
     await api.register(calendarRoutes);
     await api.register(boltRoutes);

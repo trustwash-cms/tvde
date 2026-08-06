@@ -97,6 +97,19 @@ export const WEB_ROUTES = {
       produtosCategoriaArtigoEditar: (categoryId: number | string, productId: number | string) =>
         `/dashboard/billing/produtos/categorias/${categoryId}/artigos/${productId}`,
     },
+    whmcs: {
+      root: '/dashboard/whmcs',
+      clientes: '/dashboard/whmcs/clientes',
+      cliente: (id: number | string) => `/dashboard/whmcs/clientes/${id}`,
+      faturasWhmcs: '/dashboard/whmcs/faturas-whmcs',
+      faturaWhmcs: (id: number | string) => `/dashboard/whmcs/faturas-whmcs/${id}`,
+      servicos: '/dashboard/whmcs/servicos',
+      dominios: '/dashboard/whmcs/dominios',
+      produtos: '/dashboard/whmcs/produtos',
+      /** Mapa local WHMCS → Moloni */
+      faturas: '/dashboard/whmcs/faturas',
+      settings: '/dashboard/settings/whmcs',
+    },
     bolt: {
       root: '/dashboard/bolt',
       orders: '/dashboard/bolt/orders',
@@ -135,6 +148,7 @@ export const WEB_ROUTES = {
       sms: '/dashboard/settings/sms',
       whatsapp: '/dashboard/settings/whatsapp',
       moloni: '/dashboard/settings/moloni',
+      whmcs: '/dashboard/settings/whmcs',
       bolt: '/dashboard/settings/bolt',
       woocommerce: '/dashboard/settings/woocommerce',
       shopify: '/dashboard/settings/shopify',
@@ -246,6 +260,8 @@ export const API_PATHS = {
     emailTemplate: '/calendar/settings/email-template',
     scheduledInvoiceSettings: '/calendar/settings/scheduled-invoice',
     processScheduledInvoicesCron: '/calendar/cron/process-scheduled-invoices',
+    scheduledInvoiceResendEmail: (id: string) =>
+      `/calendar/scheduled-invoices/${id}/resend-email`,
     geocode: '/calendar/geocode',
     mapPreview: '/calendar/map-preview',
   },
@@ -436,6 +452,9 @@ export const API_PATHS = {
     faturaById: (id: string) => `/admin-mgmt/faturas/${id}`,
     faturaMarkPaid: (id: string) => `/admin-mgmt/faturas/${id}/mark-paid`,
     faturaMarkPending: (id: string) => `/admin-mgmt/faturas/${id}/mark-pending`,
+    faturasBulkMarkPaid: '/admin-mgmt/faturas/bulk/mark-paid',
+    faturasBulkMarkPending: '/admin-mgmt/faturas/bulk/mark-pending',
+    faturasBulkDelete: '/admin-mgmt/faturas/bulk/delete',
     faturaAnexoUpload: (id: string) => `/admin-mgmt/faturas/${id}/anexos`,
     faturaAnexoById: (faturaId: string, anexoId: string) =>
       `/admin-mgmt/faturas/${faturaId}/anexos/${anexoId}`,
@@ -491,6 +510,29 @@ export const API_PATHS = {
     moloniProductById: (id: number | string) => `/billing/moloni-products/${id}`,
     moloniProductDuplicate: (id: number | string) => `/billing/moloni-products/${id}/duplicate`,
     moloniProductFormOptions: '/billing/moloni-products/form-options',
+  },
+  whmcs: {
+    status: '/whmcs/status',
+    config: '/whmcs/config',
+    testConnection: '/whmcs/test-connection',
+    syncPaid: '/whmcs/sync/paid',
+    invoices: '/whmcs/invoices',
+    reprocess: (id: string) => `/whmcs/invoices/${id}/reprocess`,
+    cronSyncPaid: '/whmcs/cron/sync-paid',
+    clients: '/whmcs/clients',
+    clientById: (id: number | string) => `/whmcs/clients/${id}`,
+    clientEmail: (id: number | string) => `/whmcs/clients/${id}/email`,
+    invoicesLive: '/whmcs/invoices/live',
+    invoicesLiveBulk: '/whmcs/invoices/live/bulk',
+    invoiceLiveById: (id: number | string) => `/whmcs/invoices/live/${id}`,
+    invoiceSendEmail: (id: number | string) => `/whmcs/invoices/live/${id}/send-email`,
+    invoiceMarkPaid: (id: number | string) => `/whmcs/invoices/live/${id}/mark-paid`,
+    invoiceMarkUnpaid: (id: number | string) => `/whmcs/invoices/live/${id}/mark-unpaid`,
+    invoiceCancel: (id: number | string) => `/whmcs/invoices/live/${id}/cancel`,
+    paymentMethods: '/whmcs/payment-methods',
+    services: '/whmcs/services',
+    domains: '/whmcs/domains',
+    products: '/whmcs/products',
   },
   bolt: {
     status: '/bolt/status',
@@ -551,6 +593,8 @@ export const API_PATHS = {
     byPortal: (portal: string) => `/portal-connections/${portal}`,
     connect: (portal: string) => `/portal-connections/${portal}/connect`,
     otp: (portal: string) => `/portal-connections/${portal}/otp`,
+    /** Uber pós-OTP: submeter palavra-passe no browser vivo */
+    password: (portal: string) => `/portal-connections/${portal}/password`,
     sync: (portal: string) => `/portal-connections/${portal}/sync`,
     /** Uber: listar relatórios no Supplier (Playwright) */
     reports: (portal: string) => `/portal-connections/${portal}/reports`,
@@ -559,6 +603,15 @@ export const API_PATHS = {
     forgetPassword: (portal: string) => `/portal-connections/${portal}/forget-password`,
     disconnect: (portal: string) => `/portal-connections/${portal}`,
     job: (portal: string, jobId: string) => `/portal-connections/${portal}/jobs/${jobId}`,
+    /** Uber Arkose: JPEG base64 do browser Playwright vivo */
+    liveFrame: (portal: string, jobId: string) =>
+      `/portal-connections/${portal}/jobs/${jobId}/live-frame`,
+    /** Uber Arkose: clique/arrasto mapeado para page.mouse */
+    liveInput: (portal: string, jobId: string) =>
+      `/portal-connections/${portal}/jobs/${jobId}/live-input`,
+    /** Cancela job de ligação + fecha browser vivo */
+    cancelJob: (portal: string, jobId: string) =>
+      `/portal-connections/${portal}/jobs/${jobId}/cancel`,
   },
   users: {
     list: '/users',

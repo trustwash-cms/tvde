@@ -101,6 +101,7 @@ export {
 export { latLngToTile, osmEmbedUrl, osmTileUrl } from './calendar-map';
 export {
   CALENDAR_RECURRENCE_OPTIONS,
+  CALENDAR_INVOICE_RECURRENCE_OPTIONS,
   buildCalendarOccurrenceId,
   buildRecurrenceRule,
   getRecurrenceLabel,
@@ -132,6 +133,7 @@ export {
   CALENDAR_EVENT_TYPES,
   CALENDAR_SCHEDULED_INVOICE_ENABLED_KEY,
   CALENDAR_SCHEDULED_INVOICE_CATEGORY_ID_KEY,
+  INVOICE_LINE_SUMMARY_MAX_LENGTH,
   type CalendarEventType,
   type CalendarScheduledInvoiceDraft,
   type CalendarScheduledInvoiceLine,
