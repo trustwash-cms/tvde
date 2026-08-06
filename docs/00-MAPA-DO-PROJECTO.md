@@ -18,6 +18,7 @@ Documento de referência para humanos e agentes de IA. Ao ler este ficheiro deve
 | Cache / rate-limit | Redis 7 |
 | CSS | Tailwind CSS 3.4 + `globals.css` (igual ao CMS) |
 | Facturação | Moloni via `packages/billing` |
+| WHMCS | Consulta CRM (só leitura) + Faturas pagas → Moloni (`docs/whmcs_moloni.md`) |
 | Pacotes internos | `@tvde/shared`, `@tvde/database`, `@tvde/billing`, `@tvde/api`, `@tvde/web` |
 
 ### Módulos **activos** no TVDE (UI + API registadas)
@@ -32,6 +33,7 @@ Documento de referência para humanos e agentes de IA. Ao ler este ficheiro deve
 | `products` | Catálogo interno | `/dashboard/products` |
 | `services` | Serviços (BD; UI partilhada com produtos) | — |
 | `billing` | Facturação Moloni | `/dashboard/billing/*` |
+| `whmcs` | WHMCS CRM (leitura) + Moloni (pagas) | `/dashboard/whmcs/*` |
 | `calendar` | Calendário partilhado | `/dashboard/calendar` |
 | `admin_mgmt` | Gestão administrativa | `/dashboard/admin-mgmt/*` |
 | `sms` | SMS / 2FA | Config → SMS |

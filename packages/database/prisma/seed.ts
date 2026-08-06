@@ -17,6 +17,7 @@ const CORE_MODULES = [
 const BUSINESS_MODULES = [
   { key: 'clients', name: 'Clientes', description: 'CRM básico' },
   { key: 'billing', name: 'Facturação', description: 'Faturas Moloni e documentos' },
+  { key: 'whmcs', name: 'WHMCS', description: 'Faturação certificada Moloni a partir de faturas pagas no WHMCS' },
   { key: 'bolt', name: 'Bolt', description: 'Integração API Bolt — pedidos, motoristas e veículos' },
   { key: 'uber', name: 'Uber', description: 'Integração e gestão Uber' },
   { key: 'via_verde', name: 'Via Verde', description: 'Portagens e Via Verde' },

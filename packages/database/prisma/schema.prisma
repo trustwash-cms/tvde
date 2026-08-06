@@ -86,6 +86,8 @@ model Tenant {
   paymentReports            PaymentReport[]
   portalConnections         PortalConnection[]
   portalSyncJobs            PortalSyncJob[]
+  whmcsConnections          WhmcsConnection[]
+  whmcsInvoiceMaps          WhmcsInvoiceMap[]
 
   @@map("tenants")
 }
@@ -158,6 +160,8 @@ model Workspace {
   boltDrivers             BoltDriver[]
   boltVehicles            BoltVehicle[]
   boltSyncLogs            BoltSyncLog[]
+  whmcsConnection         WhmcsConnection?
+  whmcsInvoiceMaps        WhmcsInvoiceMap[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -718,6 +722,7 @@ model Invoice {
   lines         InvoiceLine[]
   scheduledFromCalendar CalendarScheduledInvoice[]
   downloadTokens InvoiceDownloadToken[]
+  whmcsInvoiceMaps WhmcsInvoiceMap[]
 
   @@unique([workspaceId, number])
   @@index([tenantId, workspaceId])
@@ -747,7 +752,11 @@ model InvoiceLine {
   productId         String? @map("product_id") @db.Uuid
   externalProductId String? @map("external_product_id")
   externalTaxId     String? @map("external_tax_id")
+  /** Ref.ª Artigo Moloni (linha manual) — nunca gerada a partir da descrição */
+  productReference  String? @map("product_reference")
   description       String
+  /** Resumo Moloni (0–250) — sob a designação no documento */
+  summary           String? @db.VarChar(250)
   quantity          Int     @default(1)
   unitPrice         Decimal @map("unit_price") @db.Decimal(12, 2)
   vatRate           Decimal @default(23) @map("vat_rate") @db.Decimal(5, 2)
@@ -864,6 +873,8 @@ model BillingConnection {
   emailSmtpFromEmail             String?  @map("email_smtp_from_email") @db.VarChar(255)
   emailSmtpFromName              String?  @map("email_smtp_from_name") @db.VarChar(255)
   emailSmtpTls                   Boolean  @default(true) @map("email_smtp_tls")
+  /** Cópia oculta (BCC) em todos os emails de faturas deste workspace */
+  emailBcc                       String?  @map("email_bcc") @db.VarChar(255)
   createdAt                  DateTime  @default(now()) @map("created_at")
   updatedAt                  DateTime  @updatedAt @map("updated_at")
 
@@ -2648,3 +2659,65 @@ model PaymentReport {
   @@index([tenantId, isPaid])
   @@map("payment_reports")
 }
+
+/** Credenciais WHMCS API por workspace — emissão Moloni quando fatura fica Paga. */
+model WhmcsConnection {
+  id                     String    @id @default(uuid()) @db.Uuid
+  workspaceId            String    @unique @map("workspace_id") @db.Uuid
+  tenantId               String    @map("tenant_id") @db.Uuid
+  apiUrl                 String    @map("api_url") @db.VarChar(512)
+  apiIdentifier          String    @map("api_identifier") @db.VarChar(255)
+  encryptedApiSecret     String    @map("encrypted_api_secret") @db.Text
+  isActive               Boolean   @default(true) @map("is_active")
+  /** Emitir fatura-recibo Moloni automaticamente quando WHMCS marca Paid */
+  emitOnPaid             Boolean   @default(true) @map("emit_on_paid")
+  /** Enviar email de fatura após emissão (SMTP Moloni do workspace) */
+  sendEmailOnIssue       Boolean   @default(true) @map("send_email_on_issue")
+  /** Tipo documental Moloni (default invoice_receipt) */
+  documentType           String    @default("invoice_receipt") @map("document_type") @db.VarChar(64)
+  documentSetId          Int?      @map("document_set_id")
+  /** Lookback em dias para poll de faturas pagas */
+  pollLookbackDays       Int       @default(30) @map("poll_lookback_days")
+  connectedAt            DateTime? @map("connected_at")
+  lastPolledAt           DateTime? @map("last_polled_at")
+  lastError              String?   @map("last_error") @db.Text
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("whmcs_connections")
+}
+
+/** Mapa fatura WHMCS → fatura CMS/Moloni (dedupe + reprocessar). */
+model WhmcsInvoiceMap {
+  id               String    @id @default(uuid()) @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  whmcsInvoiceId   Int       @map("whmcs_invoice_id")
+  whmcsInvoiceNum  String?   @map("whmcs_invoice_num") @db.VarChar(64)
+  whmcsClientId    Int?      @map("whmcs_client_id")
+  status           String    @default("pending") @db.VarChar(32)
+  /** pending | processing | issued | failed | skipped */
+  billingInvoiceId String?   @map("billing_invoice_id") @db.Uuid
+  moloniExternalId String?   @map("moloni_external_id") @db.VarChar(64)
+  amountTotal      Decimal?  @map("amount_total") @db.Decimal(12, 2)
+  currency         String?   @db.VarChar(8)
+  paidAt           DateTime? @map("paid_at")
+  lastError        String?   @map("last_error") @db.Text
+  processedAt      DateTime? @map("processed_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  billingInvoice Invoice? @relation(fields: [billingInvoiceId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, whmcsInvoiceId])
+  @@index([tenantId, status])
+  @@index([workspaceId, status])
+  @@map("whmcs_invoice_maps")
+}
+

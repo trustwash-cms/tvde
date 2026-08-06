@@ -28,6 +28,7 @@ interface ModuleHealth {
 const CONFIG_LINKS: Partial<Record<string, string>> = {
   sms: WEB_ROUTES.dashboard.settings.sms,
   billing: WEB_ROUTES.dashboard.settings.moloni,
+  whmcs: WEB_ROUTES.dashboard.settings.whmcs,
   bolt: WEB_ROUTES.dashboard.settings.bolt,
   calendar: WEB_ROUTES.dashboard.settings.calendar,
 };

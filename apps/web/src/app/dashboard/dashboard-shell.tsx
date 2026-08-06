@@ -45,6 +45,7 @@ const navItems = [
   { href: WEB_ROUTES.dashboard.workspaces, label: 'Workspaces', icon: Layers, area: 'workspaces' as const },
   { href: WEB_ROUTES.dashboard.clients, label: 'Clientes', icon: UserCircle, area: 'clients' as const, moduleKey: 'clients' },
   { href: WEB_ROUTES.dashboard.billing.root, label: 'Facturação', icon: Receipt, area: 'billing' as const, moduleKey: 'billing' },
+  { href: WEB_ROUTES.dashboard.whmcs.root, label: 'WHMCS', icon: Receipt, area: 'whmcs' as const, moduleKey: 'whmcs' },
   { href: WEB_ROUTES.dashboard.bolt.root, label: 'Bolt', icon: Zap, area: 'bolt' as const, moduleKey: 'bolt' },
   { href: WEB_ROUTES.dashboard.uber.root, label: 'Uber', icon: Car, area: 'uber' as const, moduleKey: 'uber' },
   { href: WEB_ROUTES.dashboard.viaVerde.root, label: 'Via Verde', icon: Nfc, area: 'via_verde' as const, moduleKey: 'via_verde' },
@@ -131,6 +132,7 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (pathname === href) return true;
   if (area === 'settings' && pathname.startsWith('/dashboard/settings')) return true;
   if (area === 'billing' && pathname.startsWith('/dashboard/billing')) return true;
+  if (area === 'whmcs' && pathname.startsWith('/dashboard/whmcs')) return true;
   if (area === 'bolt' && pathname.startsWith('/dashboard/bolt')) return true;
   if (area === 'uber' && pathname.startsWith('/dashboard/uber')) return true;
   if (area === 'via_verde' && pathname.startsWith('/dashboard/via-verde')) return true;
