@@ -41,6 +41,7 @@ import {
   getCalendarScheduledInvoiceSettings,
   saveCalendarScheduledInvoiceSettings,
 } from '../services/calendar/calendar-scheduled-invoice-settings.service';
+import { resendScheduledInvoiceEmail } from '../services/calendar/calendar-scheduled-invoice.service';
 import { generateMapImageBuffer } from '../services/calendar/calendar-map-image.service';
 import {
   buildMapPreviewImageUrl,
@@ -82,10 +83,12 @@ const eventTypeSchema = z.enum(['appointment', 'invoice']).optional();
 
 const scheduledInvoiceLineSchema = z.object({
   description: z.string().min(1).max(500),
+  summary: z.string().max(250).optional(),
   quantity: z.coerce.number().positive(),
   unitPrice: z.coerce.number().min(0),
   vatRate: z.coerce.number().min(0).max(100).optional(),
   moloniProductId: z.coerce.number().optional(),
+  productReference: z.string().max(30).optional(),
   moloniTaxId: z.coerce.number().optional(),
   moloniExemptionReason: z.string().min(2).max(8).optional(),
 });
@@ -889,6 +892,49 @@ export async function calendarRoutes(fastify: FastifyInstance) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao dispensar lembrete';
       return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.post('/calendar/scheduled-invoices/:id/resend-email', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        toEmail: z.string().email().optional(),
+      })
+      .parse(request.body ?? {});
+
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+
+    try {
+      const data = await resendScheduledInvoiceEmail({
+        scheduledInvoiceId: id,
+        tenantId,
+        workspaceId,
+        toEmail: body.toEmail,
+      });
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'calendar.scheduled_invoice_resend_email',
+        entityType: 'calendar_scheduled_invoice',
+        entityId: id,
+        ipAddress: request.ip,
+        afterJson: { invoiceId: data.invoiceId, toEmail: data.toEmail },
+      });
+      return reply.send({
+        success: true,
+        data,
+        message: `Email reenviado para ${data.toEmail}`,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao reenviar email';
+      const status = message.includes('SMTP') || message.includes('ilegível') ? 503 : 400;
+      return reply.status(status).send({ success: false, error: message });
     }
   });
 }

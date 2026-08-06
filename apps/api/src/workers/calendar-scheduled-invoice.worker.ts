@@ -1,11 +1,13 @@
-import { env } from '../config/env';
 import { processDueScheduledInvoices } from '../services/calendar/calendar-scheduled-invoice.service';
 
 const INTERVAL_MS = 60_000;
 
+/**
+ * Processa faturas agendadas do calendário a cada 60s.
+ * Em produção o cron HTTP (`POST /calendar/cron/process-scheduled-invoices`)
+ * continua disponível como trigger externo; o claim por status evita duplicados.
+ */
 export function startCalendarScheduledInvoiceWorker() {
-  if (env.nodeEnv !== 'development') return;
-
   const tick = async () => {
     try {
       const result = await processDueScheduledInvoices({
@@ -24,5 +26,5 @@ export function startCalendarScheduledInvoiceWorker() {
     void tick();
   }, INTERVAL_MS);
 
-  console.log('[calendar-worker] autofaturação activa (dev, cada 60s)');
+  console.log('[calendar-worker] autofaturação activa (cada 60s)');
 }

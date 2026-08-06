@@ -25,7 +25,7 @@ import {
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { buildCalendarEventContent } from '@/components/calendar/calendar-event-content';
-import { displayNameFromEmail, getTimeGreeting } from '@/components/calendar/calendar-greeting';
+import { getTimeGreeting, greetingFirstName } from '@/components/calendar/calendar-greeting';
 import { CalendarScheduledSidebar } from '@/components/calendar/calendar-scheduled-sidebar';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
@@ -63,6 +63,8 @@ export default function CalendarPanel() {
   const [calendars, setCalendars] = useState<CalendarRecord[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState('');
+  const [currentUserFullName, setCurrentUserFullName] = useState<string | null>(null);
+  const [currentUserUsername, setCurrentUserUsername] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
   const [searchQuery, setSearchQuery] = useState('');
   const [gridHeight, setGridHeight] = useState(520);
@@ -173,12 +175,20 @@ export default function CalendarPanel() {
   );
 
   useEffect(() => {
-    apiFetch<{ id: string; email: string; role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then(
-      (res) => {
-        if (res.data?.id) setCurrentUserId(res.data.id);
-        if (res.data?.email) setCurrentUserEmail(res.data.email);
+    apiFetch<{
+      id: string;
+      email: string;
+      role: Role;
+      fullName?: string | null;
+      username?: string | null;
+    }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
+      if (res.data?.id) setCurrentUserId(res.data.id);
+      if (res.data?.email) setCurrentUserEmail(res.data.email);
+      if (res.data) {
+        setCurrentUserFullName(res.data.fullName ?? null);
+        setCurrentUserUsername(res.data.username ?? null);
       }
-    );
+    });
   }, []);
 
   useEffect(() => {
@@ -317,7 +327,11 @@ export default function CalendarPanel() {
     patchEventTimes(event.id, event.start, event.end, event.allDay);
   }
 
-  const greetingName = currentUserEmail ? displayNameFromEmail(currentUserEmail) : 'Utilizador';
+  const greetingName = greetingFirstName({
+    fullName: currentUserFullName,
+    username: currentUserUsername,
+    email: currentUserEmail,
+  });
 
   return (
     <div className="calendar-page calendar-pro">

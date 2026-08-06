@@ -33,6 +33,7 @@ import {
   formatDateTimeLocal,
   getTodayRangeInTimezone,
   parseCalendarOccurrenceId,
+  parseRecurrencePreset,
 } from '@tvde/shared';
 import { env } from '../../config/env';
 import { assertTenantStorageQuota } from '../tenant-storage.service';
@@ -43,6 +44,19 @@ import {
 } from './calendar-attachment-storage.service';
 import { expandRecurringEvent } from './calendar-recurrence-expand.service';
 import { recalcPendingReminderFireTimes, syncEventReminders } from './calendar-reminder.service';
+
+function assertInvoiceRecurrenceAllowed(recurrenceRule?: string | null) {
+  if (!recurrenceRule?.trim()) return;
+  if (parseRecurrencePreset(recurrenceRule) !== 'monthly') {
+    throw new Error('Faturas agendadas só suportam repetição mensal');
+  }
+}
+
+function sanitizeInvoiceRecurrenceRule(recurrenceRule?: string | null): string | null {
+  assertInvoiceRecurrenceAllowed(recurrenceRule);
+  if (!recurrenceRule?.trim()) return null;
+  return parseRecurrencePreset(recurrenceRule) === 'monthly' ? recurrenceRule : null;
+}
 
 function assertStartNotInPast(startAt: Date, allDay: boolean, timeZone: string) {
   const now = new Date();
@@ -530,9 +544,7 @@ export async function createEvent(
 
   const eventType = input.eventType ?? 'appointment';
   if (eventType === 'invoice') {
-    if (input.recurrenceRule) {
-      throw new Error('Eventos de fatura agendada não suportam recorrência');
-    }
+    assertInvoiceRecurrenceAllowed(input.recurrenceRule);
     const enabled = await isCalendarScheduledInvoiceEnabled(tenantId, workspaceId);
     if (!enabled) {
       throw new Error('Autofaturação no calendário não está activa');
@@ -563,6 +575,9 @@ export async function createEvent(
     await assertUsersInTenant(tenantId, attendeeIds);
   }
 
+  const invoiceRecurrenceRule =
+    eventType === 'invoice' ? sanitizeInvoiceRecurrenceRule(input.recurrenceRule) : null;
+
   const event = await prisma.$transaction(async (tx) => {
     const created = await tx.calendarEvent.create({
       data: {
@@ -578,8 +593,13 @@ export async function createEvent(
         allDay: eventType === 'invoice' ? false : (input.allDay ?? false),
         timezone: input.timezone ?? calendar.timezone,
         color: input.color ?? (eventType === 'invoice' ? '#f59e0b' : undefined),
-        recurrenceRule: eventType === 'invoice' ? null : input.recurrenceRule,
-        recurrenceUntil: eventType === 'invoice' ? null : input.recurrenceUntil,
+        recurrenceRule: eventType === 'invoice' ? invoiceRecurrenceRule : input.recurrenceRule,
+        recurrenceUntil:
+          eventType === 'invoice'
+            ? invoiceRecurrenceRule
+              ? input.recurrenceUntil
+              : null
+            : input.recurrenceUntil,
         metadataJson: asMetadataJson(
           mergeEventMetadata({}, {
             eventType,
@@ -688,9 +708,7 @@ export async function updateEvent(
   const nextEventType = input.eventType ?? currentEventType;
 
   if (nextEventType === 'invoice') {
-    if (input.recurrenceRule) {
-      throw new Error('Eventos de fatura agendada não suportam recorrência');
-    }
+    assertInvoiceRecurrenceAllowed(input.recurrenceRule);
     const enabled = await isCalendarScheduledInvoiceEnabled(tenantId, existing.workspaceId);
     if (!enabled) {
       throw new Error('Autofaturação no calendário não está activa');
@@ -726,6 +744,13 @@ export async function updateEvent(
         })
       : undefined;
 
+  const invoiceRecurrenceRule =
+    nextEventType === 'invoice'
+      ? sanitizeInvoiceRecurrenceRule(
+          input.recurrenceRule !== undefined ? input.recurrenceRule : existing.recurrenceRule
+        )
+      : null;
+
   await prisma.calendarEvent.update({
     where: { id: masterId },
     data: {
@@ -739,8 +764,18 @@ export async function updateEvent(
       color: input.color,
       status: input.status,
       calendarId: input.calendarId,
-      recurrenceRule: nextEventType === 'invoice' ? null : input.recurrenceRule,
-      recurrenceUntil: nextEventType === 'invoice' ? null : input.recurrenceUntil,
+      recurrenceRule:
+        nextEventType === 'invoice'
+          ? input.recurrenceRule !== undefined
+            ? invoiceRecurrenceRule
+            : undefined
+          : input.recurrenceRule,
+      recurrenceUntil:
+        nextEventType === 'invoice'
+          ? input.recurrenceRule !== undefined && !invoiceRecurrenceRule
+            ? null
+            : input.recurrenceUntil
+          : input.recurrenceUntil,
       ...(metadataUpdate !== undefined ? { metadataJson: asMetadataJson(metadataUpdate) } : {}),
     },
   });

@@ -1,12 +1,21 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { parseMoloniInvoiceErrorMessage } from '@tvde/shared';
 import {
   BillingEntityPicker,
   type BillingEntityOption,
 } from '@/components/billing/billing-entity-picker';
+import {
+  BillingProductPicker,
+  type BillingProductOption,
+} from '@/components/billing/billing-product-picker';
+import { SoftDecimalInput } from '@/components/soft-decimal-input';
 import type { CalendarScheduledInvoiceLine } from '@tvde/shared';
+import { INVOICE_LINE_SUMMARY_MAX_LENGTH } from '@tvde/shared';
+import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
+import { withWorkspaceQuery } from '@/lib/workspace-query';
 
 export interface CalendarInvoiceLineForm extends CalendarScheduledInvoiceLine {}
 
@@ -18,10 +27,18 @@ const MOLONI_EXEMPTION_OPTIONS = [
 ] as const;
 
 export function emptyInvoiceLine(): CalendarInvoiceLineForm {
-  return { description: '', quantity: 1, unitPrice: 0, vatRate: 23 };
+  return {
+    description: '',
+    summary: '',
+    quantity: 1,
+    unitPrice: 0,
+    vatRate: 23,
+    productReference: '',
+  };
 }
 
 interface CalendarInvoiceEventFieldsProps {
+  workspaceId?: string | null;
   entities: BillingEntityOption[];
   billingEntityId: string;
   onBillingEntityChange: (id: string) => void;
@@ -39,10 +56,13 @@ interface CalendarInvoiceEventFieldsProps {
   emailSentAt?: string | null;
   emailSent?: boolean;
   emailErrorMessage?: string | null;
+  scheduledInvoiceId?: string | null;
+  onEmailResent?: (result: { emailSentAt: string }) => void;
   theme?: 'light' | 'dark';
 }
 
 export function CalendarInvoiceEventFields({
+  workspaceId,
   entities,
   billingEntityId,
   onBillingEntityChange,
@@ -60,10 +80,39 @@ export function CalendarInvoiceEventFields({
   emailSentAt,
   emailSent,
   emailErrorMessage,
+  scheduledInvoiceId,
+  onEmailResent,
   theme = 'dark',
 }: CalendarInvoiceEventFieldsProps) {
   const dark = theme === 'dark';
   const invoiceError = errorMessage ? parseMoloniInvoiceErrorMessage(errorMessage) : null;
+  const [products, setProducts] = useState<BillingProductOption[]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [resendingEmail, setResendingEmail] = useState(false);
+  const [resendError, setResendError] = useState<string | null>(null);
+
+  const loadProducts = useCallback(
+    (searchQ?: string) => {
+      if (!workspaceId) return;
+      setProductsLoading(true);
+      apiFetch<BillingProductOption[]>(
+        withWorkspaceQuery(API_PATHS.billing.products, workspaceId, {
+          q: searchQ?.trim() || undefined,
+        }),
+        {},
+        getStoredToken()
+      ).then((res) => {
+        if (res.data) setProducts(res.data);
+        setProductsLoading(false);
+      });
+    },
+    [workspaceId]
+  );
+
+  useEffect(() => {
+    if (!workspaceId || readOnly) return;
+    loadProducts();
+  }, [workspaceId, readOnly, loadProducts]);
 
   function updateLine(index: number, patch: Partial<CalendarInvoiceLineForm>) {
     onLinesChange(lines.map((line, i) => (i === index ? { ...line, ...patch } : line)));
@@ -76,6 +125,49 @@ export function CalendarInvoiceEventFields({
   function removeLine(index: number) {
     if (lines.length <= 1) return;
     onLinesChange(lines.filter((_, i) => i !== index));
+  }
+
+  function addProductLine(product: BillingProductOption) {
+    const newLine: CalendarInvoiceLineForm = {
+      description: product.name,
+      summary: '',
+      quantity: 1,
+      unitPrice: product.price ?? 0,
+      vatRate: 23,
+      moloniProductId: product.productId,
+      productReference: product.reference ?? '',
+    };
+    const emptyIdx = lines.findIndex(
+      (l) => !l.description.trim() && !l.moloniProductId && !l.productReference?.trim()
+    );
+    if (emptyIdx >= 0) {
+      onLinesChange(lines.map((line, i) => (i === emptyIdx ? newLine : line)));
+    } else {
+      onLinesChange([...lines, newLine]);
+    }
+  }
+
+  async function resendInvoiceEmail() {
+    if (!scheduledInvoiceId || !workspaceId) return;
+    setResendError(null);
+    setResendingEmail(true);
+    const res = await apiFetch<{ emailSentAt: string }>(
+      API_PATHS.calendar.scheduledInvoiceResendEmail(scheduledInvoiceId),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId,
+          ...(clientEmail.trim() ? { toEmail: clientEmail.trim() } : {}),
+        }),
+      },
+      getStoredToken()
+    );
+    setResendingEmail(false);
+    if (!res.success || !res.data?.emailSentAt) {
+      setResendError(getApiErrorMessage(res) || 'Falha ao reenviar email');
+      return;
+    }
+    onEmailResent?.({ emailSentAt: res.data.emailSentAt });
   }
 
   return (
@@ -148,14 +240,35 @@ export function CalendarInvoiceEventFields({
 
       {!emailSent && sendEmail && emailErrorMessage && (
         <div
-          className={`rounded-lg border px-3 py-2 text-xs ${
+          className={`space-y-2 rounded-lg border px-3 py-2 text-xs ${
             dark
               ? 'border-amber-500/40 bg-amber-950/30 text-amber-200'
               : 'border-amber-200 bg-amber-50 text-amber-800'
           }`}
         >
-          <span className="font-medium">Fatura emitida, mas email falhou: </span>
-          {emailErrorMessage}
+          <div>
+            <span className="font-medium">Fatura emitida, mas email falhou: </span>
+            {emailErrorMessage}
+          </div>
+          {emailErrorMessage.toLowerCase().includes('smtp') ||
+          emailErrorMessage.toLowerCase().includes('ilegível') ||
+          emailErrorMessage.toLowerCase().includes('authenticate') ? (
+            <p className="opacity-90">
+              Se a password SMTP ficou ilegível, volte a colá-la em Configurações → Moloni → Email de
+              faturas, guarde, e depois reenvie.
+            </p>
+          ) : null}
+          {scheduledInvoiceId && (
+            <button
+              type="button"
+              className="btn-secondary px-2 py-1 text-xs"
+              disabled={resendingEmail || !clientEmail.trim()}
+              onClick={() => void resendInvoiceEmail()}
+            >
+              {resendingEmail ? 'A reenviar…' : 'Reenviar email da fatura'}
+            </button>
+          )}
+          {resendError && <p className="text-red-600 dark:text-red-300">{resendError}</p>}
         </div>
       )}
 
@@ -195,70 +308,196 @@ export function CalendarInvoiceEventFields({
           {!readOnly && (
             <button type="button" className="btn-secondary px-2 py-1 text-xs" onClick={addLine}>
               <Plus size={14} className="mr-1 inline" />
-              Linha
+              Linha manual
             </button>
           )}
         </div>
+
+        {!readOnly && workspaceId && (
+          <div className="space-y-1">
+            <label className={`block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-600'}`}>
+              Pesquisar artigo existente
+            </label>
+            <BillingProductPicker
+              products={products}
+              loading={productsLoading}
+              onSearch={loadProducts}
+              onSelect={addProductLine}
+              disabled={readOnly}
+              theme={theme}
+            />
+          </div>
+        )}
+
         {lines.map((line, index) => (
           <div
             key={index}
-            className={`grid gap-2 rounded-lg border p-2 sm:grid-cols-12 ${
+            className={`space-y-2 rounded-lg border p-2 ${
               dark ? 'border-slate-700/80 bg-slate-900/60' : 'border-slate-200 bg-white'
             }`}
           >
-            <div className="sm:col-span-5">
-              <input
-                className="input"
-                value={line.description}
-                disabled={readOnly}
-                onChange={(e) => updateLine(index, { description: e.target.value })}
-                placeholder="Descrição"
-                required
-              />
+            <div className="flex flex-wrap items-center justify-between gap-1">
+              {line.moloniProductId ? (
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    dark ? 'bg-emerald-950/50 text-emerald-300' : 'bg-emerald-50 text-emerald-800'
+                  }`}
+                >
+                  Catálogo{line.productReference ? ` · ${line.productReference}` : ''}
+                </span>
+              ) : (
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                    dark ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-700'
+                  }`}
+                >
+                  Novo artigo
+                </span>
+              )}
+              {!readOnly && line.moloniProductId && (
+                <button
+                  type="button"
+                  className={`text-[10px] underline ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  onClick={() =>
+                    updateLine(index, { moloniProductId: undefined, productReference: '' })
+                  }
+                >
+                  Converter em manual
+                </button>
+              )}
             </div>
-            <div className="sm:col-span-2">
-              <input
-                className="input"
-                type="number"
-                min="0.01"
-                step="0.01"
-                value={line.quantity}
-                disabled={readOnly}
-                onChange={(e) => updateLine(index, { quantity: Number(e.target.value) || 0 })}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <input
-                className="input"
-                type="number"
-                min="0"
-                step="0.01"
-                value={line.unitPrice}
-                disabled={readOnly}
-                onChange={(e) => updateLine(index, { unitPrice: Number(e.target.value) || 0 })}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <input
-                className="input"
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                value={line.vatRate ?? 23}
-                disabled={readOnly}
-                onChange={(e) => {
-                  const vatRate = Number(e.target.value) || 0;
-                  updateLine(index, {
-                    vatRate,
-                    moloniExemptionReason:
-                      vatRate === 0 ? line.moloniExemptionReason ?? 'M07' : undefined,
-                  });
-                }}
-              />
+            <div className="space-y-2">
+              <div className="grid grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)] gap-2">
+                <div className="min-w-0">
+                  <label
+                    className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  >
+                    Ref.ª
+                  </label>
+                  <input
+                    className="input w-full font-mono text-xs"
+                    value={line.productReference ?? ''}
+                    disabled={readOnly || Boolean(line.moloniProductId)}
+                    onChange={(e) =>
+                      updateLine(index, {
+                        productReference: e.target.value,
+                        moloniProductId: undefined,
+                      })
+                    }
+                    placeholder="SERV-01"
+                    title="Código curto — não é gerado a partir da descrição"
+                    required={!line.moloniProductId}
+                  />
+                </div>
+                <div className="min-w-0">
+                  <label
+                    className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  >
+                    Designação
+                  </label>
+                  <input
+                    className="input w-full"
+                    value={line.description}
+                    disabled={readOnly}
+                    onChange={(e) => updateLine(index, { description: e.target.value })}
+                    placeholder="Designação"
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <label
+                  className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                >
+                  Resumo
+                  <span className={`ml-1 font-normal ${dark ? 'text-slate-500' : 'text-slate-400'}`}>
+                    ({(line.summary ?? '').length}/{INVOICE_LINE_SUMMARY_MAX_LENGTH})
+                  </span>
+                </label>
+                <input
+                  className="input w-full"
+                  value={line.summary ?? ''}
+                  disabled={readOnly}
+                  maxLength={INVOICE_LINE_SUMMARY_MAX_LENGTH}
+                  onChange={(e) => updateLine(index, { summary: e.target.value })}
+                  placeholder="Ex.: mês A até mês B"
+                  title="Texto curto sob a designação no documento Moloni"
+                />
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto] items-end gap-2">
+                <div className="min-w-0">
+                  <label
+                    className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  >
+                    Qtd
+                  </label>
+                  <SoftDecimalInput
+                    className="input w-full"
+                    value={line.quantity}
+                    emptyAs={1}
+                    min={0.01}
+                    disabled={readOnly}
+                    onValueChange={(quantity) => updateLine(index, { quantity })}
+                    title="Quantidade"
+                    aria-label="Quantidade"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <label
+                    className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  >
+                    Preço
+                  </label>
+                  <SoftDecimalInput
+                    className="input w-full"
+                    value={line.unitPrice}
+                    emptyAs={0}
+                    min={0}
+                    disabled={readOnly}
+                    onValueChange={(unitPrice) => updateLine(index, { unitPrice })}
+                    title="Preço unitário"
+                    aria-label="Preço unitário"
+                    placeholder="0"
+                  />
+                </div>
+                <div className="min-w-0">
+                  <label
+                    className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
+                  >
+                    IVA %
+                  </label>
+                  <SoftDecimalInput
+                    className="input w-full"
+                    value={line.vatRate ?? 23}
+                    emptyAs={0}
+                    min={0}
+                    max={100}
+                    disabled={readOnly}
+                    onValueChange={(vatRate) =>
+                      updateLine(index, {
+                        vatRate,
+                        moloniExemptionReason:
+                          vatRate === 0 ? line.moloniExemptionReason ?? 'M07' : undefined,
+                      })
+                    }
+                    title="IVA %"
+                    aria-label="IVA %"
+                  />
+                </div>
+                {!readOnly && lines.length > 1 && (
+                  <button
+                    type="button"
+                    className={`mb-0.5 shrink-0 rounded p-1.5 ${dark ? 'text-red-400 hover:bg-red-950/40' : 'text-red-600 hover:bg-red-50'}`}
+                    onClick={() => removeLine(index)}
+                    aria-label="Remover linha"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
             </div>
             {(line.vatRate ?? 23) === 0 && (
-              <div className="sm:col-span-12">
+              <div>
                 <label className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-600'}`}>
                   Motivo de isenção IVA (Moloni)
                 </label>
@@ -276,22 +515,10 @@ export function CalendarInvoiceEventFields({
                 </select>
               </div>
             )}
-            {!readOnly && lines.length > 1 && (
-              <div className="flex items-center sm:col-span-1">
-                <button
-                  type="button"
-                  className={`rounded p-1 ${dark ? 'text-red-400 hover:bg-red-950/40' : 'text-red-600 hover:bg-red-50'}`}
-                  onClick={() => removeLine(index)}
-                  aria-label="Remover linha"
-                >
-                  <Trash2 size={16} />
-                </button>
-              </div>
-            )}
           </div>
         ))}
         <p className={`text-[11px] ${dark ? 'text-slate-500' : 'text-slate-500'}`}>
-          Quantidade · Preço unitário · IVA %
+          A Ref.ª Artigo é um código curto e não é gerada a partir da designação.
         </p>
       </div>
 
@@ -322,7 +549,7 @@ export function CalendarInvoiceEventFields({
             <span>
               <span className="font-medium">Emitir fatura</span>
               <span className={`mt-0.5 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Emite no Moloni com número oficial (ex. M/…)
+                Na hora agendada emite no Moloni com número oficial (ex. M/…)
               </span>
             </span>
           </label>
@@ -348,7 +575,7 @@ export function CalendarInvoiceEventFields({
             <span>
               <span className="font-medium">Apenas rascunho</span>
               <span className={`mt-0.5 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}>
-                Fica no CMS — emita manualmente em Facturação
+                Na hora agendada cria rascunho no CMS — emita depois em Facturação
               </span>
             </span>
           </label>
@@ -368,7 +595,8 @@ export function CalendarInvoiceEventFields({
           </label>
         ) : (
           <p className={`text-[11px] ${dark ? 'text-slate-500' : 'text-slate-500'}`}>
-            Sem emissão Moloni — não é enviado email automático. Revise o rascunho em Facturação.
+            Não cria o rascunho já ao guardar — só na data/hora do evento. Sem emissão Moloni nem email
+            automático.
           </p>
         )}
       </div>

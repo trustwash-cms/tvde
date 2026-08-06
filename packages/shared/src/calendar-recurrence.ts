@@ -17,6 +17,15 @@ export const CALENDAR_RECURRENCE_OPTIONS: Array<{
   { value: 'monthly', label: 'Mensalmente' },
 ];
 
+/** Presets permitidos em faturas agendadas (avenças). */
+export const CALENDAR_INVOICE_RECURRENCE_OPTIONS: Array<{
+  value: Extract<CalendarRecurrencePreset, 'none' | 'monthly'>;
+  label: string;
+}> = [
+  { value: 'none', label: 'Não repetir' },
+  { value: 'monthly', label: 'Mensalmente' },
+];
+
 const OCCURRENCE_ID_SEP = '__';
 
 export function buildRecurrenceRule(preset: CalendarRecurrencePreset): string | null {

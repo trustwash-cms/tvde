@@ -5,6 +5,7 @@ export type CalendarInvoiceUiState = {
   emailSent: boolean;
   sendEmail: boolean;
   emailError: string | null;
+  autoIssue: boolean;
   completed: boolean;
   failed: boolean;
   pending: boolean;
@@ -19,6 +20,7 @@ export function getCalendarInvoiceUi(raw?: CalendarEventRecord | null): Calendar
     emailSent: si.emailSent ?? Boolean(si.emailSentAt),
     sendEmail: si.draft?.sendEmail ?? false,
     emailError: si.emailErrorMessage ?? null,
+    autoIssue: si.draft?.autoIssue !== false,
     completed: status === 'completed',
     failed: status === 'failed',
     pending: status === 'pending' || status === 'processing',
@@ -47,8 +49,9 @@ export function appendInvoiceStatusBadge(parent: HTMLElement, invoiceUi: Calenda
   if (invoiceUi.completed) {
     const badge = document.createElement('span');
     badge.className = 'fc-invoice-badge fc-invoice-badge--done';
-    badge.title = 'Fatura concluída';
-    badge.setAttribute('aria-label', 'Fatura concluída');
+    const doneLabel = invoiceUi.autoIssue ? 'Fatura emitida' : 'Rascunho criado';
+    badge.title = doneLabel;
+    badge.setAttribute('aria-label', doneLabel);
     parent.appendChild(badge);
     return;
   }

@@ -1,5 +1,7 @@
 import { prisma, Prisma } from '@tvde/database';
 import type { CalendarScheduledInvoiceDraft, MoloniDocumentType } from '@tvde/shared';
+import { parseRecurrencePreset } from '@tvde/shared';
+import { RRule } from 'rrule';
 import {
   buildCalendarStorageKey,
   saveCalendarAttachmentFile,
@@ -27,10 +29,16 @@ function parseDraftPayload(value: unknown): CalendarScheduledInvoiceDraft | null
     .filter((line): line is Record<string, unknown> => Boolean(line && typeof line === 'object'))
     .map((line) => ({
       description: String(line.description ?? ''),
+      summary:
+        typeof line.summary === 'string' && line.summary.trim()
+          ? line.summary.trim().slice(0, 250)
+          : undefined,
       quantity: Number(line.quantity),
       unitPrice: Number(line.unitPrice),
       vatRate: line.vatRate != null ? Number(line.vatRate) : undefined,
       moloniProductId: line.moloniProductId != null ? Number(line.moloniProductId) : undefined,
+      productReference:
+        typeof line.productReference === 'string' ? line.productReference.trim() : undefined,
       moloniTaxId: line.moloniTaxId != null ? Number(line.moloniTaxId) : undefined,
       moloniExemptionReason:
         typeof line.moloniExemptionReason === 'string' ? line.moloniExemptionReason : undefined,
@@ -112,11 +120,17 @@ export async function upsertScheduledInvoiceForEvent(input: {
   });
 
   if (existing) {
+    const completedCount = await prisma.calendarScheduledInvoice.count({
+      where: { eventId: input.eventId, status: 'completed' },
+    });
+    const keepSchedule =
+      existing.status === 'pending' && completedCount > 0;
+
     return prisma.calendarScheduledInvoice.update({
       where: { id: existing.id },
       data: {
         billingEntityId: input.draft.billingEntityId,
-        scheduledAt: input.scheduledAt,
+        scheduledAt: keepSchedule ? existing.scheduledAt : input.scheduledAt,
         draftPayloadJson: payload,
         status: existing.status === 'failed' ? 'pending' : existing.status,
         errorMessage: null,
@@ -150,6 +164,63 @@ export async function cancelPendingScheduledInvoicesForEvent(eventId: string) {
   await prisma.calendarScheduledInvoice.updateMany({
     where: { eventId, status: 'pending' },
     data: { status: 'cancelled' },
+  });
+}
+
+/** Após emitir/rascunhar com sucesso, agenda a próxima ocorrência mensal se a série continuar. */
+async function scheduleNextMonthlyOccurrence(row: {
+  tenantId: string;
+  workspaceId: string;
+  eventId: string | null;
+  createdByUserId: string;
+  billingEntityId: string;
+  scheduledAt: Date;
+  draftPayloadJson: unknown;
+}) {
+  if (!row.eventId) return;
+
+  const event = await prisma.calendarEvent.findUnique({
+    where: { id: row.eventId },
+    select: { recurrenceRule: true, recurrenceUntil: true, startAt: true },
+  });
+  if (!event?.recurrenceRule) return;
+  if (parseRecurrencePreset(event.recurrenceRule) !== 'monthly') return;
+
+  let nextAt: Date | null = null;
+  try {
+    const options = RRule.parseString(event.recurrenceRule);
+    const rule = new RRule({
+      ...options,
+      dtstart: event.startAt,
+      until: event.recurrenceUntil ?? undefined,
+    });
+    nextAt = rule.after(row.scheduledAt, false);
+  } catch {
+    return;
+  }
+  if (!nextAt) return;
+  if (event.recurrenceUntil && nextAt > event.recurrenceUntil) return;
+
+  const alreadyPending = await prisma.calendarScheduledInvoice.findFirst({
+    where: {
+      eventId: row.eventId,
+      status: { in: ['pending', 'processing'] },
+      scheduledAt: nextAt,
+    },
+  });
+  if (alreadyPending) return;
+
+  await prisma.calendarScheduledInvoice.create({
+    data: {
+      tenantId: row.tenantId,
+      workspaceId: row.workspaceId,
+      eventId: row.eventId,
+      createdByUserId: row.createdByUserId,
+      billingEntityId: row.billingEntityId,
+      scheduledAt: nextAt,
+      draftPayloadJson: row.draftPayloadJson as Prisma.InputJsonValue,
+      status: 'pending',
+    },
   });
 }
 
@@ -282,6 +353,55 @@ async function processScheduledInvoiceRow(row: {
   return { invoiceId: issued.id, emailSentAt, emailErrorMessage };
 }
 
+/** Reenvia o email da fatura já emitida, usando o email de notificação do draft (ou override). */
+export async function resendScheduledInvoiceEmail(input: {
+  scheduledInvoiceId: string;
+  tenantId: string;
+  workspaceId: string;
+  toEmail?: string;
+}) {
+  const row = await prisma.calendarScheduledInvoice.findFirst({
+    where: {
+      id: input.scheduledInvoiceId,
+      tenantId: input.tenantId,
+      workspaceId: input.workspaceId,
+    },
+  });
+  if (!row) throw new Error('Fatura agendada não encontrada');
+  if (row.status !== 'completed') {
+    throw new Error('Só é possível reenviar email de faturas já emitidas');
+  }
+  if (!row.invoiceId) throw new Error('Fatura associada em falta');
+
+  const draft = parseDraftPayload(row.draftPayloadJson);
+  const toEmail =
+    input.toEmail?.trim() || draft?.clientEmail?.trim() || undefined;
+  if (!toEmail) throw new Error('Email de notificação em falta');
+
+  try {
+    await sendInvoiceEmail(row.invoiceId, input.tenantId, { toEmail });
+    const emailSentAt = new Date();
+    await prisma.calendarScheduledInvoice.update({
+      where: { id: row.id },
+      data: { emailSentAt, emailErrorMessage: null },
+    });
+    return {
+      scheduledInvoiceId: row.id,
+      invoiceId: row.invoiceId,
+      toEmail,
+      emailSentAt: emailSentAt.toISOString(),
+    };
+  } catch (emailErr) {
+    const emailErrorMessage =
+      emailErr instanceof Error ? emailErr.message : 'Falha ao enviar email da fatura';
+    await prisma.calendarScheduledInvoice.update({
+      where: { id: row.id },
+      data: { emailErrorMessage },
+    });
+    throw emailErr instanceof Error ? emailErr : new Error(emailErrorMessage);
+  }
+}
+
 export async function processDueScheduledInvoices(options?: {
   workspaceId?: string;
   limit?: number;
@@ -330,6 +450,11 @@ export async function processDueScheduledInvoices(options?: {
           emailErrorMessage: result.emailErrorMessage,
         },
       });
+      try {
+        await scheduleNextMonthlyOccurrence(row);
+      } catch (nextErr) {
+        console.warn('[calendar-scheduled-invoice] next monthly occurrence failed:', nextErr);
+      }
       results.push({ id: row.id, status: 'completed', invoiceId: result.invoiceId });
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Falha ao processar fatura agendada';

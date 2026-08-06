@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   buildRecurrenceRule,
+  CALENDAR_INVOICE_RECURRENCE_OPTIONS,
   CALENDAR_RECURRENCE_OPTIONS,
   DEFAULT_CALENDAR_TIMEZONE,
   formatTimezoneLabel,
@@ -68,13 +69,15 @@ interface ScheduledInvoiceFeatureSettings {
 }
 
 function scheduledInvoiceStatusLabel(status?: string | null, autoIssue?: boolean) {
+  const draftOnly = autoIssue === false;
   switch (status) {
     case 'pending':
-      return 'Pendente';
+      // Mesmo status DB (`pending`); o modo distingue intenção até à hora de disparo.
+      return draftOnly ? 'Agendado (rascunho)' : 'Pendente';
     case 'processing':
-      return 'A processar';
+      return draftOnly ? 'A criar rascunho' : 'A processar';
     case 'completed':
-      return autoIssue === false ? 'Rascunho criado' : 'Emitida';
+      return draftOnly ? 'Rascunho criado' : 'Emitida';
     case 'failed':
       return 'Falhou';
     case 'cancelled':
@@ -169,6 +172,11 @@ export function CalendarEventModal({
   });
   const [invoiceFeature, setInvoiceFeature] = useState<ScheduledInvoiceFeatureSettings | null>(null);
   const [billingEntities, setBillingEntities] = useState<BillingEntityListItem[]>([]);
+  const [emailOverride, setEmailOverride] = useState<{
+    emailSent: boolean;
+    emailSentAt: string | null;
+    emailErrorMessage: string | null;
+  } | null>(null);
 
   const selectedCalendar = useMemo(
     () => calendars.find((c) => c.id === form.calendarId) ?? null,
@@ -207,6 +215,7 @@ export function CalendarEventModal({
 
   useEffect(() => {
     if (!open) return;
+    setEmailOverride(null);
 
     if (event) {
       const eventTimezone =
@@ -431,13 +440,28 @@ export function CalendarEventModal({
         setError('Adicione pelo menos uma linha à fatura');
         return;
       }
+      const missingRef = validLines.find(
+        (line) => !line.moloniProductId && !line.productReference?.trim()
+      );
+      if (missingRef) {
+        setLoading(false);
+        setError(
+          `Linha «${missingRef.description.slice(0, 40)}» — indique a Ref.ª Artigo ou seleccione um artigo existente`
+        );
+        return;
+      }
     }
 
-    const recurrenceRule = isInvoice ? undefined : buildRecurrenceRule(form.recurrencePreset);
+    const effectivePreset: CalendarRecurrencePreset = isInvoice
+      ? form.recurrencePreset === 'monthly'
+        ? 'monthly'
+        : 'none'
+      : form.recurrencePreset;
+    const recurrenceRule = buildRecurrenceRule(effectivePreset);
     const recurrenceUntil =
-      !isInvoice && form.recurrencePreset !== 'none' && form.recurrenceUntil
+      effectivePreset !== 'none' && form.recurrenceUntil
         ? parseLocalInput(`${form.recurrenceUntil}T23:59`, false, calendarTimezone).toISOString()
-        : isInvoice || form.recurrencePreset === 'none'
+        : effectivePreset === 'none'
           ? null
           : undefined;
 
@@ -472,10 +496,12 @@ export function CalendarEventModal({
           .filter((line) => line.description.trim())
           .map((line) => ({
             description: line.description.trim(),
+            summary: line.summary?.trim() || undefined,
             quantity: line.quantity,
             unitPrice: line.unitPrice,
             vatRate: line.vatRate,
             moloniProductId: line.moloniProductId,
+            productReference: line.productReference?.trim() || undefined,
             moloniTaxId: line.moloniTaxId,
             moloniExemptionReason:
               (line.vatRate ?? 23) === 0 ? line.moloniExemptionReason ?? 'M07' : undefined,
@@ -738,7 +764,54 @@ export function CalendarEventModal({
             Fuso horário: {formatTimezoneLabel(calendarTimezone)}
           </p>
 
-          {!isInvoiceEvent && (
+          {isInvoiceEvent ? (
+            <>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-slate-600">
+                  Repetir mensalmente
+                </label>
+                <select
+                  className="input"
+                  value={
+                    form.recurrencePreset === 'monthly' ? 'monthly' : 'none'
+                  }
+                  disabled={invoiceProcessed}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      recurrencePreset: e.target.value as CalendarRecurrencePreset,
+                      recurrenceUntil: e.target.value === 'none' ? '' : form.recurrenceUntil,
+                    })
+                  }
+                >
+                  {CALENDAR_INVOICE_RECURRENCE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-400">
+                  Avença: após cada emissão (ou rascunho), agenda a próxima no mesmo dia do mês.
+                </p>
+              </div>
+
+              {form.recurrencePreset === 'monthly' && (
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-600">
+                    Repetir até (opcional)
+                  </label>
+                  <input
+                    className="input"
+                    type="date"
+                    value={form.recurrenceUntil}
+                    min={form.start ? form.start.slice(0, 10) : undefined}
+                    disabled={invoiceProcessed}
+                    onChange={(e) => setForm({ ...form, recurrenceUntil: e.target.value })}
+                  />
+                </div>
+              )}
+            </>
+          ) : (
             <>
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">Repetir</label>
@@ -817,6 +890,7 @@ export function CalendarEventModal({
 
         {isInvoiceEvent && (
           <CalendarInvoiceEventFields
+            workspaceId={workspaceId}
             entities={billingEntities}
             billingEntityId={form.invoiceBillingEntityId}
             onBillingEntityChange={(id) => {
@@ -844,12 +918,28 @@ export function CalendarEventModal({
             readOnly={invoiceProcessed}
             statusLabel={scheduledInvoiceStatusLabel(
               event?.scheduledInvoice?.status,
-              event?.scheduledInvoice?.draft?.autoIssue
+              form.invoiceAutoIssue
             )}
             errorMessage={event?.scheduledInvoice?.errorMessage ?? null}
-            emailSent={event?.scheduledInvoice?.emailSent}
-            emailSentAt={event?.scheduledInvoice?.emailSentAt ?? null}
-            emailErrorMessage={event?.scheduledInvoice?.emailErrorMessage ?? null}
+            emailSent={emailOverride?.emailSent ?? event?.scheduledInvoice?.emailSent}
+            emailSentAt={
+              emailOverride?.emailSentAt ?? event?.scheduledInvoice?.emailSentAt ?? null
+            }
+            emailErrorMessage={
+              emailOverride
+                ? emailOverride.emailErrorMessage
+                : (event?.scheduledInvoice?.emailErrorMessage ?? null)
+            }
+            scheduledInvoiceId={event?.scheduledInvoice?.id ?? null}
+            onEmailResent={({ emailSentAt }) => {
+              setEmailOverride({
+                emailSent: true,
+                emailSentAt,
+                emailErrorMessage: null,
+              });
+              setError('');
+              onSaved();
+            }}
           />
         )}
 

@@ -4,12 +4,19 @@ export type CalendarEventType = (typeof CALENDAR_EVENT_TYPES)[number];
 export const CALENDAR_SCHEDULED_INVOICE_ENABLED_KEY = 'calendar_scheduled_invoice_enabled';
 export const CALENDAR_SCHEDULED_INVOICE_CATEGORY_ID_KEY = 'calendar_scheduled_invoice_category_id';
 
+/** Limite Moloni do campo Resumo em linhas de documento. */
+export const INVOICE_LINE_SUMMARY_MAX_LENGTH = 250;
+
 export interface CalendarScheduledInvoiceLine {
   description: string;
+  /** Resumo Moloni (0–250 chars) — ex. período «mês A até mês B» */
+  summary?: string;
   quantity: number;
   unitPrice: number;
   vatRate?: number;
   moloniProductId?: number;
+  /** Ref.ª Artigo Moloni (linha manual) — obrigatória se não houver moloniProductId */
+  productReference?: string;
   moloniTaxId?: number;
   moloniExemptionReason?: string;
 }
