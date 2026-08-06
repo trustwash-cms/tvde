@@ -53,6 +53,27 @@ flowchart LR
 **Env:** `ENCRYPTION_KEY` (ver [`.env.example`](../.env.example)).  
 Em produção: string longa e aleatória; **não** rodar a chave sem plano de re-encriptação (os blobs existentes deixam de desencriptar).
 
+### Rotação / perda da chave
+
+Se `ENCRYPTION_KEY` mudar (ou for substituída pelo valor de exemplo), os ciphertext na BD falham com
+`Unsupported state or unable to authenticate data` (AES-GCM auth tag).
+
+Não há migração automática sem a chave antiga. Acção por integração:
+
+| Integração | O que fazer |
+|------------|-------------|
+| **Moloni** | Guardar de novo o Client Secret → «Ligar conta Moloni (OAuth)» (`secretNeedsResave`) |
+| **Billing SMTP** | Colar de novo a password SMTP (`smtpNeedsResave`) |
+| Bolt | Guardar de novo o client secret (`secretNeedsResave`) |
+| **Portais RPA** (Via Verde / MyPRIO / Uber) | «Esquecer password» → Ligar conta com password correcta (`passwordNeedsResave`). Status passa a «Sessão expirada» (não «Erro» misterioso); `lastError` em PT. |
+| SMTP / SMS / 2FA | Reconfigurar segredos afectados |
+
+A UI Moloni («Verificar ligação» / callback OAuth) detecta falha de decrypt, limpa tokens OAuth inválidos e pede re-auth com mensagem em PT.
+
+Os portais RPA detectam a mesma falha em `mapPublic` / jobs (`isCryptoAuthFailure`) e mostram:
+
+> Password guardada ilegível (chave de encriptação mudou). Clique em «Esquecer password» e volte a Ligar conta com a password correcta.
+
 Config partilhada: `encryptionKey` em `@tvde/shared` / `packages/shared/src/config.server.ts`.
 
 ---
@@ -99,7 +120,8 @@ Isolamento multi-tenant = **uma linha por (tenant, portal)**. Um leak da BD sem 
 |-------|-------------|
 | `usernameMasked` | Username parcial (ex. `61***71`) |
 | `hasPassword` | Existe `passwordEncrypted` |
-| `hasSession` | Existe `sessionStateEncrypted` |
+| `passwordNeedsResave` | Password existe mas não desencripta (ENCRYPTION_KEY mudou) — UI pede «Esquecer password» + re-ligar |
+| `hasSession` | Existe `sessionStateEncrypted` legível |
 | `useStoredCredentials` (input connect) | Pedir reutilização no servidor |
 
 A password **nunca** é devolvida ao browser.

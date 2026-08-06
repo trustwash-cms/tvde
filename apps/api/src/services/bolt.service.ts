@@ -1,6 +1,12 @@
 import { prisma } from '@tvde/database';
+import { canDecrypt } from '../lib/crypto';
 import { isTenantModuleAllowed } from './tenant-modules.service';
-import { getBoltConnection, testBoltCredentials, upsertBoltConnection } from './bolt-connection.service';
+import {
+  BOLT_CRYPTO_RESAVE_MESSAGE,
+  getBoltConnection,
+  testBoltCredentials,
+  upsertBoltConnection,
+} from './bolt-connection.service';
 
 export async function getBoltPublicStatus(workspaceId: string, tenantId: string) {
   const [row, tenantAllowed, workspaceModule] = await Promise.all([
@@ -13,16 +19,21 @@ export async function getBoltPublicStatus(workspaceId: string, tenantId: string)
 
   const configured = Boolean(row?.clientId && row.encryptedClientSecret);
   const moduleActive = workspaceModule?.enabled ?? false;
+  const secretNeedsResave =
+    Boolean(row?.encryptedClientSecret) && !canDecrypt(row?.encryptedClientSecret);
 
   return {
     configured,
-    connected: configured && Boolean(row?.boltCompanyId),
-    healthy: configured && !row?.lastError,
+    connected: configured && Boolean(row?.boltCompanyId) && !secretNeedsResave,
+    healthy: configured && !row?.lastError && !secretNeedsResave,
+    secretNeedsResave,
     moduleAuthorized: tenantAllowed,
     moduleActive,
     clientId: row?.clientId ?? null,
     boltCompanyId: row?.boltCompanyId ?? null,
-    statusMessage: row?.lastError ?? (configured ? 'Operacional' : 'Não configurado'),
+    statusMessage: secretNeedsResave
+      ? BOLT_CRYPTO_RESAVE_MESSAGE
+      : (row?.lastError ?? (configured ? 'Operacional' : 'Não configurado')),
     lastSyncAtOrders: row?.lastSyncAtOrders?.toISOString() ?? null,
     lastSyncAtDrivers: row?.lastSyncAtDrivers?.toISOString() ?? null,
     lastSyncAtVehicles: row?.lastSyncAtVehicles?.toISOString() ?? null,

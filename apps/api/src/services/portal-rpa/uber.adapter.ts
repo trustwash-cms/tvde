@@ -89,11 +89,326 @@ async function isOtpScreen(page: Page): Promise<boolean> {
   return page.locator('#PHONE_SMS_OTP-0, [data-testid="PHONE_SMS_OTP"]').first().isVisible().catch(() => false);
 }
 
+export async function isUberPasswordScreen(page: Page): Promise<boolean> {
+  if (await page.locator('input[type="password"]').first().isVisible().catch(() => false)) {
+    return true;
+  }
+  // Copy PT/EN do form (não o chooser «Iniciar sessão com a palavra-passe»)
+  return page
+    .getByText(/introduza a sua palavra-?passe|enter (your )?password/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
 async function isPasswordScreen(page: Page): Promise<boolean> {
-  return page.locator('input[type="password"]').first().isVisible().catch(() => false);
+  return isUberPasswordScreen(page);
+}
+
+/** Arkose / FunCaptcha — «Proteger a sua conta» após Continuar (headless costuma disparar). */
+const BOT_CHALLENGE_TEXT_RE =
+  /proteger a sua conta|protect your account|resolva este desafio|solve this challenge|iniciar desafio|start (the )?challenge|sabermos que é uma pessoa|verify you are (a )?human|are you a human/i;
+
+const BOT_CHALLENGE_IFRAME_SEL =
+  'iframe[src*="arkoselabs"], iframe[src*="funcaptcha"], iframe[src*="arkose"], iframe[src*="ec-game-core"], iframe[src*="ak0"], iframe[src*="recaptcha/enterprise"]';
+
+const IDENTITY_EMPTY_ERROR_RE =
+  /introduza um número de telefone ou e-?mail|enter (a )?(phone number or )?e-?mail|please enter (a )?(phone|e-?mail)/i;
+
+/**
+ * Identidade ainda interactiva com email vazio ou erro de validação.
+ * O Breeze pré-carrega iframes Arkose — sem isto classificávamos bot cedo demais.
+ */
+export async function isStuckOnEmptyIdentity(page: Page): Promise<boolean> {
+  const identity = await identityInput(page);
+  if (!(await identity.isVisible().catch(() => false))) return false;
+
+  const emptyErr = await page
+    .getByText(IDENTITY_EMPTY_ERROR_RE)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (emptyErr) return true;
+
+  const value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  if (value) return false;
+
+  // Vazio + editável = Continuar sem email (nunca handoff bot)
+  if (!(await identity.isDisabled().catch(() => true))) return true;
+  return false;
+}
+
+/** Detecção bruta de iframe/texto Arkose (ignora estado do form identidade). */
+async function isBotChallengeSignalRaw(page: Page): Promise<boolean> {
+  // Main frame (raro — o copy vive quase sempre no iframe)
+  if (await page.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false)) return true;
+
+  // Iframes Uber enforcement / Arkose game-core / reCAPTCHA enterprise
+  if (
+    await page
+      .locator(BOT_CHALLENGE_IFRAME_SEL)
+      .first()
+      .isVisible()
+      .catch(() => false)
+  ) {
+    // Só contar como desafio activo se houver game-core / texto / bframe (não só o badge reCAPTCHA)
+    for (const f of page.frames()) {
+      const url = f.url();
+      if (/ec-game-core|funcaptcha|arkoselabs|recaptcha\/enterprise\/bframe/i.test(url)) return true;
+      if (/ak0[a-z0-9]*\.uber\.com/i.test(url)) {
+        const has = await f.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false);
+        if (has) return true;
+      }
+    }
+  }
+
+  for (const f of page.frames()) {
+    try {
+      const url = f.url();
+      if (/ec-game-core|funcaptcha|arkoselabs/i.test(url)) return true;
+      if (await f.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false)) return true;
+    } catch {
+      // frame detached
+    }
+  }
+  return false;
+}
+
+/**
+ * True só para handoff / watcher: sinal Arkose E não estamos no email vazio.
+ * Prefill de iframe no ecrã identidade NÃO conta.
+ */
+export async function isBotChallengeScreen(page: Page): Promise<boolean> {
+  if (await isStuckOnEmptyIdentity(page)) return false;
+  return isBotChallengeSignalRaw(page);
+}
+
+/**
+ * Pronto para authChallenge=bot / modal Desafio Uber:
+ * email preenchido (se o campo ainda existir), Continuar avançou, e
+ * (paint visual OU iframe bot com UI de desafio / form disabled a montar overlay).
+ */
+export async function canHandoffBotChallenge(page: Page): Promise<boolean> {
+  if (await isStuckOnEmptyIdentity(page)) return false;
+  if (!(await isBotChallengeSignalRaw(page))) return false;
+
+  const visual = await isBotChallengeVisuallyReady(page);
+  const identity = await identityInput(page);
+  const identityVisible = await identity.isVisible().catch(() => false);
+
+  if (!identityVisible) {
+    // Saiu do form — Continuar avançou; sinal bot já confirmado acima
+    return true;
+  }
+
+  const value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  if (!value) return false;
+
+  if (visual) return true;
+
+  // Overlay a montar: input disabled após Continuar com email válido
+  if (await identity.isDisabled().catch(() => false)) return true;
+
+  // Form ainda editável com email = Continuar não avançou de forma fiável
+  return false;
+}
+
+/** FunCaptcha já no puzzle (após «Iniciar desafio») — copy muda para «1 de 5» / Enviar / setas. */
+const FUNCAPTCHA_PUZZLE_RE =
+  /\d+\s*(de|of)\s*\d+|use as setas|use the arrows|arraste a imagem|drag (the )?image|verificar|verify you|sou humano|i am human/i;
+
+/**
+ * True quando o desafio está pintado: copy Arkose, puzzle FunCaptcha, ou canvas no game-core.
+ * Em headless o iframe existe mas Arkose não pinta — JPEG = identidade por baixo.
+ */
+export async function isBotChallengeVisuallyReady(page: Page): Promise<boolean> {
+  if (await page.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false)) {
+    return true;
+  }
+  if (await page.getByText(FUNCAPTCHA_PUZZLE_RE).first().isVisible().catch(() => false)) {
+    return true;
+  }
+  // Botão Enviar do puzzle (só no contexto arkose — evita CTAs genéricos da página)
+  for (const f of page.frames()) {
+    try {
+      const url = f.url();
+      const arkoseFrame = /ec-game-core|funcaptcha|arkoselabs|ak0[a-z0-9]*\.uber\.com/i.test(url);
+      if (
+        await f.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false)
+      ) {
+        return true;
+      }
+      if (await f.getByText(FUNCAPTCHA_PUZZLE_RE).first().isVisible().catch(() => false)) {
+        return true;
+      }
+      if (arkoseFrame) {
+        const sendBtn = f.getByRole('button', { name: /^(enviar|submit|verify|verificar)$/i }).first();
+        if (await sendBtn.isVisible().catch(() => false)) return true;
+        const canvasCount = await f.locator('canvas').count().catch(() => 0);
+        if (canvasCount > 0) {
+          const box = await f.locator('canvas').first().boundingBox().catch(() => null);
+          if (box && box.width >= 80 && box.height >= 80) return true;
+        }
+      }
+    } catch {
+      // frame detached
+    }
+  }
+  return false;
+}
+
+/** Overlay Arkose activo (iframe game-core com tamanho) — não re-clicar Continuar. */
+export async function hasActiveArkoseOverlay(page: Page): Promise<boolean> {
+  if (await isBotChallengeVisuallyReady(page).catch(() => false)) return true;
+  const iframe = page.locator(BOT_CHALLENGE_IFRAME_SEL).first();
+  if (!(await iframe.isVisible().catch(() => false))) return false;
+  const box = await iframe.boundingBox().catch(() => null);
+  if (box && box.width >= 200 && box.height >= 200) return true;
+  for (const f of page.frames()) {
+    const url = f.url();
+    if (/ec-game-core|funcaptcha|arkoselabs/i.test(url)) return true;
+  }
+  return false;
+}
+
+async function tryClickStartChallenge(page: Page): Promise<boolean> {
+  const startBtn = page.getByRole('button', { name: /iniciar desafio|start (the )?challenge/i }).first();
+  if (await startBtn.isVisible().catch(() => false)) {
+    await startBtn.click({ timeout: 5000 }).catch(() => undefined);
+    return true;
+  }
+  for (const f of page.frames()) {
+    try {
+      const btn = f.getByRole('button', { name: /iniciar desafio|start (the )?challenge/i }).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click({ timeout: 5000 }).catch(() => undefined);
+        return true;
+      }
+    } catch {
+      // frame detached
+    }
+  }
+  return false;
+}
+
+/**
+ * Nudge: se o iframe Arkose existe mas ainda se vê a identidade —
+ * re-preencher email (se vazio) e só depois Continuar. Nunca Continuar em branco.
+ * Nunca re-click Continuar quando o overlay/puzzle já está activo (texto identidade
+ * continua «visível» no DOM por baixo — Playwright isVisible não detecta cobertura).
+ */
+export async function nudgeBotChallengePaint(page: Page, username?: string): Promise<void> {
+  if (await isBotChallengeVisuallyReady(page)) {
+    await tryClickStartChallenge(page);
+    return;
+  }
+
+  // Email vazio / erro validação — re-fill a partir das credenciais do job
+  if (await isStuckOnEmptyIdentity(page)) {
+    if (username?.trim()) {
+      console.log('[uber-login] bot nudge: identidade vazia/erro — re-fill email + Continuar');
+      await fillIdentity(page, username.trim()).catch((err) => {
+        console.log(
+          '[uber-login] bot nudge re-fill falhou:',
+          err instanceof Error ? err.message : err
+        );
+      });
+    } else {
+      console.log(
+        '[uber-login] bot nudge: identidade vazia sem username — NÃO clicar Continuar ' +
+          (await identityFieldDiagnostics(page))
+      );
+    }
+    return;
+  }
+
+  if (!(await isBotChallengeSignalRaw(page)) && !(await isBotChallengeScreen(page))) return;
+
+  const identity = await identityInput(page);
+  const identityFieldVisible = await identity.isVisible().catch(() => false);
+  const identityDisabled = identityFieldVisible
+    ? await identity.isDisabled().catch(() => false)
+    : false;
+  const value = identityFieldVisible
+    ? ((await identity.inputValue().catch(() => '')) || '').trim()
+    : '';
+
+  // Continuar já avançou (campo disabled) OU overlay Arkose com tamanho —
+  // NÃO force-click Continuar (destrói o FunCaptcha / pode fechar o browser).
+  if (identityDisabled || (await hasActiveArkoseOverlay(page))) {
+    console.log(
+      '[uber-login] bot nudge: overlay/puzzle activo (disabled=' +
+        String(identityDisabled) +
+        ') — só z-index + Iniciar desafio, sem re-click Continuar'
+    );
+    await boostArkoseIframeVisibility(page);
+    await tryClickStartChallenge(page);
+    return;
+  }
+
+  // Form ainda editável com email = Continuar não avançou de forma fiável
+  const identityCopyVisible = await page
+    .getByText(/número de telefone ou e-?mail|phone number or email|qual é o seu/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (identityCopyVisible && value) {
+    console.log('[uber-login] bot: identidade editável sob iframe — re-click Continuar');
+    await clickContinue(page, { force: true }).catch(() => undefined);
+    await page.waitForTimeout(1500);
+  } else if (identityCopyVisible && !value) {
+    console.log('[uber-login] bot nudge: input vazio — skip Continuar');
+    return;
+  }
+
+  await boostArkoseIframeVisibility(page);
+  await tryClickStartChallenge(page);
+}
+
+async function boostArkoseIframeVisibility(page: Page): Promise<void> {
+  await page
+    .evaluate(`(() => {
+      const sels = [
+        'iframe[src*="arkoselabs"]',
+        'iframe[src*="funcaptcha"]',
+        'iframe[src*="arkose"]',
+        'iframe[src*="ec-game-core"]',
+        'iframe[src*="ak0"]',
+      ];
+      for (const sel of sels) {
+        for (const el of document.querySelectorAll(sel)) {
+          const iframe = el;
+          iframe.style.setProperty('opacity', '1', 'important');
+          iframe.style.setProperty('visibility', 'visible', 'important');
+          iframe.style.setProperty('pointer-events', 'auto', 'important');
+          iframe.style.setProperty('z-index', '2147483647', 'important');
+          const r = iframe.getBoundingClientRect();
+          if (r.width < 40 || r.height < 40) {
+            iframe.style.setProperty('width', '100vw', 'important');
+            iframe.style.setProperty('height', '100vh', 'important');
+            iframe.style.setProperty('position', 'fixed', 'important');
+            iframe.style.setProperty('inset', '0', 'important');
+          }
+        }
+      }
+    })()`)
+    .catch(() => undefined);
+}
+
+async function isSignInBlockedBanner(page: Page): Promise<boolean> {
+  return page
+    .getByText(/não é possível iniciar sessão|unable to (sign|log) in|try again later/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
 }
 
 async function isIdentityScreen(page: Page): Promise<boolean> {
+  // Email vazio / erro validação = identidade (mesmo com iframe Arkose pré-carregado)
+  if (await isStuckOnEmptyIdentity(page)) return true;
+  // Overlay Arkose real (handoff-ready) tapa o form — NÃO reportar como identidade «presa»
+  if (await canHandoffBotChallenge(page)) return false;
+  if (await isBotChallengeVisuallyReady(page)) return false;
   const identity = await identityInput(page);
   if (!(await identity.isVisible().catch(() => false))) return false;
   if (await isPasswordScreen(page) || (await isOtpScreen(page))) return false;
@@ -102,23 +417,36 @@ async function isIdentityScreen(page: Page): Promise<boolean> {
   return !(await isPasskeyScreen(page));
 }
 
+/** Botões Continuar/Seguinte do Breeze (exclui Google/Apple/passkey). */
+function primaryContinueButtons(page: Page) {
+  return page
+    .getByRole('button', { name: /^(continuar|seguinte|next|entrar|sign in)$/i })
+    .or(page.locator('button[type="submit"]').filter({ hasText: /^(continuar|seguinte|next)$/i }));
+}
+
 /**
  * CTA principal — NÃO apanhar «Continuar com Google/Apple/chave de acesso».
  * Preferir botão exacto «Continuar» / «Seguinte».
  */
-async function clickContinue(page: Page): Promise<boolean> {
+async function clickContinue(page: Page, opts?: { force?: boolean }): Promise<boolean> {
+  const force = opts?.force === true;
   // Exact match first (Breeze: type=submit «Continuar»)
-  const exact = page.getByRole('button', { name: /^(continuar|seguinte|next|entrar|sign in)$/i });
+  const exact = primaryContinueButtons(page);
   const exactCount = await exact.count();
   for (let i = 0; i < exactCount; i += 1) {
     const btn = exact.nth(i);
     if (!(await btn.isVisible().catch(() => false))) continue;
-    for (let w = 0; w < 10; w += 1) {
+    const testId = ((await btn.getAttribute('data-testid').catch(() => null)) || '').toLowerCase();
+    const id = ((await btn.getAttribute('id').catch(() => null)) || '').toLowerCase();
+    if (id === 'passkey-login-btn' || /passkey/.test(testId)) continue;
+    const label = ((await btn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+    if (/google|apple|chave|passkey|acesso|facebook|sms|salvaguarda/i.test(label)) continue;
+    for (let w = 0; w < 12; w += 1) {
       if (!(await btn.isDisabled().catch(() => true))) break;
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(350);
     }
-    if (await btn.isDisabled().catch(() => true)) continue;
-    await btn.click({ timeout: 10_000 });
+    if (!force && (await btn.isDisabled().catch(() => true))) continue;
+    await btn.click({ timeout: 10_000, force }).catch(() => undefined);
     return true;
   }
 
@@ -127,35 +455,155 @@ async function clickContinue(page: Page): Promise<boolean> {
   for (let i = 0; i < count; i += 1) {
     const btn = candidates.nth(i);
     if (!(await btn.isVisible().catch(() => false))) continue;
+    const testId = ((await btn.getAttribute('data-testid').catch(() => null)) || '').toLowerCase();
+    const id = ((await btn.getAttribute('id').catch(() => null)) || '').toLowerCase();
+    if (id === 'passkey-login-btn' || /passkey/.test(testId)) continue;
     const label = ((await btn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
     if (/google|apple|chave|passkey|acesso|facebook|sms|salvaguarda/i.test(label)) continue;
-    for (let w = 0; w < 10; w += 1) {
+    for (let w = 0; w < 12; w += 1) {
       if (!(await btn.isDisabled().catch(() => true))) break;
-      await page.waitForTimeout(400);
+      await page.waitForTimeout(350);
     }
-    if (await btn.isDisabled().catch(() => true)) continue;
-    await btn.click({ timeout: 10_000 });
+    if (!force && (await btn.isDisabled().catch(() => true))) continue;
+    await btn.click({ timeout: 10_000, force }).catch(() => undefined);
     return true;
   }
   return false;
 }
 
-/** Preenche o input Breeze de forma que o React actualize o estado. */
+/**
+ * Preenche o input Breeze de forma que o React actualize o estado.
+ * Crítico: resetar `_valueTracker` — sem isto o Continuar fica aria-disabled
+ * mesmo com o email visível no DOM.
+ */
 async function setIdentityValue(page: Page, username: string): Promise<void> {
+  const safe = JSON.stringify(username);
   await page.evaluate(
     `(() => {
       const el = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
       if (!el) return;
+      const value = ${safe};
       el.removeAttribute('disabled');
+      el.removeAttribute('readonly');
       el.disabled = false;
+      el.readOnly = false;
       el.focus();
-      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-      if (setter) setter.call(el, ${JSON.stringify(username)});
-      else el.value = ${JSON.stringify(username)};
+      const proto = window.HTMLInputElement.prototype;
+      const protoSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+      const ownSetter = Object.getOwnPropertyDescriptor(el, 'value')?.set;
+      // React 16/17/18: tracker deve ver o valor *anterior* antes do set,
+      // senão onChange é ignorado e Continuar submete email vazio.
+      const tracker = el._valueTracker;
+      const prev = el.value;
+      if (tracker) tracker.setValue(prev === value ? (value ? value + ' ' : ' ') : prev);
+      if (protoSetter) protoSetter.call(el, value);
+      else if (ownSetter) ownSetter.call(el, value);
+      else el.value = value;
+      if (tracker) tracker.setValue(prev);
       el.dispatchEvent(new Event('input', { bubbles: true }));
+      try {
+        el.dispatchEvent(new InputEvent('input', {
+          bubbles: true,
+          cancelable: true,
+          data: value,
+          inputType: value ? 'insertText' : 'deleteContentBackward',
+        }));
+      } catch (_) {}
       el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur', { bubbles: true }));
     })()`
   );
+}
+
+async function identityFieldDiagnostics(page: Page): Promise<string> {
+  try {
+    const dump = (await page.evaluate(
+      `(() => {
+        const el = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
+        const buttons = [...document.querySelectorAll('button')].map((b) => ({
+          text: (b.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 40),
+          disabled: b.disabled,
+          ariaDisabled: b.getAttribute('aria-disabled'),
+          type: b.getAttribute('type'),
+        }));
+        const continuar = buttons.find((b) => /^(continuar|seguinte|next)$/i.test(b.text));
+        const err =
+          document.querySelector('[id*="error"], [data-testid*="error"], [role="alert"]')?.textContent || '';
+        return {
+          value: el?.value ?? null,
+          disabled: el?.disabled ?? null,
+          exists: Boolean(el),
+          continuarDisabled: continuar?.disabled ?? null,
+          continuarAria: continuar?.ariaDisabled ?? null,
+          continuarText: continuar?.text ?? null,
+          err: (err || '').replace(/\\s+/g, ' ').trim().slice(0, 80),
+        };
+      })()`
+    )) as {
+      value: string | null;
+      disabled: boolean | null;
+      exists: boolean;
+      continuarDisabled: boolean | null;
+      continuarAria: string | null;
+      continuarText: string | null;
+      err: string;
+    };
+    return `input=${JSON.stringify(dump.value)} btn=${dump.continuarText || '?'} disabled=${dump.continuarDisabled} aria=${dump.continuarAria} err=${JSON.stringify(dump.err)}`;
+  } catch {
+    return 'diag=unavailable';
+  }
+}
+
+async function captureIdentityStuckDebug(page: Page): Promise<string | null> {
+  try {
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    // apps/api cwd → monorepo root; fallbacks for PM2
+    const candidates = [
+      path.resolve(process.cwd(), '../../.tmp-uber-identity-stuck'),
+      path.resolve(process.cwd(), '.tmp-uber-identity-stuck'),
+      '/tmp/tvde-uber-identity-stuck',
+    ];
+    let outDir: string | null = null;
+    for (const c of candidates) {
+      try {
+        await fs.mkdir(c, { recursive: true });
+        outDir = c;
+        break;
+      } catch {
+        // try next
+      }
+    }
+    if (!outDir) return null;
+    const file = path.join(outDir, `stuck-${Date.now()}.png`);
+    await page.screenshot({ path: file, fullPage: false });
+    console.log(`[uber-login] identity stuck screenshot: ${file} ${await identityFieldDiagnostics(page)}`);
+    return file;
+  } catch (err) {
+    console.log(
+      '[uber-login] identity stuck screenshot falhou:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+/** Espera o Continuar principal ficar clicável (React validou o email). */
+async function waitContinueEnabled(page: Page, timeoutMs = 8_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const exact = primaryContinueButtons(page);
+    const n = await exact.count();
+    for (let i = 0; i < n; i += 1) {
+      const btn = exact.nth(i);
+      if (!(await btn.isVisible().catch(() => false))) continue;
+      const label = ((await btn.innerText().catch(() => '')) || '').replace(/\s+/g, ' ').trim();
+      if (/google|apple|chave|passkey|acesso|facebook/i.test(label)) continue;
+      if (!(await btn.isDisabled().catch(() => true))) return true;
+    }
+    await page.waitForTimeout(300);
+  }
+  return false;
 }
 
 async function fillIdentity(page: Page, username: string): Promise<void> {
@@ -178,70 +626,208 @@ async function fillIdentity(page: Page, username: string): Promise<void> {
     await page.waitForTimeout(400);
   }
 
-  // Sempre escrever o email via setter React + type — cookies podem pré-preencher valor stale
   await page.evaluate(
     `(() => {
       const el = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
       if (!el) return;
       el.removeAttribute('disabled');
+      el.removeAttribute('readonly');
       el.disabled = false;
+      el.readOnly = false;
     })()`
   );
 
-  await identity.click({ force: true, timeout: 8000 }).catch(() => undefined);
-  await identity.fill('', { force: true }).catch(() => undefined);
+  // 1) Foco real + limpar (cookies / autocomplete stale)
+  await identity.click({ timeout: 8000 }).catch(() =>
+    identity.click({ force: true, timeout: 5000 })
+  );
+  await page.keyboard.press('Meta+a').catch(() => undefined);
+  await page.keyboard.press('Control+a').catch(() => undefined);
+  await page.keyboard.press('Backspace').catch(() => undefined);
+  await identity.fill('').catch(() => undefined);
   await setIdentityValue(page, '');
-  await identity.pressSequentially(username, { delay: 20 }).catch(async () => {
-    await setIdentityValue(page, username);
-    await identity.fill(username, { force: true }).catch(() => undefined);
-  });
 
-  // Garantir valor final no DOM + estado React
-  const value = ((await identity.inputValue().catch(() => '')) || '').trim();
-  if (value.toLowerCase() !== username.toLowerCase()) {
-    await setIdentityValue(page, username);
+  // 2) Escrever como humano (eventos de teclado → React onChange)
+  let typed = false;
+  try {
+    await identity.pressSequentially(username, { delay: 25 });
+    typed = true;
+  } catch {
+    typed = false;
+  }
+  if (!typed) {
+    await identity.click({ force: true }).catch(() => undefined);
+    await page.keyboard.type(username, { delay: 30 }).catch(() => undefined);
   }
 
-  await page.waitForTimeout(500);
+  // 3) Garantir DOM + estado React (_valueTracker) — até 3 tentativas
+  let value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  for (let retry = 0; retry < 3 && value.toLowerCase() !== username.toLowerCase(); retry += 1) {
+    await setIdentityValue(page, username);
+    await identity.fill(username).catch(() => undefined);
+    await identity.click({ force: true }).catch(() => undefined);
+    await page.keyboard.type(username, { delay: 20 }).catch(() => undefined);
+    await setIdentityValue(page, username);
+    value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  }
+  // Re-disparar tracker mesmo se o valor DOM já estiver correcto
+  await setIdentityValue(page, username);
+  value = ((await identity.inputValue().catch(() => '')) || '').trim();
 
-  // Continuar exacto; se disabled, force click no submit do form
+  // 4) Blur / Tab para o Breeze validar e activar Continuar
+  await identity.blur().catch(() => undefined);
+  await page.keyboard.press('Tab').catch(() => undefined);
+  await page.waitForTimeout(400);
+
+  // Re-ler após blur (React pode limpar se o tracker falhou)
+  value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  if (value.toLowerCase() !== username.toLowerCase()) {
+    await setIdentityValue(page, username);
+    value = ((await identity.inputValue().catch(() => '')) || '').trim();
+  }
+
+  const enabled = await waitContinueEnabled(page, 8_000);
+  console.log(
+    `[uber-login] identity fill ok=${value.toLowerCase() === username.toLowerCase()} continuarEnabled=${enabled} ${await identityFieldDiagnostics(page)}`
+  );
+
+  // NUNCA Continuar com email vazio — causa «Introduza um número…» + falso handoff bot
+  if (!value || value.toLowerCase() !== username.toLowerCase()) {
+    await captureIdentityStuckDebug(page);
+    throw new Error(
+      `Login Uber: falha a preencher o email (valor=${JSON.stringify(value)}). ` +
+        'Tente Ligar conta outra vez.'
+    );
+  }
+
+  // 5) Submeter: Continuar (evitar form.submit nativo — parte o SPA Breeze)
   let clicked = await clickContinue(page);
   if (!clicked) {
-    const submit = page.locator('button[type="submit"]').filter({ hasText: /^continuar$/i }).first();
-    if (await submit.isVisible().catch(() => false)) {
-      await submit.click({ force: true, timeout: 8000 }).catch(() => undefined);
-      clicked = true;
+    // Re-confirmar valor antes de force
+    value = ((await identity.inputValue().catch(() => '')) || '').trim();
+    if (value.toLowerCase() === username.toLowerCase()) {
+      clicked = await clickContinue(page, { force: true });
     }
   }
   if (!clicked) {
-    await identity.press('Enter').catch(() => undefined);
-  }
-  // Último recurso: submit nativo do form Breeze
-  if (await isIdentityScreen(page)) {
-    await page
-      .evaluate(
-        `(() => {
-          const form = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS')?.closest('form');
-          if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
-          else if (form) form.submit();
-        })()`
-      )
-      .catch(() => undefined);
+    value = ((await identity.inputValue().catch(() => '')) || '').trim();
+    if (value.toLowerCase() === username.toLowerCase()) {
+      await identity.focus().catch(() => undefined);
+      await page.keyboard.press('Enter').catch(() => undefined);
+    }
   }
 
-  // Esperar sair do ecrã identidade (até 15s)
-  const leaveDeadline = Date.now() + 15_000;
+  // Esperar sair do ecrã identidade (até 25s), com retries de submit
+  const leaveDeadline = Date.now() + 25_000;
+  let attempt = 0;
   while (Date.now() < leaveDeadline) {
+    // Só sair para bot quando handoff é seguro (email + Continuar avançou)
+    if (await canHandoffBotChallenge(page)) {
+      console.log('[uber-login] após Continuar: desafio anti-bot (Arkose)');
+      return;
+    }
+    if (await isStuckOnEmptyIdentity(page)) {
+      console.log('[uber-login] após Continuar: email vazio/erro — re-fill');
+      await setIdentityValue(page, username);
+      await waitContinueEnabled(page, 3_000);
+      await clickContinue(page);
+      await page.waitForTimeout(800);
+      attempt += 1;
+      continue;
+    }
+    // Após submit o form fica disabled enquanto o overlay Arkose monta
+    const idNow = await identityInput(page);
+    if (await idNow.isDisabled().catch(() => false)) {
+      const waitBotUntil = Date.now() + 10_000;
+      while (Date.now() < waitBotUntil) {
+        if (await canHandoffBotChallenge(page)) {
+          console.log('[uber-login] após Continuar: desafio anti-bot (form disabled → Arkose)');
+          return;
+        }
+        if (!(await isIdentityScreen(page))) {
+          if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
+            await preferSmsOverPasskey(page);
+          }
+          return;
+        }
+        await page.waitForTimeout(500);
+      }
+      // Disabled prolongado sem classificação clara — não martelar Continuar
+      console.log(
+        `[uber-login] form identity disabled prolongado após Continuar ${await pageAuthDebug(page)}`
+      );
+      await captureIdentityStuckDebug(page);
+      return;
+    }
     if (!(await isIdentityScreen(page))) {
-      // Se cair no chooser SMS/passkey, tentar SMS de imediato
       if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
         await preferSmsOverPasskey(page);
       }
       return;
     }
-    await clickContinue(page);
-    await page.waitForTimeout(800);
+    if (await isSignInBlockedBanner(page)) {
+      console.log('[uber-login] banner «Não é possível iniciar sessão» — reload auth');
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
+      await page.waitForTimeout(1500);
+      await dismissUberNoise(page);
+      // Uma tentativa de re-preencher após reload (sem recursão profunda)
+      const again = await identityInput(page);
+      if (await again.isVisible().catch(() => false)) {
+        await setIdentityValue(page, username);
+        await again.fill(username).catch(() => undefined);
+        const v = ((await again.inputValue().catch(() => '')) || '').trim();
+        if (v.toLowerCase() === username.toLowerCase()) {
+          await waitContinueEnabled(page, 5_000);
+          await clickContinue(page);
+        }
+      }
+      await page.waitForTimeout(1200);
+      continue;
+    }
+    attempt += 1;
+    // Confirmar email antes de cada retry Continuar
+    const cur = ((await (await identityInput(page)).inputValue().catch(() => '')) || '').trim();
+    if (cur.toLowerCase() !== username.toLowerCase()) {
+      await setIdentityValue(page, username);
+    }
+    if (attempt === 2 || attempt === 5) {
+      await setIdentityValue(page, username);
+      await waitContinueEnabled(page, 3_000);
+      const ok = ((await (await identityInput(page)).inputValue().catch(() => '')) || '').trim();
+      if (ok.toLowerCase() === username.toLowerCase()) {
+        await clickContinue(page, { force: true });
+      }
+    } else if (attempt === 3) {
+      await identity.press('Enter').catch(() => undefined);
+    } else if (attempt === 4) {
+      await page
+        .evaluate(
+          `(() => {
+            const el = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
+            if (!el || !(el.value || '').trim()) return;
+            const form = el && el.closest('form');
+            const submitBtn = form && form.querySelector('button[type="submit"]');
+            if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.removeAttribute('disabled');
+              submitBtn.setAttribute('aria-disabled', 'false');
+              submitBtn.click();
+              return;
+            }
+            if (form && typeof form.requestSubmit === 'function') form.requestSubmit();
+          })()`
+        )
+        .catch(() => undefined);
+    } else {
+      const ok = ((await (await identityInput(page)).inputValue().catch(() => '')) || '').trim();
+      if (ok.toLowerCase() === username.toLowerCase()) {
+        await clickContinue(page);
+      }
+    }
+    await page.waitForTimeout(900);
   }
+
+  await captureIdentityStuckDebug(page);
 }
 
 /**
@@ -305,19 +891,22 @@ async function blockWebAuthnForSmsPath(page: Page): Promise<void> {
 async function preferSmsOverPasskey(page: Page): Promise<boolean> {
   await dismissSecurityKeyDialog(page);
 
-  const sms = page.locator('#alt-action-send-via-sms').or(
-    page.getByTestId('Enviar código por SMS')
-  ).or(
-    page.getByRole('button', { name: /enviar código por sms|send .*sms|text me|enviar sms/i })
-  ).first();
+  // Nunca clicar #passkey-login-btn («Continuar com uma chave de acesso»).
+  const sms = page
+    .locator('#alt-action-send-via-sms')
+    .or(page.getByTestId('Enviar código por SMS'))
+    .or(page.getByRole('button', { name: /enviar código por sms|send .*sms|text me|enviar sms/i }))
+    .or(page.getByRole('link', { name: /enviar código por sms|send .*sms|text me|enviar sms/i }))
+    .or(page.getByText(/^enviar código por sms$/i))
+    .first();
 
   if (!(await sms.isVisible().catch(() => false))) {
-    // Texto/link sem role button
-    const smsText = page.getByText(/^enviar código por sms$/i).first();
+    // Texto/link sem role button (subtree pode interceptar o botão passkey)
+    const smsText = page.getByText(/enviar código por sms/i).first();
     if (!(await smsText.isVisible().catch(() => false))) return false;
     console.log('[uber-login] a clicar texto «Enviar código por SMS»');
     await dismissSecurityKeyDialog(page);
-    await smsText.click({ timeout: 10_000 }).catch(() => undefined);
+    await smsText.click({ timeout: 10_000, force: true }).catch(() => undefined);
   } else {
     console.log('[uber-login] a escolher «Enviar código por SMS» (não passkey)');
     await dismissSecurityKeyDialog(page);
@@ -488,11 +1077,23 @@ async function fillUberOtp(page: Page, code: string): Promise<void> {
     await page.keyboard.type(digits, { delay: 50 });
   }
 
-  await page.waitForTimeout(400);
-  const seguinte = page.getByRole('button', { name: /seguinte|continuar|next|verificar/i }).first();
-  if (await seguinte.isVisible().catch(() => false)) {
-    const disabled = await seguinte.isDisabled().catch(() => true);
-    if (!disabled) await seguinte.click({ timeout: 10_000 });
+  // Uber muitas vezes avança sozinho após o 4.º dígito → ecrã passkey/password.
+  // NÃO usar /continuar/i solto: apanha «Continuar com uma chave de acesso» (#passkey-login-btn).
+  await page.waitForTimeout(800);
+  if (!(await isOtpScreen(page))) {
+    console.log('[uber-login] OTP avançou sem clique Seguinte');
+    return;
+  }
+
+  const clicked = await clickContinue(page);
+  if (!clicked) {
+    const exact = page.getByRole('button', { name: /^(seguinte|continuar|next)$/i }).first();
+    if (
+      (await exact.isVisible().catch(() => false)) &&
+      !(await exact.isDisabled().catch(() => true))
+    ) {
+      await exact.click({ timeout: 8_000 }).catch(() => undefined);
+    }
   }
 }
 
@@ -1413,7 +2014,18 @@ async function captureChallengeImage(page: Page): Promise<string> {
 async function pageAuthDebug(page: Page): Promise<string> {
   const url = page.url();
   const bits: string[] = [`url=${url.slice(0, 120)}`];
-  if (await isIdentityScreen(page)) bits.push('screen=identity');
+  if (await isStuckOnEmptyIdentity(page)) bits.push('stuck=empty_identity');
+  if (await isIdentityScreen(page)) {
+    bits.push('screen=identity');
+    bits.push(await identityFieldDiagnostics(page));
+  }
+  if (await isBotChallengeSignalRaw(page)) {
+    bits.push('signal=bot_iframe');
+    bits.push(`handoff=${(await canHandoffBotChallenge(page)) ? 'yes' : 'no'}`);
+    bits.push(`visual=${(await isBotChallengeVisuallyReady(page)) ? 'yes' : 'no'}`);
+  }
+  if (await isBotChallengeScreen(page)) bits.push('screen=bot_challenge');
+  if (await isSignInBlockedBanner(page)) bits.push('banner=signin_blocked');
   if (await isAuthMethodChooser(page)) bits.push('screen=chooser');
   if (await isOtpScreen(page)) bits.push('screen=otp');
   if (await isPasswordScreen(page)) bits.push('screen=password');
@@ -1433,26 +2045,51 @@ async function pageAuthDebug(page: Page): Promise<string> {
 
 async function submitPasswordIfVisible(page: Page, password: string): Promise<boolean> {
   if (!(await isPasswordScreen(page))) return false;
+
+  // Esperar o input password (copy PT pode aparecer antes)
   const pass = page.locator('input[type="password"]').first();
+  await pass.waitFor({ state: 'visible', timeout: 12_000 }).catch(() => undefined);
+  if (!(await pass.isVisible().catch(() => false))) return false;
+
+  console.log('[uber-login] a preencher palavra-passe + Seguinte');
+  await pass.click({ timeout: 5000 }).catch(() => undefined);
   await pass.fill('');
-  await pass.pressSequentially(password, { delay: 20 }).catch(async () => {
+  await pass.pressSequentially(password, { delay: 25 }).catch(async () => {
     await pass.fill(password);
   });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
+
+  // Preferir «Seguinte» exacto (ecrã pós-OTP PT)
+  const seguinte = page
+    .getByRole('button', { name: /^(seguinte|continuar|next|entrar|sign in)$/i })
+    .first();
+  if (await seguinte.isVisible().catch(() => false)) {
+    for (let w = 0; w < 16; w += 1) {
+      if (!(await seguinte.isDisabled().catch(() => true))) break;
+      await page.waitForTimeout(250);
+    }
+    if (!(await seguinte.isDisabled().catch(() => true))) {
+      await seguinte.click({ timeout: 10_000 }).catch(() => undefined);
+      await page.waitForTimeout(2000);
+      return true;
+    }
+  }
+
   const clicked = await clickContinue(page);
   if (!clicked) await pass.press('Enter').catch(() => undefined);
   await page.waitForTimeout(2000);
   return true;
 }
 
-/** Espera ecrã pós-identidade (OTP / password / passkey / supplier). */
+/** Espera ecrã pós-identidade (OTP / password / passkey / bot / supplier). */
 async function waitForAuthChallenge(
   page: Page,
   timeoutMs = 25_000
-): Promise<'connected' | 'otp' | 'password' | 'passkey' | 'identity' | 'unknown'> {
+): Promise<'connected' | 'otp' | 'password' | 'passkey' | 'identity' | 'bot' | 'unknown'> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
+    if (await canHandoffBotChallenge(page)) return 'bot';
     if (await page.getByText(/tudo pronto/i).first().isVisible().catch(() => false)) {
       await clickContinue(page);
       await page.waitForTimeout(1000);
@@ -1471,12 +2108,13 @@ async function waitForAuthChallenge(
       return 'passkey';
     }
 
-    if (await isIdentityScreen(page)) {
+    if (await isIdentityScreen(page) || (await isStuckOnEmptyIdentity(page))) {
       await page.waitForTimeout(800);
       continue;
     }
     await page.waitForTimeout(700);
   }
+  if (await canHandoffBotChallenge(page)) return 'bot';
   if (await isOtpScreen(page)) return 'otp';
   if (await isPasswordScreen(page)) return 'password';
   if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
@@ -1485,21 +2123,158 @@ async function waitForAuthChallenge(
     }
     return 'passkey';
   }
-  if (await isIdentityScreen(page)) return 'identity';
+  if (await isIdentityScreen(page) || (await isStuckOnEmptyIdentity(page))) return 'identity';
   return 'unknown';
 }
 
-/** Usado pelo watcher do job enquanto o gestor digitaliza o passkey. */
+async function botChallengeLoginPhase(page: Page, username?: string): Promise<PortalLoginPhase> {
+  // Gate: nunca abrir Desafio Uber com identidade vazia
+  if (await isStuckOnEmptyIdentity(page)) {
+    if (username?.trim()) {
+      console.log('[uber-login] bot phase recusada (email vazio) — a preencher identidade');
+      await fillIdentity(page, username.trim());
+      if (await canHandoffBotChallenge(page)) {
+        // fall through to normal bot wait
+      } else if (await isStuckOnEmptyIdentity(page) || (await isIdentityScreen(page))) {
+        await captureIdentityStuckDebug(page);
+        return {
+          status: 'failed',
+          message:
+            `Login Uber: email não ficou preenchido antes do desafio anti-bot (${await pageAuthDebug(page)}). ` +
+            'Tente Ligar conta outra vez.',
+        };
+      } else {
+        // fillIdentity avançou para outro ecrã — o caller trata; devolver unknown via failed? 
+        // Melhor: se já não é bot, devolver failed com debug para o automated loop re-entrar
+        if (!(await canHandoffBotChallenge(page))) {
+          await captureIdentityStuckDebug(page);
+          return {
+            status: 'failed',
+            message:
+              `Login Uber: após re-fill do email ainda sem desafio anti-bot pronto (${await pageAuthDebug(page)}).`,
+          };
+        }
+      }
+    } else {
+      await captureIdentityStuckDebug(page);
+      return {
+        status: 'failed',
+        message:
+          `Login Uber: desafio anti-bot detectado com email vazio (${await pageAuthDebug(page)}). ` +
+          'Tente Ligar conta outra vez.',
+      };
+    }
+  }
+
+  if (!(await canHandoffBotChallenge(page)) && !(await isBotChallengeSignalRaw(page))) {
+    return {
+      status: 'failed',
+      message: `Login Uber: sem sinal de desafio anti-bot (${await pageAuthDebug(page)}).`,
+    };
+  }
+
+  await captureIdentityStuckDebug(page);
+
+  // Esperar o overlay Arkose pintar («Proteger a sua conta» / «Iniciar desafio»).
+  // Em headless o iframe URL basta para isBotChallengeScreen, mas o JPEG fica na identidade.
+  const paintDeadline = Date.now() + 18_000;
+  let visual = await isBotChallengeVisuallyReady(page);
+  let lastNudgeAt = 0;
+  while (!visual && Date.now() < paintDeadline) {
+    if (await isStuckOnEmptyIdentity(page)) {
+      if (username?.trim()) {
+        console.log('[uber-login] bot wait: identidade vazia — re-fill');
+        await fillIdentity(page, username.trim()).catch(() => undefined);
+      }
+      if (await isStuckOnEmptyIdentity(page)) {
+        await captureIdentityStuckDebug(page);
+        return {
+          status: 'failed',
+          message:
+            `Login Uber: ficou no email vazio durante o desafio anti-bot (${await pageAuthDebug(page)}).`,
+        };
+      }
+    }
+    if (Date.now() - lastNudgeAt > 3500) {
+      await nudgeBotChallengePaint(page, username);
+      lastNudgeAt = Date.now();
+    }
+    await page.waitForTimeout(500);
+    visual = await isBotChallengeVisuallyReady(page);
+    if (await canHandoffBotChallenge(page) && visual) break;
+  }
+
+  // Ainda sem handoff seguro → não abrir modal Desafio Uber
+  if (!(await canHandoffBotChallenge(page))) {
+    await captureIdentityStuckDebug(page);
+    console.log(
+      `[uber-login] bot challenge SEM handoff seguro — ${await pageAuthDebug(page)}`
+    );
+    if (await isIdentityScreen(page) || (await isStuckOnEmptyIdentity(page))) {
+      return {
+        status: 'failed',
+        message:
+          `Login Uber: Continuar não avançou para o desafio anti-bot (${await pageAuthDebug(page)}). ` +
+          'Verifique o email da conta e tente Ligar conta outra vez.',
+      };
+    }
+    return {
+      status: 'failed',
+      message:
+        `Login Uber: desafio anti-bot sem paint/UI clara (${await pageAuthDebug(page)}). ` +
+        'Confirme PORTAL_RPA_UBER_HEADED_CONNECT + DISPLAY e tente outra vez.',
+    };
+  }
+
+  if (visual) {
+    await tryClickStartChallenge(page);
+    await page.waitForTimeout(800);
+  } else {
+    console.log(
+      `[uber-login] bot challenge SEM paint visual após espera — ${await pageAuthDebug(page)} ` +
+        '(headed+Xvfb recomendado: PORTAL_RPA_UBER_HEADED_CONNECT + DISPLAY)'
+    );
+    await nudgeBotChallengePaint(page, username);
+    await page.waitForTimeout(1200);
+  }
+
+  const img = await page.screenshot({ type: 'jpeg', quality: 55, fullPage: false }).then((b) =>
+    b.toString('base64')
+  );
+  const ready = await isBotChallengeVisuallyReady(page);
+  console.log(
+    `[uber-login] bot challenge visual=${ready} handoff=yes ${await pageAuthDebug(page)}`
+  );
+  return {
+    status: 'awaiting_passkey',
+    kind: 'bot',
+    hint: ready
+      ? 'Uber pediu desafio anti-bot («Proteger a sua conta»). Resolva o desafio na janela «Desafio Uber» do dashboard; ' +
+        'depois o fluxo continua (SMS/OTP ou password).'
+      : 'A carregar o desafio anti-bot Uber… Se continuar a ver o ecrã de email, aguarde ou cancele e tente Ligar conta outra vez.',
+    challengeImageBase64: img,
+    storageState: await captureStorageState(page.context()),
+  };
+}
+
+/** Usado pelo watcher do job enquanto o gestor digitaliza o passkey / resolve Arkose. */
 export async function inspectUberLiveAuth(
   page: Page,
   password?: string
-): Promise<'connected' | 'otp' | 'passkey' | 'password' | 'unknown'> {
+): Promise<'connected' | 'otp' | 'passkey' | 'password' | 'bot' | 'identity' | 'unknown'> {
   if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
   if (await page.getByText(/tudo pronto/i).first().isVisible().catch(() => false)) {
     await clickContinue(page);
     await page.waitForTimeout(1200);
     if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
   }
+  // Identidade vazia / erro — NÃO reportar bot (evita OTP pendente falso)
+  if (await isStuckOnEmptyIdentity(page) || (await isIdentityScreen(page))) {
+    if (await canHandoffBotChallenge(page)) return 'bot';
+    return 'identity';
+  }
+  if (await canHandoffBotChallenge(page)) return 'bot';
+  if (await isBotChallengeVisuallyReady(page)) return 'bot';
   if (await isOtpScreen(page)) return 'otp';
   if (await isPasswordScreen(page)) return 'password';
 
@@ -1520,6 +2295,8 @@ export async function inspectUberLiveAuth(
     if (password) await preferPasswordLogin(page, password);
     return 'passkey';
   }
+  // Sinal iframe sem handoff = ainda a montar / identidade
+  if (await isBotChallengeSignalRaw(page)) return 'identity';
   return 'unknown';
 }
 
@@ -1560,9 +2337,8 @@ export const uberAdapter: PortalAdapter = {
         return { status: 'failed', message: 'OTP Uber inválido ou expirado' };
       }
 
-      // Pós-OTP: «Iniciar sessão com a palavra-passe» (não chave de acesso)
-      // A password vem do job/conexão — submitOtp não a recebe; o watcher interactivo trata.
-      // Em modo automático tentamos só o clique; password preenchida se o campo já existir.
+      // Pós-OTP: «Iniciar sessão com a palavra-passe» (não chave de acesso).
+      // Password é preenchida em continueOtpJob / submitPortalPassword (não aqui).
       await dismissSecurityKeyDialog(page);
       if (await isPostOtpPasswordChooser(page) || (await isPasskeyScreen(page))) {
         const pwdBtn = page
@@ -1570,31 +2346,75 @@ export const uberAdapter: PortalAdapter = {
           .or(page.getByText(/iniciar sessão com a palavra-?passe/i))
           .first();
         if (await pwdBtn.isVisible().catch(() => false)) {
-          console.log('[uber-login] pós-OTP → palavra-passe');
+          console.log('[uber-login] pós-OTP → escolher palavra-passe');
           await pwdBtn.click({ force: true, timeout: 10_000 }).catch(() => undefined);
           await page.waitForTimeout(2000);
         }
       }
 
-      if (!(await waitForPostLogin(page))) {
-        // Ainda pode estar no form password
+      // Curto: OTP → password costuma ser imediato. NÃO bloquear 45s em waitForPostLogin
+      // (isso deixava o modal «A validar…» preso enquanto o Chromium já pedia password).
+      const deadline = Date.now() + 12_000;
+      while (Date.now() < deadline) {
+        if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) {
+          return { status: 'connected', storageState: await captureStorageState(page.context()) };
+        }
+        const ready = page.getByText(/tudo pronto/i).first();
+        if (await ready.isVisible().catch(() => false)) {
+          await clickContinue(page);
+          await page.waitForTimeout(1200);
+          continue;
+        }
         if (await isPasswordScreen(page)) {
+          console.log('[uber-login] pós-OTP → ecrã palavra-passe (awaiting_password)');
           return {
-            status: 'awaiting_otp',
-            otpHint: 'OTP OK — introduza a password Uber no ecrã (ou Desligar → Ligar com password correcta).',
+            status: 'awaiting_password',
+            hint: 'OTP OK — introduza a password Uber.',
             storageState: await captureStorageState(page.context()),
           };
         }
+        if (await isOtpScreen(page)) {
+          return { status: 'failed', message: 'OTP Uber inválido ou expirado' };
+        }
+        await dismissSecurityKeyDialog(page);
+        if (await isPostOtpPasswordChooser(page) || (await isPasskeyScreen(page))) {
+          const pwdBtn = page
+            .getByRole('button', { name: /iniciar sessão com a palavra-?passe|sign in with .*password/i })
+            .or(page.getByText(/iniciar sessão com a palavra-?passe/i))
+            .first();
+          if (await pwdBtn.isVisible().catch(() => false)) {
+            await pwdBtn.click({ force: true, timeout: 8000 }).catch(() => undefined);
+          }
+        }
+        await page.waitForTimeout(600);
+      }
+
+      if (await isPasswordScreen(page)) {
+        return {
+          status: 'awaiting_password',
+          hint: 'OTP OK — introduza a password Uber.',
+          storageState: await captureStorageState(page.context()),
+        };
+      }
+      if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) {
+        return { status: 'connected', storageState: await captureStorageState(page.context()) };
+      }
+
+      return {
+        status: 'failed',
+        message:
+          'OTP aceite mas não entrou no Supplier. Escolha «Iniciar sessão com a palavra-passe» na janela Chromium.',
+      };
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : 'Falha ao submeter OTP Uber';
+      if (/passkey-login-btn|chave de acesso|intercepts pointer/i.test(raw)) {
         return {
           status: 'failed',
           message:
-            'OTP aceite mas não entrou no Supplier. Escolha «Iniciar sessão com a palavra-passe» na janela Chromium.',
+            'Login Uber: após o OTP o portal pediu chave de acesso. Não use passkey — Ligar conta outra vez e escolha «Enviar código por SMS», depois a password.',
         };
       }
-
-      return { status: 'connected', storageState: await captureStorageState(page.context()) };
-    } catch (err) {
-      return { status: 'failed', message: err instanceof Error ? err.message : 'Falha ao submeter OTP Uber' };
+      return { status: 'failed', message: raw };
     }
   },
 
@@ -1723,22 +2543,7 @@ async function interactiveUberLogin(
       (await isIdentityScreen(page)) ||
       (await (await identityInput(page)).isVisible().catch(() => false))
     ) {
-      const identity = await identityInput(page);
-      await page.evaluate(
-        `(() => {
-          const el = document.querySelector('#PHONE_NUMBER_or_EMAIL_ADDRESS');
-          if (!el) return;
-          el.removeAttribute('disabled');
-          el.disabled = false;
-        })()`
-      );
-      await identity.click({ force: true, timeout: 5000 }).catch(() => undefined);
-      await identity.fill(username, { force: true }).catch(async () => {
-        await setIdentityValue(page, username);
-      });
-      await page.waitForTimeout(400);
-      await clickContinue(page);
-      await page.waitForTimeout(1500);
+      await fillIdentity(page, username);
       if (await isPasswordScreen(page)) {
         await submitPasswordIfVisible(page, password);
       }
@@ -1756,6 +2561,15 @@ async function interactiveUberLogin(
     await preferSmsOverPasskey(page);
   }
 
+  // Arkose: só handoff quando email preenchido + Continuar avançou + sinal bot real.
+  // NÃO abrir «Desafio Uber» com identidade vazia (iframe pré-carregado ≠ desafio).
+  if (await canHandoffBotChallenge(page)) {
+    console.log(
+      '[uber-login] desafio anti-bot — handoff para modal Desafio Uber (live stream)'
+    );
+    return botChallengeLoginPhase(page, username);
+  }
+
   console.log(`[uber-login] à espera… ${await pageAuthDebug(page)}`);
   console.log(
     '[uber-login] Fluxo: SMS → OTP → «Iniciar sessão com a palavra-passe» (não a chave de acesso)'
@@ -1767,6 +2581,21 @@ async function interactiveUberLogin(
     if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) {
       console.log('[uber-login] interactivo: entrou no Supplier');
       return { status: 'connected', storageState: await captureStorageState(page.context()) };
+    }
+
+    if (await isStuckOnEmptyIdentity(page)) {
+      console.log('[uber-login] interactivo: identidade vazia — re-fill');
+      await fillIdentity(page, username).catch((err) => {
+        console.log('[uber-login] re-fill falhou:', err instanceof Error ? err.message : err);
+      });
+    }
+
+    // Bot pode aparecer a meio (pós-Continuar lento) — mesmo handoff
+    if (await canHandoffBotChallenge(page)) {
+      console.log(
+        '[uber-login] desafio anti-bot (durante espera) — handoff para modal Desafio Uber'
+      );
+      return botChallengeLoginPhase(page, username);
     }
 
     if (await page.getByText(/tudo pronto/i).first().isVisible().catch(() => false)) {
@@ -1848,7 +2677,10 @@ async function automatedUberLogin(
     return { status: 'connected', storageState: await captureStorageState(page.context()) };
   }
 
-  // Já no desafio (sessão parcial) — não voltar a preencher email
+  // Já no desafio (sessão parcial) — só se handoff seguro; senão preencher email
+  if (await canHandoffBotChallenge(page)) {
+    return botChallengeLoginPhase(page, username);
+  }
   if (await isOtpScreen(page)) {
     return {
       status: 'awaiting_otp',
@@ -1872,11 +2704,12 @@ async function automatedUberLogin(
   } else {
     const onIdentity =
       (await isIdentityScreen(page)) ||
+      (await isStuckOnEmptyIdentity(page)) ||
       (await (await identityInput(page)).isVisible().catch(() => false));
     if (onIdentity) {
       await fillIdentity(page, username);
       console.log(`[uber-login] após identidade: ${await pageAuthDebug(page)}`);
-    } else {
+    } else if (!(await canHandoffBotChallenge(page))) {
       // Reload único se o form não hidratou
       console.log(`[uber-login] form ausente — reload. ${await pageAuthDebug(page)}`);
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
@@ -1888,13 +2721,24 @@ async function automatedUberLogin(
       if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) {
         return { status: 'connected', storageState: await captureStorageState(page.context()) };
       }
+      if (await canHandoffBotChallenge(page)) {
+        return botChallengeLoginPhase(page, username);
+      }
       await fillIdentity(page, username);
       console.log(`[uber-login] após identidade (retry): ${await pageAuthDebug(page)}`);
     }
   }
 
+  if (await canHandoffBotChallenge(page)) {
+    return botChallengeLoginPhase(page, username);
+  }
+
   let challenge = await waitForAuthChallenge(page, 20_000);
   console.log(`[uber-login] challenge=${challenge} ${await pageAuthDebug(page)}`);
+
+  if (challenge === 'bot' || (await canHandoffBotChallenge(page))) {
+    return botChallengeLoginPhase(page, username);
+  }
 
   // Pós-Continuar: insistir SMS
   if (challenge === 'passkey' || challenge === 'unknown') {
@@ -1902,16 +2746,30 @@ async function automatedUberLogin(
     challenge = await waitForAuthChallenge(page, 12_000);
   }
 
+  if (challenge === 'bot' || (await canHandoffBotChallenge(page))) {
+    return botChallengeLoginPhase(page, username);
+  }
+
   // Ainda no form identidade (Continuar não avançou) — só então re-submeter
-  if (challenge === 'identity' && (await isIdentityScreen(page))) {
+  if (
+    (challenge === 'identity' || (await isStuckOnEmptyIdentity(page))) &&
+    (await isIdentityScreen(page))
+  ) {
     await fillIdentity(page, username);
     challenge = await waitForAuthChallenge(page, 15_000);
     console.log(`[uber-login] retry identidade: challenge=${challenge}`);
   }
 
+  if (challenge === 'bot' || (await canHandoffBotChallenge(page))) {
+    return botChallengeLoginPhase(page, username);
+  }
+
   for (let i = 0; i < 12; i += 1) {
     if (challenge === 'connected' || (isSupplierUrl(page.url()) && !isAuthUrl(page.url()))) {
       return { status: 'connected', storageState: await captureStorageState(page.context()) };
+    }
+    if (challenge === 'bot' || (await canHandoffBotChallenge(page))) {
+      return botChallengeLoginPhase(page, username);
     }
     if (challenge === 'otp' || (await isOtpScreen(page))) {
       return {
@@ -1981,11 +2839,13 @@ async function automatedUberLogin(
   }
 
   if (await isIdentityScreen(page)) {
+    await captureIdentityStuckDebug(page);
     return {
       status: 'failed',
       message:
         `Login Uber: o botão Continuar não avançou após o email (${await pageAuthDebug(page)}). ` +
-        'Tente Ligar conta outra vez; se falhar, use PORTAL_RPA_UBER_INTERACTIVE=true temporariamente para debug.',
+        'Se a Uber mostrar «Proteger a sua conta», o dashboard abre o Desafio Uber (stream live). ' +
+        'Caso contrário tente Ligar conta outra vez.',
     };
   }
 

@@ -13,6 +13,7 @@ interface BoltStatus {
   clientId: string | null;
   boltCompanyId: number | null;
   statusMessage: string;
+  secretNeedsResave?: boolean;
   lastSyncAtOrders: string | null;
   lastSyncAtDrivers: string | null;
   lastSyncAtVehicles: string | null;
@@ -59,6 +60,12 @@ export function BoltSettingsPanel({
     e.preventDefault();
     if (!workspaceId) {
       onError?.('Seleccione um workspace');
+      return;
+    }
+    if (status?.secretNeedsResave && !form.clientSecret.trim()) {
+      onError?.(
+        'O Client Secret está ilegível — volte a colá-lo e guarde (ENCRYPTION_KEY alterada ou dados corrompidos).'
+      );
       return;
     }
     setLoading(true);
@@ -181,6 +188,11 @@ export function BoltSettingsPanel({
         </div>
         <div>
           <label className="mb-1 block text-sm font-medium text-slate-700">Client Secret *</label>
+          {status?.secretNeedsResave ? (
+            <p className="mb-1 text-xs text-amber-800">
+              Client Secret ilegível (ENCRYPTION_KEY alterada). Cole novamente o secret e guarde.
+            </p>
+          ) : null}
           <AntiAutofillInput
             id="bolt-client-secret"
             name="bolt-client-secret"
@@ -188,7 +200,12 @@ export function BoltSettingsPanel({
             maskAsPassword
             value={form.clientSecret}
             onChange={(e) => setForm({ ...form, clientSecret: e.target.value })}
-            placeholder="Deixe em branco para manter o actual"
+            placeholder={
+              status?.secretNeedsResave
+                ? 'Obrigatório — secret ilegível na BD'
+                : 'Deixe em branco para manter o actual'
+            }
+            required={Boolean(status?.secretNeedsResave)}
             autoComplete="new-password"
           />
         </div>

@@ -40,6 +40,11 @@ export interface PortalConnectionPublic {
   hasSession: boolean;
   /** Password AES-GCM guardada no servidor (nunca devolvida em claro) */
   hasPassword: boolean;
+  /**
+   * Password encriptada existe mas não desencripta com a ENCRYPTION_KEY actual
+   * (chave mudou / ciphertext corrompido) — pedir «Esquecer password» + re-ligar.
+   */
+  passwordNeedsResave: boolean;
   lastLoginAt: string | null;
   lastSyncAt: string | null;
   lastError: string | null;
@@ -47,13 +52,15 @@ export interface PortalConnectionPublic {
   activeJobId: string | null;
   activeJobStatus: string | null;
   otpHint: string | null;
-  /** Desafio humano actual: passkey (QR) ou OTP SMS */
-  authChallenge: 'passkey' | 'otp' | null;
+  /** Desafio humano actual: passkey (QR), bot (Arkose live), OTP SMS, ou password pós-OTP */
+  authChallenge: 'passkey' | 'otp' | 'bot' | 'password' | null;
   /** PNG base64 do QR/ecrã passkey (quando authChallenge=passkey) */
   challengeImageBase64: string | null;
   rpaEnabled: boolean;
-  /** Chromium Playwright detectado no servidor */
+  /** Chromium Playwright pronto no servidor (launch verificado quando possível) */
   browserReady: boolean;
+  /** Detalhe do probe (path OK / erro humanizado) — separado do estado da conta */
+  browserDetail: string | null;
   /** true = simula sem browser (PORTAL_RPA_MOCK) */
   mockMode: boolean;
   /** Mensagem do último job (ex. "Sync: 6 inseridos, 4 ignorados") */

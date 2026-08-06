@@ -9,21 +9,71 @@ import {
   PORTAL_KINDS,
 } from '@tvde/shared';
 import { env } from '../../config/env';
-import { decrypt, encrypt } from '../../lib/crypto';
+import { canDecrypt, decrypt, encrypt, isCryptoAuthFailure } from '../../lib/crypto';
 import { getPortalAdapter } from './adapters';
 import {
   captureStorageState,
   disposeLiveOtpSession,
   getLiveOtpSession,
   humanizePlaywrightError,
-  isMissingBrowserError,
+  isInfraBrowserError,
   probePlaywrightBrowser,
   registerLiveOtpSession,
+  touchLiveOtpSession,
   withPlaywrightPage,
   type PortalAdapter,
 } from './types';
+
+/** Mensagem PT quando ENCRYPTION_KEY mudou ou ciphertext do portal está corrompido. */
+export const PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE =
+  'Password guardada ilegível (chave de encriptação mudou). ' +
+  'Clique em «Esquecer password» e volte a Ligar conta com a password correcta.';
+
+export const PORTAL_SESSION_NEEDS_RESAVE_MESSAGE =
+  'Sessão guardada ilegível (chave de encriptação mudou). Volte a Ligar conta.';
+
+function decryptPortalField(
+  payload: string,
+  kind: 'username' | 'password' | 'session'
+): string {
+  try {
+    return decrypt(payload);
+  } catch (err) {
+    if (isCryptoAuthFailure(err)) {
+      if (kind === 'session') throw new Error(PORTAL_SESSION_NEEDS_RESAVE_MESSAGE);
+      if (kind === 'username') {
+        throw new Error(
+          'Utilizador guardado ilegível (chave de encriptação mudou). ' +
+            'Introduza o utilizador de novo e volte a Ligar conta.'
+        );
+      }
+      throw new Error(PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE);
+    }
+    throw err;
+  }
+}
+
+function isPortalCryptoErrorMessage(msg: string | null | undefined): boolean {
+  if (!msg) return false;
+  return (
+    /unsupported state or unable to authenticate/i.test(msg) ||
+    /unable to authenticate data/i.test(msg) ||
+    /Password guardada ilegível|Sessão guardada ilegível|Utilizador guardado ilegível/i.test(msg) ||
+    /chave de encriptação mudou/i.test(msg)
+  );
+}
 import { ingestPortalDownloadedFiles } from './ingest.service';
-import { inspectUberLiveAuth, listUberReportsFromSession, preferPasswordLogin } from './uber.adapter';
+import {
+  inspectUberLiveAuth,
+  isBotChallengeVisuallyReady,
+  isStuckOnEmptyIdentity,
+  isUberPasswordScreen,
+  listUberReportsFromSession,
+  nudgeBotChallengePaint,
+  preferPasswordLogin,
+  canHandoffBotChallenge,
+  hasActiveArkoseOverlay,
+} from './uber.adapter';
 
 type JobMeta = { syncScope?: MyPrioSyncScope; uberSync?: UberSyncOptions };
 
@@ -48,8 +98,18 @@ async function attemptSilentPortalRelogin(
   if (!connection.usernameEncrypted || !connection.passwordEncrypted) {
     return { ok: false, reason: 'no_credentials' };
   }
-  const username = decrypt(connection.usernameEncrypted);
-  const password = decrypt(connection.passwordEncrypted);
+  let username: string;
+  let password: string;
+  try {
+    username = decryptPortalField(connection.usernameEncrypted, 'username');
+    password = decryptPortalField(connection.passwordEncrypted, 'password');
+  } catch (err) {
+    return {
+      ok: false,
+      reason: 'failed',
+      message: err instanceof Error ? err.message : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE,
+    };
+  }
 
   const result = await withPlaywrightPage(
     { headless: env.portalRpaHeadless, timeoutMs: 90_000 },
@@ -201,7 +261,7 @@ async function mapPublic(
   let usernameMasked: string | null = null;
   if (row?.usernameEncrypted) {
     try {
-      usernameMasked = maskUsername(decrypt(row.usernameEncrypted));
+      usernameMasked = maskUsername(decryptPortalField(row.usernameEncrypted, 'username'));
     } catch {
       usernameMasked = '***';
     }
@@ -211,15 +271,42 @@ async function mapPublic(
     ? { ready: true, detail: 'mock' }
     : probePlaywrightBrowser();
 
+  const hasPassword = Boolean(row?.passwordEncrypted);
+  const passwordNeedsResave = hasPassword && !canDecrypt(row?.passwordEncrypted);
+  const sessionUnreadable =
+    Boolean(row?.sessionStateEncrypted) && !canDecrypt(row?.sessionStateEncrypted);
+
+  // Infra ≠ conta: não expor lastError de browser/libs se o Chromium já está OK
+  let lastError = row?.lastError ?? null;
+  if (browser.ready && isInfraBrowserError(lastError)) {
+    lastError = null;
+  }
+  if (passwordNeedsResave) {
+    lastError = PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE;
+  } else if (sessionUnreadable && isPortalCryptoErrorMessage(lastError)) {
+    lastError = PORTAL_SESSION_NEEDS_RESAVE_MESSAGE;
+  } else if (isPortalCryptoErrorMessage(lastError)) {
+    lastError = /Sessão guardada ilegível/i.test(lastError ?? '')
+      ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+      : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE;
+  }
+
+  let status = (row?.status as PortalConnectionPublic['status']) ?? 'disconnected';
+  // Crypto ilegível ≠ crash misterioso — mostrar «Sessão expirada» em vez de «Erro»
+  if (passwordNeedsResave && status === 'error') {
+    status = 'expired';
+  }
+
   return {
     portal,
-    status: (row?.status as PortalConnectionPublic['status']) ?? 'disconnected',
+    status,
     usernameMasked,
-    hasSession: Boolean(row?.sessionStateEncrypted),
-    hasPassword: Boolean(row?.passwordEncrypted),
+    hasSession: Boolean(row?.sessionStateEncrypted) && !sessionUnreadable,
+    hasPassword,
+    passwordNeedsResave,
     lastLoginAt: row?.lastLoginAt?.toISOString() ?? null,
     lastSyncAt: row?.lastSyncAt?.toISOString() ?? null,
-    lastError: row?.lastError ?? null,
+    lastError,
     isEnabled: row?.isEnabled ?? true,
     activeJobId: row?.activeJobId ?? null,
     activeJobStatus: null,
@@ -228,6 +315,7 @@ async function mapPublic(
     challengeImageBase64: null,
     rpaEnabled: env.portalRpaEnabled,
     browserReady: browser.ready,
+    browserDetail: env.portalRpaMock ? 'mock' : browser.detail,
     mockMode: env.portalRpaMock,
     lastJobMessage: null,
   };
@@ -242,17 +330,53 @@ export async function getPortalConnectionDetail(
     where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
   });
 
-  // Auto-heal: só browser em falta → disconnected.
-  // NÃO promover error→connected só porque há sessionState (pode ser mid-OTP sem lastLoginAt).
-  if (row && row.status === 'error') {
-    if (
-      isMissingBrowserError(row.lastError) &&
-      (env.portalRpaMock || probePlaywrightBrowser().ready)
-    ) {
+  // Auto-heal: erro de infra (browser/libs) não deve deixar a conta em «Erro» para sempre.
+  // Estado da conta = credenciais/sessão; readiness do browser vem em browserReady.
+  if (row && isInfraBrowserError(row.lastError)) {
+    if (env.portalRpaMock || probePlaywrightBrowser().ready) {
+      const nextStatus =
+        row.status === 'error'
+          ? row.sessionStateEncrypted
+            ? 'connected'
+            : 'disconnected'
+          : row.status;
       row = await db.portalConnection.update({
         where: { id: row.id },
-        data: { status: 'disconnected', lastError: null, activeJobId: null },
+        data: {
+          lastError: null,
+          status: nextStatus,
+          ...(row.status === 'error' ? { activeJobId: null } : {}),
+        },
       });
+    }
+  }
+
+  // Auto-heal: raw AES-GCM / ENCRYPTION_KEY mismatch → mensagem PT + status expirado
+  if (row) {
+    const passwordBad = Boolean(row.passwordEncrypted) && !canDecrypt(row.passwordEncrypted);
+    const sessionBad =
+      Boolean(row.sessionStateEncrypted) && !canDecrypt(row.sessionStateEncrypted);
+    const rawCrypto = isPortalCryptoErrorMessage(row.lastError);
+    if (passwordBad || sessionBad || rawCrypto) {
+      const nextError = passwordBad
+        ? PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
+        : sessionBad
+          ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+          : /Sessão guardada ilegível/i.test(row.lastError ?? '')
+            ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+            : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE;
+      const nextStatus =
+        row.status === 'error' ? 'expired' : row.status;
+      if (row.lastError !== nextError || row.status !== nextStatus) {
+        row = await db.portalConnection.update({
+          where: { id: row.id },
+          data: {
+            lastError: nextError,
+            status: nextStatus,
+            ...(sessionBad ? { sessionStateEncrypted: null } : {}),
+          },
+        });
+      }
     }
   }
 
@@ -266,12 +390,21 @@ export async function getPortalConnectionDetail(
     const challengeImageBase64 =
       typeof meta.challengeImageBase64 === 'string' ? meta.challengeImageBase64 : null;
     const authChallenge =
-      meta.authChallenge === 'passkey' || meta.authChallenge === 'otp'
+      meta.authChallenge === 'passkey' ||
+      meta.authChallenge === 'otp' ||
+      meta.authChallenge === 'bot' ||
+      meta.authChallenge === 'password'
         ? meta.authChallenge
         : challengeImageBase64
           ? 'passkey'
           : job?.status === 'awaiting_otp'
-            ? 'otp'
+            ? /OTP OK|password|palavra-?passe/i.test(job.otpHint ?? '')
+              ? 'password'
+              : /anti-bot|desafio|Arkose|Proteger a sua conta/i.test(job.otpHint ?? job.message ?? '')
+                ? 'bot'
+                : /preencher email|A preencher/i.test(job.message ?? '')
+                  ? null
+                  : 'otp'
             : null;
     return {
       ...base,
@@ -281,6 +414,31 @@ export async function getPortalConnectionDetail(
       authChallenge,
       challengeImageBase64,
     };
+  }
+
+  // Sem activeJobId: ainda devolver a mensagem do último job falhado (recente)
+  // para a UI sair do spinner — sem marcar activeJobStatus=failed (evita falso positivo
+  // ao abrir «Ligar» outra vez).
+  if (row) {
+    const latest = await db.portalSyncJob.findFirst({
+      where: { connectionId: row.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (latest?.status === 'failed') {
+      const ageMs = Date.now() - new Date(latest.completedAt ?? latest.updatedAt).getTime();
+      if (ageMs < 10 * 60 * 1000) {
+        const jobMsg = isPortalCryptoErrorMessage(latest.message)
+          ? /Sessão guardada ilegível/i.test(latest.message ?? '')
+            ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+            : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
+          : latest.message ?? null;
+        return {
+          ...base,
+          lastJobMessage: jobMsg,
+          lastError: base.lastError ?? jobMsg,
+        };
+      }
+    }
   }
   return base;
 }
@@ -308,11 +466,7 @@ export async function startPortalConnect(
       if (!existing?.usernameEncrypted) {
         throw new Error('Utilizador em falta — não há credencial guardada');
       }
-      try {
-        resolvedUsername = decrypt(existing.usernameEncrypted);
-      } catch {
-        throw new Error('Credencial guardada inválida — introduza o utilizador de novo');
-      }
+      resolvedUsername = decryptPortalField(existing.usernameEncrypted, 'username');
     }
   }
 
@@ -321,11 +475,10 @@ export async function startPortalConnect(
       if (!existing?.passwordEncrypted) {
         throw new Error('Password em falta — não há password guardada');
       }
-      try {
-        resolvedPassword = decrypt(existing.passwordEncrypted);
-      } catch {
-        throw new Error('Password guardada inválida — introduza a password de novo');
+      if (!canDecrypt(existing.passwordEncrypted)) {
+        throw new Error(PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE);
       }
+      resolvedPassword = decryptPortalField(existing.passwordEncrypted, 'password');
     }
   }
 
@@ -387,7 +540,15 @@ export async function forgetPortalPassword(
 
   await db.portalConnection.update({
     where: { id: connection.id },
-    data: { passwordEncrypted: null },
+    data: {
+      passwordEncrypted: null,
+      ...(isPortalCryptoErrorMessage(connection.lastError)
+        ? {
+            lastError: null,
+            status: connection.status === 'error' ? 'expired' : connection.status,
+          }
+        : {}),
+    },
   });
 
   return getPortalConnectionDetail(db, tenantId, portal);
@@ -415,6 +576,46 @@ export async function submitPortalOtp(
   });
 
   void continueOtpJob(db, job.id, code, actorUserId);
+  return getPortalConnectionDetail(db, tenantId, portal);
+}
+
+/**
+ * Uber pós-OTP: submeter palavra-passe no browser vivo (quando não há password guardada
+ * ou a auto-fill falhou).
+ */
+export async function submitPortalPassword(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  password: string,
+  actorUserId: string
+) {
+  assertRpaEnabled();
+  if (portal !== 'uber') throw new Error('Password pós-OTP só aplica à Uber');
+  if (!password.trim()) throw new Error('Password em falta');
+
+  const connection = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+  if (!connection?.activeJobId) throw new Error('Nenhum desafio de password activo');
+
+  const job = await db.portalSyncJob.findUnique({ where: { id: connection.activeJobId } });
+  if (!job || job.status !== 'awaiting_otp') {
+    throw new Error('Job não está à espera da password Uber');
+  }
+
+  // Guardar password para próximos logins
+  await db.portalConnection.update({
+    where: { id: connection.id },
+    data: { passwordEncrypted: encrypt(password) },
+  });
+
+  await db.portalSyncJob.update({
+    where: { id: job.id },
+    data: { message: 'Password recebida — a continuar…', status: 'running' },
+  });
+
+  void continuePasswordJob(db, job.id, password, actorUserId);
   return getPortalConnectionDetail(db, tenantId, portal);
 }
 
@@ -537,7 +738,7 @@ export async function listUberPortalReports(
     throw new Error('Ligue a conta Uber antes de listar relatórios');
   }
 
-  const storageState = decrypt(connection.sessionStateEncrypted);
+  const storageState = decryptPortalField(connection.sessionStateEncrypted, 'session');
   const uberInteractive = env.portalRpaUberInteractive;
   return withPlaywrightPage(
     {
@@ -549,7 +750,8 @@ export async function listUberPortalReports(
   );
 }
 
-const STALE_JOB_MS = 90_000;
+/** Deve cobrir o sync Uber mais longo (15 min) + margem — não matar jobs Playwright válidos. */
+const STALE_JOB_MS = 20 * 60_000;
 
 /** Marca jobs `running`/`pending` antigos como falhados (Playwright hung). */
 export async function clearStalePortalJobs(db: PrismaClient, connectionId?: string) {
@@ -654,6 +856,43 @@ export async function clearPortalMessages(
   return getPortalConnectionDetail(db, tenantId, portal);
 }
 
+/**
+ * Após probe Chromium OK no arranque: limpa lastError de infra em todas as ligações
+ * e corrige status `error` → connected (com sessão) / disconnected (sem).
+ */
+export async function clearStaleInfraPortalErrors(db: PrismaClient): Promise<number> {
+  const rows = await db.portalConnection.findMany({
+    where: { lastError: { not: null } },
+    select: {
+      id: true,
+      status: true,
+      lastError: true,
+      sessionStateEncrypted: true,
+    },
+  });
+
+  let cleared = 0;
+  for (const row of rows) {
+    if (!isInfraBrowserError(row.lastError)) continue;
+    const nextStatus =
+      row.status === 'error'
+        ? row.sessionStateEncrypted
+          ? 'connected'
+          : 'disconnected'
+        : row.status;
+    await db.portalConnection.update({
+      where: { id: row.id },
+      data: {
+        lastError: null,
+        status: nextStatus,
+        ...(row.status === 'error' ? { activeJobId: null } : {}),
+      },
+    });
+    cleared += 1;
+  }
+  return cleared;
+}
+
 export async function getPortalJob(
   db: PrismaClient,
   tenantId: string,
@@ -684,11 +923,13 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
 
   try {
     if (job.type === 'connect') {
-      if (!connection.usernameEncrypted || !connection.passwordEncrypted) {
+      if (!connection.usernameEncrypted || (portal !== 'uber' && !connection.passwordEncrypted)) {
         throw new Error('Credenciais em falta');
       }
-      const username = decrypt(connection.usernameEncrypted);
-      const password = decrypt(connection.passwordEncrypted);
+      const username = decryptPortalField(connection.usernameEncrypted, 'username');
+      const password = connection.passwordEncrypted
+        ? decryptPortalField(connection.passwordEncrypted, 'password')
+        : '';
 
       if (env.portalRpaMock) {
         const phase = await adapter.login(null as never, username, password);
@@ -738,7 +979,7 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
       // Reutilizar sessão Playwright guardada (evita SMS se cookies ainda forem válidos)
       if (connection.sessionStateEncrypted) {
         try {
-          const existingSession = decrypt(connection.sessionStateEncrypted);
+          const existingSession = decryptPortalField(connection.sessionStateEncrypted, 'session');
           const resumed = await withPlaywrightPage(
             { headless: env.portalRpaHeadless, storageStateJson: existingSession },
             async (_browser, context, page) => {
@@ -777,15 +1018,23 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
       }
 
       const uberInteractive = portal === 'uber' && env.portalRpaUberInteractive;
+      // Arkose não pinta em headless — headed+Xvfb só no Ligar conta (stream modal), não é UBER_INTERACTIVE
+      const uberHeadedConnect =
+        portal === 'uber' && (uberInteractive || env.portalRpaUberHeadedConnect);
       const result = await withPlaywrightPage(
         {
-          // Uber: Chromium visível para o gestor completar Continuar / SMS / OTP
-          headless: uberInteractive ? false : env.portalRpaHeadless,
+          headless: uberHeadedConnect ? false : env.portalRpaHeadless,
           keepAlive: true,
-          // Interactivo: até 10 min; automático: 4 min
+          // Interactivo: até 10 min; automático: 4 min (+ margem paint Arkose)
           timeoutMs: uberInteractive ? 600_000 : 240_000,
         },
         async (browser, context, page) => {
+          if (uberHeadedConnect) {
+            console.log(
+              `[portal-rpa] Uber connect headed DISPLAY=${process.env.DISPLAY ?? '-'} ` +
+                `interactive=${uberInteractive} headedConnect=${env.portalRpaUberHeadedConnect}`
+            );
+          }
           const phase = await adapter.login(page, username, password);
           if (phase.status === 'awaiting_otp' || phase.status === 'awaiting_passkey') {
             await registerLiveOtpSession(jobId, browser, context, page);
@@ -810,9 +1059,12 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             data: { status: 'awaiting_otp', lastError: null },
           });
         }
+        const isBot = result.phase.kind === 'bot';
         const hint =
           result.phase.hint ??
-          'Digitalize o QR passkey com o telemóvel. Depois pode ser pedido OTP SMS.';
+          (isBot
+            ? 'Resolva o desafio anti-bot Uber na janela Desafio Uber.'
+            : 'Digitalize o QR passkey com o telemóvel. Depois pode ser pedido OTP SMS.');
         await db.portalSyncJob.update({
           where: { id: jobId },
           data: {
@@ -820,12 +1072,12 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             otpHint: hint,
             message: hint,
             resultJson: {
-              authChallenge: 'passkey',
+              authChallenge: isBot ? 'bot' : 'passkey',
               challengeImageBase64: result.phase.challengeImageBase64,
             },
           },
         });
-        void watchLiveUberAuthChallenge(db, connection.id, jobId);
+        void watchLiveUberAuthChallenge(db, connection.id, jobId, { bot: isBot });
         return;
       }
 
@@ -925,7 +1177,7 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
       }
 
       if (!connection.sessionStateEncrypted) throw new Error('Sem sessão');
-      const storageState = decrypt(connection.sessionStateEncrypted);
+      const storageState = decryptPortalField(connection.sessionStateEncrypted, 'session');
 
       if (job.type === 'refresh') {
         try {
@@ -1163,12 +1415,17 @@ async function continueOtpJob(
         await failJob(db, connection.id, jobId, result.message);
         return;
       }
-      if (result.status === 'awaiting_otp') {
+      if (result.status === 'awaiting_otp' || result.status === 'awaiting_password') {
         await db.portalSyncJob.update({
           where: { id: jobId },
           data: {
             status: 'awaiting_otp',
-            otpHint: result.otpHint ?? 'OTP adicional necessário',
+            otpHint:
+              result.status === 'awaiting_password'
+                ? result.hint ?? 'OTP OK — introduza a password'
+                : result.otpHint ?? 'OTP adicional necessário',
+            resultJson:
+              result.status === 'awaiting_password' ? { authChallenge: 'password' } : undefined,
           },
         });
         return;
@@ -1210,18 +1467,38 @@ async function continueOtpJob(
 
     result = await adapter.submitOtp(live.page, code);
 
-    // Uber: após OTP → «Iniciar sessão com a palavra-passe»
-    if (portal === 'uber' && result.status !== 'awaiting_otp') {
-      const pwd = connection.passwordEncrypted ? decrypt(connection.passwordEncrypted) : '';
-      if (pwd) {
+    // Uber: após OTP → auto-fill password guardada (BUGFIX: antes só corria se status≠awaiting_otp,
+    // mas submitOtp devolvia awaiting_otp no ecrã password — nunca preenchia).
+    if (portal === 'uber' && result.status !== 'failed' && result.status !== 'connected') {
+      const pwd = connection.passwordEncrypted
+        ? decryptPortalField(connection.passwordEncrypted, 'password')
+        : '';
+      const onPassword =
+        result.status === 'awaiting_password' ||
+        (await isUberPasswordScreen(live.page).catch(() => false));
+
+      if (onPassword && pwd) {
+        console.log('[uber-otp] pós-OTP → preferPasswordLogin (password guardada)');
         await preferPasswordLogin(live.page, pwd);
-        const url = live.page.url();
-        if (url.includes('supplier.uber.com') && !url.includes('auth.uber.com')) {
+        const connected = await waitUberSupplierAfterPassword(live.page);
+        if (connected) {
           result = {
             status: 'connected' as const,
             storageState: await captureStorageState(live.context),
           };
+        } else if (await isUberPasswordScreen(live.page).catch(() => false)) {
+          result = {
+            status: 'awaiting_password' as const,
+            hint: 'OTP OK — password incorrecta ou ecrã ainda aberto. Introduza a password Uber.',
+            storageState: await captureStorageState(live.context),
+          };
         }
+      } else if (onPassword) {
+        result = {
+          status: 'awaiting_password' as const,
+          hint: 'OTP OK — introduza a password Uber.',
+          storageState: await captureStorageState(live.context),
+        };
       }
     }
 
@@ -1231,13 +1508,32 @@ async function continueOtpJob(
         (await live.context.storageState().then(JSON.stringify));
       result = { status: 'connected' as const, storageState };
     }
-    if (result.status !== 'awaiting_otp') {
+
+    // Manter browser vivo para OTP adicional OU password pós-OTP
+    if (result.status !== 'awaiting_otp' && result.status !== 'awaiting_password') {
       await disposeLiveOtpSession(jobId);
     }
 
     if (result.status === 'failed') {
       await disposeLiveOtpSession(jobId);
       await failJob(db, connection.id, jobId, result.message);
+      return;
+    }
+
+    if (result.status === 'awaiting_password') {
+      await db.portalConnection.update({
+        where: { id: connection.id },
+        data: { status: 'awaiting_otp', lastError: null },
+      });
+      await db.portalSyncJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'awaiting_otp',
+          otpHint: result.hint ?? 'OTP OK — introduza a password Uber.',
+          message: 'OTP OK — à espera da password',
+          resultJson: { authChallenge: 'password' },
+        },
+      });
       return;
     }
 
@@ -1278,6 +1574,100 @@ async function continueOtpJob(
   }
 }
 
+async function waitUberSupplierAfterPassword(
+  page: import('playwright').Page
+): Promise<boolean> {
+  const deadline = Date.now() + 40_000;
+  while (Date.now() < deadline) {
+    const url = page.url();
+    if (/supplier\.uber\.com/i.test(url) && !/auth\.uber\.com/i.test(url)) return true;
+    const ready = page.getByText(/tudo pronto/i).first();
+    if (await ready.isVisible().catch(() => false)) {
+      const btn = page.getByRole('button', { name: /^(continuar|seguinte|next)$/i }).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click({ timeout: 8000 }).catch(() => undefined);
+      }
+      await page.waitForTimeout(1500);
+      continue;
+    }
+    await page.waitForTimeout(800);
+  }
+  const url = page.url();
+  return /supplier\.uber\.com/i.test(url) && !/auth\.uber\.com/i.test(url);
+}
+
+async function continuePasswordJob(
+  db: PrismaClient,
+  jobId: string,
+  password: string,
+  _actorUserId: string
+) {
+  const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
+  if (!job) return;
+  const connection = await db.portalConnection.findUnique({ where: { id: job.connectionId } });
+  if (!connection) return;
+
+  try {
+    const live = getLiveOtpSession(jobId);
+    if (!live) {
+      await failJob(
+        db,
+        connection.id,
+        jobId,
+        'Sessão password no servidor já não está aberta. Desligar → Ligar conta para SMS novo.'
+      );
+      return;
+    }
+
+    console.log('[uber-otp] submitPortalPassword → preferPasswordLogin');
+    await preferPasswordLogin(live.page, password);
+    const connected = await waitUberSupplierAfterPassword(live.page);
+
+    if (!connected) {
+      // Voltar a awaiting password (manter browser)
+      await db.portalConnection.update({
+        where: { id: connection.id },
+        data: { status: 'awaiting_otp', lastError: null },
+      });
+      await db.portalSyncJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'awaiting_otp',
+          otpHint: 'Password incorrecta ou ecrã Uber ainda aberto. Tente de novo.',
+          message: 'À espera da password Uber',
+          resultJson: { authChallenge: 'password' },
+        },
+      });
+      return;
+    }
+
+    const storageState = await captureStorageState(live.context);
+    await disposeLiveOtpSession(jobId);
+    await db.portalConnection.update({
+      where: { id: connection.id },
+      data: {
+        sessionStateEncrypted: encrypt(storageState),
+        status: 'connected',
+        lastLoginAt: new Date(),
+        lastError: null,
+        activeJobId: null,
+      },
+    });
+    await db.portalSyncJob.update({
+      where: { id: jobId },
+      data: {
+        status: 'completed',
+        completedAt: new Date(),
+        message: 'Conta ligada após password',
+        resultJson: { authChallenge: null },
+      },
+    });
+  } catch (err) {
+    await disposeLiveOtpSession(jobId);
+    await failJob(db, connection.id, jobId, humanizePlaywrightError(err));
+  }
+}
+
 async function failJob(
   db: PrismaClient,
   connectionId: string,
@@ -1285,52 +1675,168 @@ async function failJob(
   message: string
 ) {
   await disposeLiveOtpSession(jobId);
+  const cryptoFail = isPortalCryptoErrorMessage(message);
   // Timeout de sync ≠ conta partida — manter "connected" para não forçar re-Ligar
-  const keepConnected = /Timeout Playwright|sync abortado/i.test(message);
+  const keepConnected = !cryptoFail && /Timeout Playwright|sync abortado/i.test(message);
   // OTP/login falhou: limpar cookies mid-OTP para o próximo Ligar fazer SMS completo
   const clearSession =
     !keepConnected &&
-    /OTP|SMS|Login|login|Formulário|chrome-error|Sessão OTP|não autentic|passkey/i.test(message);
+    (cryptoFail ||
+      /OTP|SMS|Login|login|Formulário|chrome-error|Sessão OTP|não autentic|passkey|Sessão guardada ilegível/i.test(
+        message
+      ));
 
   await db.portalConnection.update({
     where: { id: connectionId },
     data: {
-      status: keepConnected ? 'connected' : 'error',
-      lastError: message,
+      status: keepConnected ? 'connected' : cryptoFail ? 'expired' : 'error',
+      lastError: cryptoFail
+        ? /Sessão guardada ilegível/i.test(message)
+          ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+          : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
+        : message,
       activeJobId: null,
       ...(clearSession ? { sessionStateEncrypted: null } : {}),
     },
   });
   await db.portalSyncJob.update({
     where: { id: jobId },
-    data: { status: 'failed', completedAt: new Date(), message },
+    data: {
+      status: 'failed',
+      completedAt: new Date(),
+      message: cryptoFail
+        ? /Sessão guardada ilegível/i.test(message)
+          ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
+          : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
+        : message,
+    },
   });
 }
 
 /**
- * Enquanto o gestor digitaliza o QR passkey no telemóvel, o browser Playwright fica aberto.
- * Quando a página avança → connected ou pede OTP SMS.
+ * Enquanto o gestor digitaliza o QR passkey ou resolve Arkose no stream live,
+ * o browser Playwright fica aberto. Quando a página avança → connected ou OTP SMS.
  */
 async function watchLiveUberAuthChallenge(
   db: PrismaClient,
   connectionId: string,
-  jobId: string
+  jobId: string,
+  options?: { bot?: boolean }
 ) {
-  const deadline = Date.now() + 5 * 60_000;
+  const isBotStart = Boolean(options?.bot);
+  const deadline = Date.now() + (isBotStart ? 10 : 5) * 60_000;
   const connection = await db.portalConnection.findUnique({ where: { id: connectionId } });
-  const password = connection?.passwordEncrypted ? decrypt(connection.passwordEncrypted) : '';
+  let password = '';
+  let username = '';
+  try {
+    password = connection?.passwordEncrypted
+      ? decryptPortalField(connection.passwordEncrypted, 'password')
+      : '';
+    username = connection?.usernameEncrypted
+      ? decryptPortalField(connection.usernameEncrypted, 'username')
+      : '';
+  } catch (err) {
+    await failJob(
+      db,
+      connectionId,
+      jobId,
+      err instanceof Error ? err.message : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
+    );
+    return;
+  }
+  let sawBot = isBotStart;
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
     const live = getLiveOtpSession(jobId);
     if (!live || live.page.isClosed()) {
-      await failJob(db, connectionId, jobId, 'Sessão passkey Uber expirou (browser fechou). Ligar conta outra vez.');
+      await failJob(
+        db,
+        connectionId,
+        jobId,
+        sawBot
+          ? 'Sessão do desafio Uber expirou (browser fechou). Ligar conta outra vez.'
+          : 'Sessão passkey Uber expirou (browser fechou). Ligar conta outra vez.'
+      );
       return;
     }
+    touchLiveOtpSession(jobId);
 
     try {
-      const state = await inspectUberLiveAuth(live.page, password);
+      const state = await withLivePageLock(jobId, async () =>
+        inspectUberLiveAuth(live.page, password)
+      );
       console.log(`[uber-passkey-watch] state=${state}`);
+
+      // Ainda no email (vazio/erro) — re-fill; NÃO manter OTP/bot enganoso
+      // MAS: texto identidade sob overlay Arkose NÃO é «preso no email» — deixar o desafio.
+      if (state === 'identity') {
+        const overlay = await withLivePageLock(jobId, () =>
+          hasActiveArkoseOverlay(live.page).catch(() => false)
+        );
+        if (overlay) {
+          sawBot = true;
+          continue;
+        }
+        if (username) {
+          await withLivePageLock(jobId, () =>
+            nudgeBotChallengePaint(live.page, username).catch(() => undefined)
+          );
+        }
+        const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
+        const meta =
+          job?.resultJson && typeof job.resultJson === 'object' && !Array.isArray(job.resultJson)
+            ? (job.resultJson as Record<string, unknown>)
+            : {};
+        // Limpar authChallenge=bot/otp enquanto estamos na identidade (evita «OTP pendente» falso)
+        if (meta.authChallenge === 'bot' || meta.authChallenge === 'otp') {
+          await db.portalSyncJob.update({
+            where: { id: jobId },
+            data: {
+              status: 'running',
+              otpHint: null,
+              message: 'A preencher email Uber…',
+              resultJson: { ...meta, authChallenge: null, challengeImageBase64: null },
+            },
+          });
+        }
+        continue;
+      }
+
+      if (state === 'bot') {
+        // Só confirmar bot se handoff seguro (evita modal com email vazio)
+        const handoff = await withLivePageLock(jobId, () =>
+          canHandoffBotChallenge(live.page).catch(() => false)
+        );
+        if (!handoff) {
+          if (username) {
+            await withLivePageLock(jobId, () =>
+              nudgeBotChallengePaint(live.page, username).catch(() => undefined)
+            );
+          }
+          continue;
+        }
+        sawBot = true;
+        // Manter authChallenge=bot para o modal de stream; não sair do watcher.
+        const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
+        const meta =
+          job?.resultJson && typeof job.resultJson === 'object' && !Array.isArray(job.resultJson)
+            ? (job.resultJson as Record<string, unknown>)
+            : {};
+        if (meta.authChallenge !== 'bot') {
+          await db.portalSyncJob.update({
+            where: { id: jobId },
+            data: {
+              status: 'awaiting_otp',
+              otpHint:
+                'Resolva o desafio anti-bot («Proteger a sua conta») na janela Desafio Uber.',
+              message: 'À espera do desafio anti-bot Uber',
+              resultJson: { ...meta, authChallenge: 'bot' },
+            },
+          });
+        }
+        continue;
+      }
 
       if (state === 'connected') {
         const storageState = await captureStorageState(live.context);
@@ -1350,7 +1856,7 @@ async function watchLiveUberAuthChallenge(
           data: {
             status: 'completed',
             completedAt: new Date(),
-            message: 'Conta ligada (passkey)',
+            message: sawBot ? 'Conta ligada (após desafio anti-bot)' : 'Conta ligada (passkey)',
             resultJson: { authChallenge: null },
           },
         });
@@ -1366,25 +1872,52 @@ async function watchLiveUberAuthChallenge(
           where: { id: jobId },
           data: {
             status: 'awaiting_otp',
-            otpHint: 'Passkey OK — introduza agora o código SMS de 4 dígitos da Uber',
-            message: 'À espera de OTP SMS (após passkey)',
+            otpHint: sawBot
+              ? 'Desafio OK — introduza agora o código SMS de 4 dígitos da Uber'
+              : 'Passkey OK — introduza agora o código SMS de 4 dígitos da Uber',
+            message: sawBot ? 'À espera de OTP SMS (após desafio)' : 'À espera de OTP SMS (após passkey)',
             resultJson: { authChallenge: 'otp', challengeImageBase64: null },
           },
         });
         return;
       }
 
+      if (state === 'passkey' && sawBot) {
+        // Bot cleared → passkey/chooser — keep watching (SMS preference inside inspect)
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'awaiting_otp',
+            otpHint:
+              'Desafio OK. Se aparecer QR passkey, digitalize; o servidor tenta SMS automaticamente.',
+            message: 'Após desafio — passkey/SMS',
+            resultJson: { authChallenge: 'passkey' },
+          },
+        });
+      }
+
       if (state === 'password' && password) {
-        const pass = live.page.locator('input[type="password"]').first();
-        if (await pass.isVisible().catch(() => false)) {
-          await pass.fill(password);
-          const btn = live.page.getByRole('button', { name: /continuar|seguinte|next/i }).first();
-          const label = ((await btn.innerText().catch(() => '')) || '').toLowerCase();
-          if (!/google|apple|chave|passkey/.test(label)) {
-            await btn.click({ timeout: 8000 }).catch(() => undefined);
-          }
-          await live.page.waitForTimeout(1500);
-        }
+        console.log('[uber-passkey-watch] password screen → preferPasswordLogin');
+        await withLivePageLock(jobId, () => preferPasswordLogin(live.page, password));
+        await live.page.waitForTimeout(1500);
+        continue;
+      }
+
+      if (state === 'password' && !password) {
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'awaiting_otp',
+            otpHint: 'OTP OK — introduza a password Uber.',
+            message: 'À espera da password Uber',
+            resultJson: { authChallenge: 'password' },
+          },
+        });
+        await db.portalConnection.update({
+          where: { id: connectionId },
+          data: { status: 'awaiting_otp', lastError: null },
+        });
+        return;
       }
     } catch (err) {
       console.error('[uber-passkey-watch]', err instanceof Error ? err.message : err);
@@ -1395,8 +1928,302 @@ async function watchLiveUberAuthChallenge(
     db,
     connectionId,
     jobId,
-    'Timeout à espera do passkey (5 min). Digitalize o QR a tempo ou Ligar conta outra vez.'
+    sawBot
+      ? 'Timeout à espera do desafio anti-bot (10 min). Resolva o Desafio Uber a tempo ou Ligar conta outra vez.'
+      : 'Timeout à espera do passkey (5 min). Digitalize o QR a tempo ou Ligar conta outra vez.'
   );
+}
+
+async function assertTenantOwnsLiveJob(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  jobId: string
+) {
+  const connection = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+  if (!connection) throw new Error('Ligação não encontrada');
+  if (connection.activeJobId !== jobId) {
+    throw new Error('Job não activo para esta conta — sem stream disponível');
+  }
+  const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
+  if (!job || job.tenantId !== tenantId || job.connectionId !== connection.id) {
+    throw new Error('Job inválido para este tenant');
+  }
+  if (job.status === 'completed' || job.status === 'failed') {
+    throw new Error('Job já terminou');
+  }
+  const live = getLiveOtpSession(jobId);
+  if (!live || live.page.isClosed()) {
+    throw new Error('Browser vivo indisponível (expirou ou API reiniciou)');
+  }
+  return { connection, job, live };
+}
+
+/** Throttle nudges Arkose por job (live-frame poll ~2 FPS). */
+const liveBotNudgeAt = new Map<string, number>();
+
+/** Serializar ops Playwright por job — evita hang do screenshot atrás de nudges/watch. */
+const livePageLocks = new Map<string, Promise<unknown>>();
+
+async function withLivePageLock<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = livePageLocks.get(jobId) ?? Promise.resolve();
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = prev.then(
+    () => done,
+    () => done
+  );
+  livePageLocks.set(jobId, chained);
+  await prev.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+async function captureLiveJpeg(page: import('playwright').Page): Promise<Buffer> {
+  // Timeout curto — se CDP/screenshot bloquear, falhar em vez de hang eterno no modal
+  const shot = page.screenshot({ type: 'jpeg', quality: 52, fullPage: false });
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Timeout a capturar ecrã live (8s)')), 8_000);
+  });
+  try {
+    return await Promise.race([shot, timeout]);
+  } catch (err) {
+    // Fallback CDP (por vezes page.screenshot falha com iframes cross-origin)
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      const result = await Promise.race([
+        cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 52, fromSurface: true }),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Timeout CDP screenshot')), 8_000);
+        }),
+      ]);
+      await cdp.detach().catch(() => undefined);
+      if (result && typeof result === 'object' && 'data' in result && typeof result.data === 'string') {
+        return Buffer.from(result.data, 'base64');
+      }
+    } catch (cdpErr) {
+      console.error(
+        '[live-frame] CDP fallback falhou:',
+        cdpErr instanceof Error ? cdpErr.message : cdpErr
+      );
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+export async function getPortalLiveFrame(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  jobId: string
+) {
+  const { live, job, connection } = await assertTenantOwnsLiveJob(db, tenantId, portal, jobId);
+  // Prolongar TTL enquanto o gestor vê o stream (desafio pode durar ~10 min)
+  touchLiveOtpSession(jobId);
+
+  return withLivePageLock(jobId, async () => {
+    if (live.page.isClosed()) {
+      throw new Error('Browser vivo indisponível (página fechou)');
+    }
+
+    const viewport = live.page.viewportSize() ?? { width: 1440, height: 900 };
+
+    // 1) Screenshot PRIMEIRO — o modal precisa de JPEG mesmo se a detecção demorar
+    let buf: Buffer;
+    try {
+      buf = await captureLiveJpeg(live.page);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[live-frame] screenshot falhou job=${jobId}: ${msg}`);
+      if (/Target closed|has been closed|Browser.*fechou|closed/i.test(msg)) {
+        throw new Error('Browser vivo indisponível (expirou ou fechou durante o desafio)');
+      }
+      throw new Error(`Falha a capturar ecrã live: ${msg}`);
+    }
+
+    const meta =
+      job.resultJson && typeof job.resultJson === 'object' && !Array.isArray(job.resultJson)
+        ? (job.resultJson as Record<string, unknown>)
+        : {};
+    let authChallenge =
+      meta.authChallenge === 'bot' ||
+      meta.authChallenge === 'passkey' ||
+      meta.authChallenge === 'otp'
+        ? meta.authChallenge
+        : null;
+
+    const username = connection.usernameEncrypted
+      ? (() => {
+          try {
+            return decryptPortalField(connection.usernameEncrypted, 'username');
+          } catch {
+            return '';
+          }
+        })()
+      : '';
+
+    // 2) Metadados leves (sem bloquear o JPEG se falharem)
+    let challengeVisible: boolean | null = null;
+    if (portal === 'uber' && authChallenge === 'bot') {
+      try {
+        const stuckIdentity = await isStuckOnEmptyIdentity(live.page);
+        if (stuckIdentity) {
+          authChallenge = null;
+          challengeVisible = false;
+          const last = liveBotNudgeAt.get(jobId) ?? 0;
+          if (username && Date.now() - last > 6000) {
+            liveBotNudgeAt.set(jobId, Date.now());
+            await nudgeBotChallengePaint(live.page, username).catch(() => undefined);
+          }
+        } else {
+          const overlay = await hasActiveArkoseOverlay(live.page).catch(() => false);
+          const visual = await isBotChallengeVisuallyReady(live.page).catch(() => false);
+          const handoff = await canHandoffBotChallenge(live.page).catch(() => false);
+          challengeVisible = visual || overlay;
+          if (!handoff && !overlay && !visual) {
+            // Ainda a montar — nudge raro; NÃO re-click se disabled/overlay
+            const last = liveBotNudgeAt.get(jobId) ?? 0;
+            if (Date.now() - last > 6000) {
+              liveBotNudgeAt.set(jobId, Date.now());
+              await nudgeBotChallengePaint(live.page, username || undefined).catch(() => undefined);
+              challengeVisible = await isBotChallengeVisuallyReady(live.page).catch(() => false);
+              if (await canHandoffBotChallenge(live.page).catch(() => false)) {
+                authChallenge = 'bot';
+              } else if (!challengeVisible) {
+                authChallenge = null;
+              }
+            }
+          } else if (challengeVisible) {
+            liveBotNudgeAt.delete(jobId);
+            authChallenge = 'bot';
+          } else if (handoff) {
+            // Handoff sem paint textual — manter bot; iframe pode ter puzzle
+            authChallenge = 'bot';
+            challengeVisible = overlay;
+          }
+        }
+      } catch (metaErr) {
+        console.error(
+          '[live-frame] meta falhou (JPEG ok):',
+          metaErr instanceof Error ? metaErr.message : metaErr
+        );
+      }
+    }
+
+    return {
+      imageBase64: buf.toString('base64'),
+      mimeType: 'image/jpeg' as const,
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      authChallenge,
+      challengeVisible,
+      capturedAt: new Date().toISOString(),
+    };
+  });
+}
+
+export async function postPortalLiveInput(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  jobId: string,
+  input: {
+    type: 'click' | 'mousedown' | 'mouseup' | 'mousemove' | 'drag';
+    x: number;
+    y: number;
+    endX?: number;
+    endY?: number;
+    button?: 'left' | 'right' | 'middle';
+    /** Largura/altura do elemento de imagem no browser do gestor (para mapear coords) */
+    displayWidth: number;
+    displayHeight: number;
+  }
+) {
+  const { live } = await assertTenantOwnsLiveJob(db, tenantId, portal, jobId);
+  touchLiveOtpSession(jobId);
+
+  return withLivePageLock(jobId, async () => {
+    if (live.page.isClosed()) {
+      throw new Error('Browser vivo indisponível (página fechou)');
+    }
+    const viewport = live.page.viewportSize() ?? { width: 1440, height: 900 };
+    if (!(input.displayWidth > 0) || !(input.displayHeight > 0)) {
+      throw new Error('displayWidth/displayHeight inválidos');
+    }
+
+    const toPage = (dx: number, dy: number) => ({
+      x: Math.max(0, Math.min(viewport.width - 1, (dx / input.displayWidth) * viewport.width)),
+      y: Math.max(0, Math.min(viewport.height - 1, (dy / input.displayHeight) * viewport.height)),
+    });
+
+    const button = input.button ?? 'left';
+    const start = toPage(input.x, input.y);
+
+    if (input.type === 'click') {
+      await live.page.mouse.click(start.x, start.y, { button });
+      return { ok: true as const };
+    }
+
+    if (input.type === 'mousedown') {
+      await live.page.mouse.move(start.x, start.y);
+      await live.page.mouse.down({ button });
+      return { ok: true as const };
+    }
+
+    if (input.type === 'mouseup') {
+      await live.page.mouse.move(start.x, start.y);
+      await live.page.mouse.up({ button });
+      return { ok: true as const };
+    }
+
+    if (input.type === 'mousemove') {
+      await live.page.mouse.move(start.x, start.y);
+      return { ok: true as const };
+    }
+
+    // drag: from (x,y) to (endX,endY)
+    const end = toPage(input.endX ?? input.x, input.endY ?? input.y);
+    await live.page.mouse.move(start.x, start.y);
+    await live.page.mouse.down({ button });
+    await live.page.mouse.move(end.x, end.y, { steps: 12 });
+    await live.page.mouse.up({ button });
+    return { ok: true as const };
+  });
+}
+
+export async function cancelPortalLiveJob(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  jobId: string
+) {
+  const connection = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+  if (!connection) throw new Error('Ligação não encontrada');
+  if (connection.activeJobId !== jobId) {
+    throw new Error('Job não activo');
+  }
+  const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
+  if (!job || job.tenantId !== tenantId) throw new Error('Job inválido');
+
+  await failJob(
+    db,
+    connection.id,
+    jobId,
+    'Desafio cancelado pelo utilizador. Ligar conta outra vez se quiser continuar.'
+  );
+  return getPortalConnectionDetail(db, tenantId, portal);
 }
 
 /** Renova sessões ligadas (cron). */

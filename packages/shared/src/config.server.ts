@@ -116,6 +116,13 @@ export function getServerConfig() {
      * SMS → OTP (modal TVDE) → palavra-passe.
      */
     portalRpaUberInteractive: envOr('PORTAL_RPA_UBER_INTERACTIVE', 'false') === 'true',
+    /**
+     * Uber Ligar conta: Chromium headed (Xvfb / DISPLAY) para o Arkose pintar no stream
+     * «Desafio Uber». Diferente de UBER_INTERACTIVE (não espera humano no servidor).
+     * Default: true se DISPLAY estiver definido.
+     */
+    portalRpaUberHeadedConnect:
+      envOr('PORTAL_RPA_UBER_HEADED_CONNECT', process.env.DISPLAY ? 'true' : 'false') === 'true',
     /** Intervalo do worker que renova cookies (horas). */
     portalRpaRefreshIntervalHours: Math.max(
       1,

@@ -21,13 +21,14 @@ Complementa:
 
 ---
 
-## 1. Estado (2026-07-17 noite — **validado**)
+## 1. Estado (2026-07-29 — login Arkose live + sync)
 
 | Capacidade | Estado | Notas |
 |------------|--------|--------|
 | Import manual CSV | **OK** | `uber-import.ts` · colunas uuid/nome/apelido/data/valor |
 | Adapter Playwright | **OK** | Login + sync Relatórios (lista / gerar) |
-| Login | **OK** | email → SMS → OTP 4 dígitos (modal TVDE) → palavra-passe → Supplier |
+| Login | **OK** | email → (Arkose «Desafio Uber» se pedido) → SMS → OTP 4 dígitos → password → Supplier |
+| Arkose / FunCaptcha | **OK** | Modal **Desafio Uber**: JPEG live + clique/arrasto (`live-frame` / `live-input`); Chromium **headed** + `DISPLAY` |
 | Sync generate | **OK** | Tipo payments → período → org Filiais → Gerar → poll **Em curso** → download |
 | Sync existing | **OK** | Modal: «Descarregar seleccionado» por nome |
 | Keep-alive | Infra OK | Refresh 3h; re-login silencioso **não** (OTP) |
@@ -132,14 +133,13 @@ Página de fundo pode mostrar:
 - «Continuar com uma chave de acesso»
 - «Utilizar o código de salvaguarda»
 
-**Implicação RPA (Playwright headless):**
+**Implicação RPA:**
 
 1. O RPA **não** completa WebAuthn sozinho (sem telemóvel).
-2. Estratégia TVDE: **mostrar o QR/ecrã passkey no modal** (`authChallenge=passkey` + PNG base64). O gestor digitaliza com o telemóvel enquanto o browser Playwright fica vivo (`registerLiveOtpSession` + watcher ~5 min).
-3. Depois do passkey, a Uber **pode** pedir SMS → o painel muda para modal OTP (4 dígitos).
-4. Limitação: o diálogo **nativo** do Chrome (fora do DOM) pode não sair no screenshot — nesse caso o modal mostra o ecrã Breeze visível; o watcher continua a pollar a página.
-5. Google / Apple login: **nunca** automatizar.
-6. Se a conta **só** tiver passkey e o QR não for digitalizável a tempo → timeout → Ligar conta outra vez / import manual.
+2. Caminho preferido: **SMS** (`preferSmsOverPasskey`) — nunca clicar `#passkey-login-btn`.
+3. Passkey residual: `authChallenge=passkey` + PNG; browser vivo + watcher ~5 min.
+4. **Arkose**: ver **§13** (modal Desafio Uber — não é VNC nem `UBER_INTERACTIVE`).
+5. Google / Apple: **nunca** automatizar.
 
 ### 4.3 Password (quando aparece)
 
@@ -149,16 +149,21 @@ Página de fundo pode mostrar:
 | Campo | `input[type=password]` |
 | Links | «Esqueci-me da palavra-passe» · «Mais opções» |
 
-No TVDE: o modal «Ligar conta» já pede password — usar no 2.º passo se este ecrã aparecer.
+No TVDE: o modal «Ligar conta» já pede password (AES). Após OTP o adapter escolhe **«Iniciar sessão com a palavra-passe»** (não chave de acesso). Se a password não estiver guardada → `authChallenge=password` + modal TVDE (`POST …/password`).
 
 ```
 após Continuar(email):
-  if chooser «chave de acesso» → clicar **Enviar código por SMS** (nunca passkey/security key)
-  if PHONE_SMS_OTP → awaiting_otp (modal TVDE, 4 dígitos)
-  após OTP: ecrã «Bem-vindo…» → **Iniciar sessão com a palavra-passe** → fill password → Supplier
+  if Arkose → authChallenge=bot → Desafio Uber (live) → watcher (§13)
+  if chooser «chave de acesso» → clicar **Enviar código por SMS** (nunca passkey)
+  if PHONE_SMS_OTP → authChallenge=otp (modal TVDE, 4 dígitos)
+  após OTP: «Iniciar sessão com a palavra-passe» → fill password → Supplier
 ```
 
-`PORTAL_RPA_UBER_INTERACTIVE=false` (default): headless. `true`: Chromium visível no login **e** sync (debug); se «Gerar» ficar disabled, espera até 3 min para o gestor marcar a org.
+| Flag | Uso |
+|------|-----|
+| `PORTAL_RPA_UBER_HEADED_CONNECT` | Produção: Ligar conta headed+Xvfb para Arkose pintar (não é INTERACTIVE) |
+| `PORTAL_RPA_UBER_INTERACTIVE` | Só debug/admin: Chromium visível login+sync; espera humana no servidor |
+
 ### 4.4 OTP SMS — 4 dígitos (pin-code)
 
 | | |
@@ -184,12 +189,12 @@ const digits = code.replace(/\D/g, '').slice(0, 4);
 for (let i = 0; i < 4; i++) {
   await page.locator(`#PHONE_SMS_OTP-${i}`).fill(digits[i] ?? '');
 }
-await page.getByRole('button', { name: /seguinte|continuar|next/i }).click();
+await page.getByRole('button', { name: /^(seguinte|continuar|next)$/i }).click();
 ```
 
-Alternativa: focar `#PHONE_SMS_OTP-0` e `pressSequentially(digits)` (Base Web por vezes propaga).
+**Armadilha:** regex solta `/continuar/i` apanha **«Continuar com uma chave de acesso»** (`#passkey-login-btn`). O adapter usa match exacto + exclusão de passkey (`clickContinue` / `fillUberOtp`).
 
-Timeout OTP no servidor: mesmo do portal RPA (~10 min) enquanto browser live (`keepAlive`).
+Timeout OTP no servidor: TTL sessão viva (~12 min, touch no poll) enquanto browser live (`keepAlive`).
 
 ### 4.5 «Tudo pronto!»
 
@@ -445,6 +450,7 @@ Incognito no vídeo = cookies frescos; em produção RPA usa profile Playwright 
 
 - Não automatizar **Google / Apple** login
 - Passkey = **human-in-the-loop** (QR no dashboard); não completar WebAuthn no servidor
+- Arkose = **human-in-the-loop** no modal Desafio Uber (stream JPEG; não VNC)
 - OTP SMS = **human-in-the-loop** no dashboard TVDE (igual MyPRIO; Uber = 4 dígitos)
 - Credenciais + sessão AES (`ENCRYPTION_KEY`)
 - ToS Uber — uso interno consciente
@@ -463,19 +469,21 @@ Incognito no vídeo = cookies frescos; em produção RPA usa profile Playwright 
 6. [x] Poll **Em curso** → **Faça o download** (só linha payments; até ~12 min)
 7. [x] Timeout job Uber **15 min**; `onProgress` na UI
 8. [x] Modal TVDE lista + gerar (`uber-sync-modal.tsx`)
-9. [x] Em produção: `PORTAL_RPA_UBER_INTERACTIVE=false` (headless)
-10. [ ] Confirmar CSV real bate com `uber-import.ts` em mais tenants/intervalos
+9. [x] Em produção: `PORTAL_RPA_UBER_INTERACTIVE=false`; `PORTAL_RPA_UBER_HEADED_CONNECT=true` + `DISPLAY`
+10. [x] Arkose live: modal Desafio Uber (`live-frame` / `live-input`) — ver §13
+11. [ ] Confirmar CSV real bate com `uber-import.ts` em mais tenants/intervalos
 
 ---
 
 ## 11. Checklist de teste
 
-1. [ ] Login Incognito / Ligar conta TVDE + OTP
-2. [ ] Relatórios → Gerar manual: tipo Transação + org + intervalo → Em curso → download
-3. [ ] Modal TVDE: **Gerar e sincronizar** (org preenchida) → job mostra «Em curso…» → linhas em `uber_payments`
-4. [ ] Modal: **Descarregar seleccionado** num `payments_order` existente
-5. [ ] Não seleccionar `driver_activity` no topo da lista ao gerar
-6. [ ] Logs: `[uber-sync] tipo =`, `org after`, `Em curso`, `A descarregar`, ingest
+1. [ ] Ligar conta TVDE: email+password → (Desafio Uber se Arkose) → OTP 4 dígitos → password → **Ligado**
+2. [ ] Confirmar `PORTAL_RPA_UBER_HEADED_CONNECT` + `DISPLAY=:1` (ou Xvfb / `tvde-rpa-vnc`) se o JPEG ficar na identidade
+3. [ ] Relatórios → Gerar manual: tipo Transação + org + intervalo → Em curso → download
+4. [ ] Modal TVDE: **Gerar e sincronizar** (org preenchida) → job mostra «Em curso…» → linhas em `uber_payments`
+5. [ ] Modal: **Descarregar seleccionado** num `payments_order` existente
+6. [ ] Não seleccionar `driver_activity` no topo da lista ao gerar
+7. [ ] Logs: `[uber-login]`, `[live-frame]`, `[uber-passkey-watch]`, `[uber-sync] Em curso`, ingest
 
 ---
 
@@ -483,17 +491,148 @@ Incognito no vídeo = cookies frescos; em produção RPA usa profile Playwright 
 
 | Ficheiro | Papel |
 |----------|--------|
-| `apps/api/src/services/portal-rpa/uber.adapter.ts` | Login / OTP / sync / listReports / poll Em curso |
-| `apps/api/src/services/portal-rpa/portal-connection.service.ts` | Jobs · timeout sync **900s** · `onProgress` · `listUberPortalReports` |
-| `apps/api/src/routes/portal-connection.routes.ts` | `…/reports` + body `uberSync` |
-| `apps/web/src/components/portal/portal-connection-panel.tsx` | Ligar + OTP + abre sync Uber · `humanizePortalError` |
+| `apps/api/src/services/portal-rpa/uber.adapter.ts` | Login / Arkose / OTP / password / sync / poll Em curso |
+| `apps/api/src/services/portal-rpa/portal-connection.service.ts` | Jobs · live-frame/input · watcher · timeout sync **900s** |
+| `apps/api/src/services/portal-rpa/types.ts` | `registerLiveOtpSession`, headed/Xvfb, `withPlaywrightPage` |
+| `apps/api/src/routes/portal-connection.routes.ts` | connect / otp / password / live-frame / live-input / cancel / reports |
+| `apps/web/src/components/portal/portal-connection-panel.tsx` | Ligar + OTP + password + abre Desafio Uber · `humanizePortalError` |
+| `apps/web/src/components/portal/uber-bot-challenge-modal.tsx` | Stream JPEG + clique/arrasto (Arkose) |
 | `apps/web/src/components/uber/uber-sync-modal.tsx` | Lista + gerar intervalo + organização |
 | `apps/web/src/components/uber/uber-panel.tsx` | UI + import manual |
-| `packages/shared/src/portal-rpa.ts` | `UberSyncOptions`, `defaultUberReportRange` |
+| `packages/shared/src/portal-rpa.ts` | `authChallenge`, `UberSyncOptions`, `defaultUberReportRange` |
+| `packages/shared/src/config.server.ts` | `portalRpaUberHeadedConnect` / `portalRpaUberInteractive` |
 | `packages/shared/src/uber-import.ts` | Parse CSV |
+| `ecosystem.config.js` | `DISPLAY`, `XAUTHORITY`, `PORTAL_RPA_UBER_HEADED_CONNECT`, `.playwright-libs` |
 | `apps/api/src/services/uber.service.ts` | Persistência |
 | `apps/api/src/services/portal-rpa/ingest.service.ts` | Ingest CSV → `UberPayment` |
 
 ---
 
-*Actualizado 2026-07-17 23:00 — sync generate validado end-to-end (Em curso → download → ingest).*
+## 13. Ligar conta — fluxo completo (Arkose / OTP / password)
+
+Documentação alinhada ao código actual (`uber.adapter.ts`, `portal-connection.service.ts`, `uber-bot-challenge-modal.tsx`). Infra partilhada (sessões vivas, API live-frame): [`03-PORTAL_RPA.md`](./03-PORTAL_RPA.md#sessões-vivas-otp--arkose--passkey).
+
+### 13.1 Passos do gestor (UX)
+
+```
+1. Conta Uber → Ligar conta
+     → email/telefone + password (ou «Continuar com conta guardada»)
+2. [OPCIONAL] Modal «Desafio Uber» (authChallenge=bot)
+     → JPEG live do Chromium no servidor
+     → clique / arrasto na imagem (puzzle Arkose)
+     → timeout ~10 min; Cancelar fecha o browser vivo
+3. Modal OTP SMS — 4 dígitos (authChallenge=otp)
+4. [Se pedido] Modal password (authChallenge=password)
+     → ou auto-fill se password já guardada
+5. Estado → Ligado
+6. Sincronizar → modal Relatórios (gerar / descarregar) — §7
+```
+
+Botão no painel com OTP pendente: **«Abrir desafio Uber»** / **«Abrir passkey»** / **«Introduzir OTP»** / **«Introduzir password»** conforme `authChallenge`.
+
+### 13.2 Porque o Arkose aparece
+
+A Uber (Breeze) corre **FunCaptcha / Arkose Labs** quando o sinal de risco é alto: IP de datacenter, Chromium automatizado, cookies frescos, etc. Copy típico: «Proteger a sua conta», «Iniciar desafio», «Resolva este desafio».
+
+O adapter detecta iframes (`arkoselabs`, `funcaptcha`, `ec-game-core`, `ak0*.uber.com`) e texto PT/EN — mas **só faz handoff** para o modal se `canHandoffBotChallenge` (email preenchido / Continuar avançou; não identidade vazia). O Breeze **pré-carrega** iframes Arkose no ecrã de identidade — sem este filtro o TVDE abria «Desafio Uber» em falso (email vazio).
+
+### 13.3 Porque headless muitas vezes não pinta
+
+Em **headless**, o iframe Arkose existe (detecção OK) mas o puzzle/canvas **não renderiza**. O JPEG de `live-frame` mostra a identidade (email) por baixo → gestor não consegue resolver.
+
+**Mitigação (produção):** Ligar conta Uber com Chromium **headed** num display virtual:
+
+| Peça | Valor típico |
+|------|----------------|
+| `PORTAL_RPA_UBER_HEADED_CONNECT` | `true` (default se `DISPLAY` já existir) |
+| `DISPLAY` | `:1` (Xvfb / VNC) |
+| `XAUTHORITY` | cookie do X (ex. `~/tvde/.xauthority-vnc` via `tvde-rpa-vnc`) |
+| `ecosystem.config.js` | injeta `DISPLAY`, `XAUTHORITY`, `PORTAL_RPA_UBER_HEADED_CONNECT`, `LD_LIBRARY_PATH` (`.playwright-libs`) |
+
+O gestor **não** precisa de VNC: o stream JPEG no dashboard basta. O contentor `tvde-rpa-vnc` / Xvfb só existe para o Chromium ter um X server onde pintar.
+
+### 13.4 Modal Desafio Uber (não é VNC, não é INTERACTIVE)
+
+| | |
+|--|--|
+| UI | `uber-bot-challenge-modal.tsx` — título «Desafio Uber» |
+| Stream | `GET …/live-frame` ~cada 450 ms → JPEG base64 + `challengeVisible` |
+| Input | pointer down/move/up → `POST …/live-input` (`mousedown`/`mousemove`/`mouseup`) |
+| Coords | mapeadas display → viewport Playwright (`displayWidth`/`displayHeight`) |
+| AuthZ | só job activo do tenant (`assertTenantOwnsLiveJob`) |
+| Cancelar | `POST …/cancel` → `failJob` + fecha browser |
+
+**Não confundir:**
+
+| Flag / ferramenta | Para quem | O quê |
+|-------------------|-----------|--------|
+| Modal Desafio Uber | **Utilizadores** (gestores) | Stream no dashboard |
+| `PORTAL_RPA_UBER_HEADED_CONNECT` | Servidor | Chromium headed+Xvfb para o paint Arkose |
+| `PORTAL_RPA_UBER_INTERACTIVE` | Admin/debug legado | Janela Chromium no servidor + espera humana no login/sync; **não** é o fluxo end-user |
+| VNC (`tvde-rpa-vnc`) | Ops | Fornece `DISPLAY=:1` + `XAUTHORITY`; **não** é a UX do gestor |
+
+### 13.5 Handoff OTP → password (Seguinte vs passkey)
+
+Ordem típica após o desafio (ou sem Arkose):
+
+1. Chooser → **«Enviar código por SMS»** (`#alt-action-send-via-sms`); WebAuthn bloqueado no contexto.
+2. OTP 4 dígitos no modal TVDE → `fillUberOtp` → clica **Seguinte** com match **exacto** (`^(seguinte|continuar|next)$`).
+3. Pós-OTP: **«Iniciar sessão com a palavra-passe»** (`preferPasswordLogin`) — **nunca** `#passkey-login-btn`.
+4. Se password guardada → fill automático; senão → `awaiting_password` / modal password.
+
+**Pitfall clássico:** `getByRole('button', { name: /continuar/i })` clica «Continuar com uma chave de acesso» → diálogo security key / falha. Mensagens UI (`humanizePortalError`) pedem Ligar de novo e preferir SMS + password.
+
+Watcher (`watchLiveUberAuthChallenge`): após bot, muda `authChallenge` para `otp` / `passkey` / `password` / `connected`. Timeout bot **10 min**, passkey **5 min**.
+
+### 13.6 Variáveis de ambiente e display
+
+```bash
+PORTAL_RPA_ENABLED=true
+PORTAL_RPA_MOCK=false
+PORTAL_RPA_HEADLESS=true          # sync / refresh em geral
+PORTAL_RPA_UBER_INTERACTIVE=false # produção — só debug=true
+PORTAL_RPA_UBER_HEADED_CONNECT=true
+DISPLAY=:1
+# XAUTHORITY=…  (auto: docker cp tvde-rpa-vnc ou ~/tvde/.xauthority-vnc)
+```
+
+| Variável | Default | Efeito |
+|----------|---------|--------|
+| `PORTAL_RPA_UBER_HEADED_CONNECT` | `true` se `DISPLAY` set, senão `false` | Connect Uber: `headless:false` + `ensureVirtualDisplay` |
+| `PORTAL_RPA_UBER_INTERACTIVE` | `false` | Login+sync headed; timeouts longos; espera org no sync |
+| `DISPLAY` | PM2 → `:1` | Xvfb / VNC socket `/tmp/.X11-unix/X1` |
+| `PORTAL_RPA_XAUTHORITY` / `XAUTHORITY` | candidatos em `types.ts` | Sem cookie → «Missing X server» |
+| `PORTAL_RPA_LIBS_DIR` / `.playwright-libs` | auto | `LD_LIBRARY_PATH` + fonts sem sudo (`npm run playwright:libs`) |
+| `TVDE_X11_ROOT` | `~/tvde-x11/root` | Xvfb empacotado sem apt |
+
+Deploy: [`deploy_tvde.one.md`](./deploy_tvde.one.md) · PM2: `ecosystem.config.js`.
+
+### 13.7 Falhas comuns e diagnóstico
+
+| Sintoma | Causa provável | O que fazer |
+|---------|----------------|-------------|
+| Modal Desafio com email vazio / «falso bot» | Handoff cedo (iframe pré-carregado) ou Continuar sem email | Código actual exige `canHandoffBotChallenge`; logs `[uber-login] bot nudge` / `pageAuthDebug`; Ligar outra vez |
+| JPEG mostra identidade, nunca o puzzle | Headless / sem DISPLAY / headed→fallback headless | `HEADED_CONNECT=true`, `DISPLAY=:1`, XAUTHORITY, reiniciar API; log `Chromium headed DISPLAY=` |
+| `challengeVisible=false` longo | Arkose a montar; nudge a clicar «Iniciar desafio» | Esperar; se persistir, Cancelar + Ligar |
+| Live-frame stuck / «Browser vivo indisponível» | TTL, API restart, crash Chromium, libs em falta | `playwright:libs`; reiniciar API; Ligar outra vez |
+| «Browser Playwright em falta» stale no painel | `lastError` antigo após deploy/rsync | Auto-heal no boot + limpa infra `lastError`; `/health` `playwright.ready`; `browserReady` ≠ estado da conta |
+| «Missing X server» | Headed sem X / sem XAUTHORITY | `tvde-rpa-vnc` + sync `.xauthority-vnc`, ou Xvfb |
+| OTP OK mas cai em passkey | Clique em `#passkey-login-btn` / Continuar solto | Preferir SMS; password pós-OTP; ver `humanizePortalError` |
+| CORS / live-frame falha no browser | `.env` com `localhost` enquanto se acede por IP/hostname | `CORS_ORIGIN` + `NEXT_PUBLIC_API_URL` = origem real; rebuild web |
+| Demo / mock | `PORTAL_RPA_MOCK=true` (default em development) | Ligar/OTP simulados; **sem** Chromium real nem Arkose |
+
+Logs úteis: `[portal-rpa] Uber connect headed`, `[uber-login]`, `[uber-passkey-watch] state=`, `[live-frame]`.
+
+### 13.8 Demo vs produção
+
+| | Development / demo | Produção (VM) |
+|--|--------------------|---------------|
+| `PORTAL_RPA_MOCK` | `true` por omissão | `false` |
+| Arkose live | Não corre (sem browser real) | Headed + DISPLAY |
+| `UBER_INTERACTIVE` | Opcional no laptop (janela local) | **sempre `false`** |
+| `UBER_HEADED_CONNECT` | macOS: headed no display do user se pedido | `true` + Xvfb/VNC `:1` |
+| Sync | Mock não descarrega CSV | Relatórios reais §7 |
+
+---
+
+*Actualizado 2026-07-29 — Ligar conta Arkose live (Desafio Uber) + OTP/password documentados end-to-end.*

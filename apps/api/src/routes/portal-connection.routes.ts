@@ -7,11 +7,15 @@ import {
   forgetPortalPassword,
   getPortalConnectionDetail,
   getPortalJob,
+  getPortalLiveFrame,
   listPortalConnections,
   listUberPortalReports,
+  postPortalLiveInput,
+  cancelPortalLiveJob,
   startPortalConnect,
   startPortalSync,
   submitPortalOtp,
+  submitPortalPassword,
 } from '../services/portal-rpa/portal-connection.service';
 
 const portalParam = z.object({
@@ -120,6 +124,27 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
         request.user.sub
       );
       return reply.send({ success: true, data, message: 'OTP submetido' });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  fastify.post('/portal-connections/:portal/password', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { portal } = portalParam.parse(request.params);
+      const body = z.object({ password: z.string().min(1) }).parse(request.body);
+      const data = await submitPortalPassword(
+        fastify.db,
+        tenantId,
+        portal as PortalKind,
+        body.password,
+        request.user.sub
+      );
+      return reply.send({ success: true, data, message: 'Password submetida' });
     } catch (err) {
       return reply.status(400).send({
         success: false,
@@ -238,6 +263,85 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
         params.jobId
       );
       return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  /** Stream JPEG do Chromium vivo (Arkose / passkey) — só job activo do tenant. */
+  fastify.get('/portal-connections/:portal/jobs/:jobId/live-frame', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const params = z
+        .object({ portal: z.enum(PORTAL_KINDS), jobId: z.string().uuid() })
+        .parse(request.params);
+      const data = await getPortalLiveFrame(
+        fastify.db,
+        tenantId,
+        params.portal as PortalKind,
+        params.jobId
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  /** Clique / arrasto mapeado para page.mouse (coords relativas à imagem mostrada). */
+  fastify.post('/portal-connections/:portal/jobs/:jobId/live-input', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const params = z
+        .object({ portal: z.enum(PORTAL_KINDS), jobId: z.string().uuid() })
+        .parse(request.params);
+      const body = z
+        .object({
+          type: z.enum(['click', 'mousedown', 'mouseup', 'mousemove', 'drag']),
+          x: z.number(),
+          y: z.number(),
+          endX: z.number().optional(),
+          endY: z.number().optional(),
+          button: z.enum(['left', 'right', 'middle']).optional(),
+          displayWidth: z.number().positive(),
+          displayHeight: z.number().positive(),
+        })
+        .parse(request.body);
+      const data = await postPortalLiveInput(
+        fastify.db,
+        tenantId,
+        params.portal as PortalKind,
+        params.jobId,
+        body
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  /** Cancela job de ligação + fecha browser vivo (Desafio Uber / OTP). */
+  fastify.post('/portal-connections/:portal/jobs/:jobId/cancel', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const params = z
+        .object({ portal: z.enum(PORTAL_KINDS), jobId: z.string().uuid() })
+        .parse(request.params);
+      const data = await cancelPortalLiveJob(
+        fastify.db,
+        tenantId,
+        params.portal as PortalKind,
+        params.jobId
+      );
+      return reply.send({ success: true, data, message: 'Job cancelado' });
     } catch (err) {
       return reply.status(400).send({
         success: false,

@@ -1,6 +1,11 @@
 import { prisma } from '@tvde/database';
 import { BoltFleetClient } from '@tvde/bolt';
-import { decrypt, encrypt } from '../lib/crypto';
+import { canDecrypt, decrypt, encrypt, isCryptoAuthFailure } from '../lib/crypto';
+
+/** Mensagem PT quando ENCRYPTION_KEY mudou ou ciphertext Bolt está corrompido. */
+export const BOLT_CRYPTO_RESAVE_MESSAGE =
+  'Client Secret Bolt ilegível (ENCRYPTION_KEY alterada ou dados corrompidos). ' +
+  'Cole novamente o Client Secret e guarde.';
 
 export async function getBoltConnection(workspaceId: string) {
   return prisma.boltConnection.findUnique({ where: { workspaceId } });
@@ -18,9 +23,19 @@ export async function ensureBoltClient(workspaceId: string) {
     throw new Error('Bolt sem company_id — teste a ligação nas configurações');
   }
 
+  let clientSecret: string;
+  try {
+    clientSecret = decrypt(row.encryptedClientSecret);
+  } catch (err) {
+    if (isCryptoAuthFailure(err)) {
+      throw new Error(BOLT_CRYPTO_RESAVE_MESSAGE);
+    }
+    throw err;
+  }
+
   const client = new BoltFleetClient({
     clientId: row.clientId,
-    clientSecret: decrypt(row.encryptedClientSecret),
+    clientSecret,
   });
 
   return { row, client };

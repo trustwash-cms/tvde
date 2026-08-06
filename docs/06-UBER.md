@@ -91,11 +91,16 @@ PORTAL_RPA_ENABLED=true
 PORTAL_RPA_MOCK=false
 PORTAL_RPA_HEADLESS=true
 PORTAL_RPA_UBER_INTERACTIVE=false
+PORTAL_RPA_UBER_HEADED_CONNECT=true
+# DISPLAY=:1
 PORTAL_RPA_REFRESH_INTERVAL_HOURS=3
 ENCRYPTION_KEY=...
 ```
 
-`PORTAL_RPA_UBER_INTERACTIVE=true`: Chromium **visível** no login **e** no sync/listagem (debug). Quando «Gerar» fica disabled, espera até 3 min para marcares a org na janela. Em produção: **`false`**.
+- `PORTAL_RPA_UBER_HEADED_CONNECT`: Ligar conta headed+Xvfb para o Arkose pintar no modal **Desafio Uber** (produção). **Não** é o mesmo que INTERACTIVE.
+- `PORTAL_RPA_UBER_INTERACTIVE=true`: Chromium **visível** no login **e** sync (só debug/admin). Em produção: **`false`**.
+
+Fluxo login / Arkose: [`07-UBER.md` §13](./07-UBER.md#13-ligar-conta--fluxo-completo-arkose--otp--password).
 ---
 
 ## 5. Ficheiros
@@ -117,8 +122,7 @@ ENCRYPTION_KEY=...
 ## 6. Segurança / limites
 
 - Não forçar login Google/Apple via RPA
-- Passkey + OTP = human-in-the-loop no dashboard (QR depois SMS)
-- CAPTCHA / Cloudflare → import manual
+- Passkey + OTP + Arkose (Desafio Uber live) = human-in-the-loop no dashboard
 - Credenciais AES por tenant; OTP nunca em logs
 - ToS Uber — uso interno consciente
 

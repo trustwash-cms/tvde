@@ -34,6 +34,8 @@ interface MoloniStatus {
   redirectUri?: string;
   documentSetHealth?: MoloniDocumentSetHealth | null;
   emailSettings?: BillingEmailSettingsData | null;
+  /** Client Secret encriptado ilegível — é preciso voltar a guardá-lo */
+  secretNeedsResave?: boolean;
 }
 
 interface MoloniCompany {
@@ -389,7 +391,11 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
           name="moloni-client-secret"
           className="input font-mono [text-security:disc] [-webkit-text-security:disc]"
           type="text"
-          placeholder="Client Secret (deixe vazio para manter)"
+          placeholder={
+            moloni?.secretNeedsResave
+              ? 'Client Secret (obrigatório — volte a colar)'
+              : 'Client Secret (deixe vazio para manter)'
+          }
           value={moloniForm.clientSecret}
           onChange={(e) => setMoloniForm({ ...moloniForm, clientSecret: e.target.value })}
           autoComplete="off"
@@ -401,8 +407,16 @@ export function MoloniSettingsPanel({ onSuccess, onError }: MoloniSettingsPanelP
           data-bwignore
           readOnly
           onFocus={(e) => e.currentTarget.removeAttribute('readonly')}
+          required={Boolean(moloni?.secretNeedsResave)}
           disabled={!workspaceId}
         />
+        {moloni?.secretNeedsResave && (
+          <p className="md:col-span-2 text-xs text-amber-800">
+            O Client Secret guardado está ilegível (provavelmente após mudança de{' '}
+            <code className="rounded bg-amber-100 px-1">ENCRYPTION_KEY</code>). Cole o secret
+            novamente, guarde, e depois use «Ligar conta Moloni (OAuth)».
+          </p>
+        )}
         {moloniCompanies.length > 0 ? (
           <select
             className="input"
@@ -571,8 +585,14 @@ NEXT_PUBLIC_MOLONI_REDIRECT_URI="https://api.tvde.one/api/v1/billing/moloni/call
               loading ||
               !moloni?.configured ||
               !workspaceId ||
+              moloni?.secretNeedsResave ||
               moloni?.moduleAuthorized === false ||
               moloni?.moduleActive === false
+            }
+            title={
+              moloni?.secretNeedsResave
+                ? 'Guarde o Client Secret antes de autorizar OAuth'
+                : undefined
             }
           >
             Ligar conta Moloni (OAuth)

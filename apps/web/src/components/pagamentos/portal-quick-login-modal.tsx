@@ -22,8 +22,24 @@ type Conn = {
   lastJobMessage?: string | null;
   otpHint?: string | null;
   hasPassword?: boolean;
+  passwordNeedsResave?: boolean;
   usernameMasked?: string | null;
 };
+
+function humanizeQuickPortalError(raw: string | null | undefined): string {
+  if (!raw) return '';
+  if (
+    /unsupported state or unable to authenticate data|unable to authenticate data|Password guardada ilegível|chave de encriptação/i.test(
+      raw
+    )
+  ) {
+    return (
+      'Password guardada ilegível (chave de encriptação mudou). ' +
+      'Clique em «Esquecer password» e volte a Ligar conta com a password correcta.'
+    );
+  }
+  return raw;
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -48,6 +64,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
   const [awaitingOtp, setAwaitingOtp] = useState(false);
   const [useStored, setUseStored] = useState(false);
   const [hasPassword, setHasPassword] = useState(false);
+  const [passwordNeedsResave, setPasswordNeedsResave] = useState(false);
   const [usernameMasked, setUsernameMasked] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [hint, setHint] = useState('');
@@ -65,6 +82,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
     setAwaitingOtp(false);
     setUseStored(false);
     setHasPassword(false);
+    setPasswordNeedsResave(false);
     setUsernameMasked(null);
     setError('');
     setHint('');
@@ -80,6 +98,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       setChecking(false);
       if (!res.success || !res.data) return;
       setHasPassword(Boolean(res.data.hasPassword));
+      setPasswordNeedsResave(Boolean(res.data.passwordNeedsResave));
       setUsernameMasked(res.data.usernameMasked ?? null);
       if (isAwaitingOtp(res.data)) {
         setAwaitingOtp(true);
@@ -89,11 +108,13 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
               ? 'Introduza o código SMS de 6 dígitos recebido no telemóvel (válido ~2 min).'
               : 'Introduza o código OTP enviado pelo portal.')
         );
-      } else if (res.data.status === 'connected') {
+      } else if (res.data.status === 'connected' && !res.data.passwordNeedsResave) {
         onSuccess(portal);
         onClose();
-      } else if (res.data.hasPassword) {
+      } else if (res.data.hasPassword && !res.data.passwordNeedsResave) {
         setUseStored(true);
+      } else if (res.data.passwordNeedsResave || res.data.lastError) {
+        setError(humanizeQuickPortalError(res.data.lastError) || '');
       }
     })();
 
@@ -128,8 +149,10 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       if (res.data.status === 'connected') {
         return 'ok';
       }
-      if (res.data.status === 'error' || res.data.activeJobStatus === 'failed') {
-        throw new Error(res.data.lastError || res.data.lastJobMessage || 'Login falhou');
+      if (res.data.status === 'error' || res.data.status === 'expired' || res.data.activeJobStatus === 'failed') {
+        throw new Error(
+          humanizeQuickPortalError(res.data.lastError || res.data.lastJobMessage) || 'Login falhou'
+        );
       }
     }
     throw new Error('Timeout a autenticar no portal');
@@ -184,7 +207,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
         }
       }
       setBusy(false);
-      setError(res.error || 'Falha ao ligar');
+      setError(humanizeQuickPortalError(res.error) || 'Falha ao ligar');
       return;
     }
     try {
@@ -328,7 +351,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
             </button>
           </div>
         </form>
-      ) : useStored && hasPassword ? (
+      ) : useStored && hasPassword && !passwordNeedsResave ? (
         <form onSubmit={(e) => void handleConnectStored(e)} className="relative space-y-3" autoComplete="off">
           {busy ? (
             <div className="flex items-start gap-2 rounded-md border border-sky-100 bg-sky-50 px-3 py-2 text-sm text-sky-900">

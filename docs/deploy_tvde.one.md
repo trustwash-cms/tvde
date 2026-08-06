@@ -166,9 +166,15 @@ PORTAL_RPA_REFRESH_INTERVAL_HOURS=3
 PORTAL_RPA_MOCK=false
 PORTAL_RPA_HEADLESS=true
 PORTAL_RPA_UBER_INTERACTIVE=false
+# Arkose / Desafio Uber: Chromium headed no Xvfb (não é INTERACTIVE — ver docs/07-UBER.md §13)
+PORTAL_RPA_UBER_HEADED_CONNECT=true
+DISPLAY=:1
+# XAUTHORITY — cookie do contentor tvde-rpa-vnc ou Xvfb (ecosystem.config.js tenta candidatos)
 ```
 
 `DATABASE_URL` deve bater certo com `docker-compose.yml` (`POSTGRES_USER` / `PASSWORD` / porta host `5433`).
+
+**Uber Ligar conta + Arkose:** o gestor resolve o desafio no dashboard (stream JPEG), não via VNC. O `DISPLAY=:1` / `tvde-rpa-vnc` / `.playwright-libs` existem para o Chromium pintar no servidor. Detalhe: [`07-UBER.md` §13](./07-UBER.md#13-ligar-conta--fluxo-completo-arkose--otp--password) · plumbing: [`03-PORTAL_RPA.md`](./03-PORTAL_RPA.md#sessões-vivas-otp--arkose--passkey).
 
 ---
 
@@ -178,6 +184,7 @@ Ficheiro em `~/tvde/ecosystem.config.js` (lê o `.env` do repo):
 
 - `tvde-api` → `apps/api/dist/index.js`
 - `tvde-web` → `apps/web/scripts/start.mjs`
+- API env injectado: `DISPLAY` (default `:1`), `XAUTHORITY`, `PORTAL_RPA_UBER_HEADED_CONNECT`, `LD_LIBRARY_PATH` / Fontconfig de `.playwright-libs`, `TVDE_X11_ROOT` se existir
 
 Logs em `~/tvde/logs/`.
 
@@ -198,11 +205,19 @@ npm run build
 npm run db:migrate:deploy
 npm run db:seed
 npm run playwright:install
+# Sem sudo: extrai libs/fontes para .playwright-libs (obrigatório no Ubuntu mínimo)
+npm run playwright:libs
+# Com sudo (preferível se disponível):
+# sudo npx playwright install-deps chromium
 
 mkdir -p uploads/branding uploads/calendar uploads/admin-mgmt logs
 ```
 
 **Nota produção `@tvde/shared`:** o `package.json` do shared deve ter `require` → `./dist/*.js` (não `.ts`), senão o `node dist/index.js` da API falha com `ERR_MODULE_NOT_FOUND`.
+
+**Playwright no Ubuntu:** `npm run playwright:install` só descarrega o browser. Sem libs de sistema (`libatk`, fonts, etc.) o Chromium aborta — Via Verde/Uber falham (Bolt API continua OK). Use `npm run playwright:libs` (sem root) ou `sudo npx playwright install-deps chromium`.
+
+**Resiliência:** a API no arranque faz probe de **launch** do Chromium e tenta auto-heal (`playwright install` / `playwright:libs`) se falhar. `/health` devolve `playwright.ready`. Em redeploys, **exclua** `.playwright-libs` do `rsync --delete` (já no `scripts/deploy-uber-login-fix.sh`) e volte a correr `playwright:install` (+ `playwright:libs` se a pasta desapareceu). Erros de browser/libs **não** ficam a marcar a Conta Uber como partida para sempre — `lastError` de infra é limpo quando o probe passa; o painel usa `browserReady` à parte do estado da conta.
 
 ---
 
@@ -263,10 +278,18 @@ SSH: `ssh tvde-vm`
 No Mac:
 
 ```bash
-# 1) rsync (mesmo comando do passo 3)
+# Preferível (inclui playwright:install + heal libs + health check):
+bash scripts/deploy-uber-login-fix.sh
+
+# Ou manual:
+# 1) rsync com --exclude '.playwright-libs' (mesmo comando do passo 3)
 # 2) na VM:
-ssh tvde-vm 'cd ~/tvde && npm ci && npm run build && npm run db:migrate:deploy && pm2 restart ecosystem.config.js'
+ssh tvde-vm 'cd ~/tvde && npm ci && npm run playwright:install && \
+  (test -f .playwright-libs/usr/lib/x86_64-linux-gnu/libatk-1.0.so.0 || npm run playwright:libs) && \
+  npm run build && npm run db:migrate:deploy && pm2 restart ecosystem.config.js --update-env'
 ```
+
+Confirmar: `curl -sS http://127.0.0.1:3002/health` → `playwright.ready: true` e log `[portal-rpa] playwright ready=true`.
 
 ---
 

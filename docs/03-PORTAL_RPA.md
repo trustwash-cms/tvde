@@ -14,7 +14,7 @@ O SMS/email OTP chega ao telemóvel do gestor; o código é colado no modal do d
 |--------|------|-------|-----------------|
 | **Via Verde** | email + password (sem OTP) | Export movimentos XLSX | Módulo Via Verde |
 | **MyPRIO** | user numérico + password + **OTP SMS 6 dígitos** (~2 min) | Transações frota / carregamentos | Eletricidade **e** Combustível (1 conta) |
-| **Uber** | telefone/email (+ password se pedida) + OTP | CSV pagamentos | Módulo Uber |
+| **Uber** | telefone/email + password + (Arkose live se pedido) + OTP 4 dígitos | CSV pagamentos | Módulo Uber |
 
 Import manual (XLSX/CSV) **mantém-se** como fallback.
 
@@ -30,14 +30,23 @@ PORTAL_RPA_MOCK=false
 PORTAL_RPA_HEADLESS=true
 # Renovar cookies / manter sessão (horas). Requer API sempre a correr.
 PORTAL_RPA_REFRESH_INTERVAL_HOURS=3
+# Uber: só debug/admin (Chromium visível no servidor). Produção = false.
+PORTAL_RPA_UBER_INTERACTIVE=false
+# Uber Ligar conta: headed+Xvfb para Arkose pintar no modal Desafio Uber (não é INTERACTIVE).
+PORTAL_RPA_UBER_HEADED_CONNECT=true
+# DISPLAY=:1
 ```
 
 Credenciais guardadas com a mesma chave AES já usada no projecto: `ENCRYPTION_KEY`.
+
+Se a chave mudar, a password guardada deixa de desencriptar (`passwordNeedsResave`). A UI mostra mensagem em PT (não o raw `Unsupported state or unable to authenticate data`) e pede **Esquecer password** + **Ligar conta** de novo — ver [`09-ENCRIPTION.MD`](./09-ENCRIPTION.MD).
 
 | Valor | Comportamento |
 |-------|----------------|
 | `PORTAL_RPA_MOCK=true` (default em **development**) | Ligar + OTP funcionam sem Chromium; **sync não descarrega** ficheiros reais |
 | `PORTAL_RPA_MOCK=false` | Login/sync real; **exige** Chromium instalado |
+| `PORTAL_RPA_UBER_HEADED_CONNECT=true` | Connect Uber headed + `ensureVirtualDisplay` (Arkose); sync continua a respeitar `PORTAL_RPA_HEADLESS` |
+| `PORTAL_RPA_UBER_INTERACTIVE=true` | Debug: headed no login **e** sync; timeouts longos; **não** usar em produção para end-users |
 
 ### 2. Instalar Chromium (Playwright)
 
@@ -53,13 +62,21 @@ Equivale a:
 npx playwright install chromium
 ```
 
-Os binários ficam em `~/Library/Caches/ms-playwright/` (macOS).
+Os binários ficam em `~/Library/Caches/ms-playwright/` (macOS) ou `~/.cache/ms-playwright/` (Linux).
+
+**Produção (Ubuntu mínimo):** além do browser, precisa das libs/fontes:
+
+```bash
+npm run playwright:libs   # → .playwright-libs (sem sudo); PM2 injeta LD_LIBRARY_PATH
+```
+
+A API no arranque faz **probe de launch** do Chromium e, se falhar, tenta auto-heal em user-space (`playwright install` / `playwright:libs`). O endpoint `/health` expõe `playwright.ready` / `playwright.detail`. O painel Conta Uber/Via Verde/MyPRIO usa `browserReady` (infra) separado do estado da conta (`lastError` de browser/libs é limpo quando o probe passa).
 
 Se aparecer o erro:
 
 > Executable doesn't exist … chromium_headless_shell …
 
-corrija exactamente com `npm run playwright:install` e **reinicie a API**.
+corrija com `npm run playwright:install` (e `playwright:libs` no Linux) — a API também tenta sozinha no próximo restart.
 
 ### 3. Reiniciar API
 
@@ -80,10 +97,11 @@ Fluxo:
 1. **Ligar conta** — username/email + password (**AES-256-GCM** por tenant, `ENCRYPTION_KEY`). A password fica guardada para reutilização.
 2. Se já há password guardada (`hasPassword`) → **Continuar com conta guardada** (sem voltar a digitar); MyPRIO/Uber podem pedir OTP SMS na mesma.
 3. Se o portal pedir OTP → modal com input (timeout ~10 min no servidor)
-4. Estado passa a **Ligado** → **Sincronizar** descarrega export e corre os parsers existentes
-5. **Esquecer password** — remove só `passwordEncrypted` (mantém username + sessão). Distinto de Desligar.
-6. **Desligar** apaga password **e** sessão Playwright do tenant
-7. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
+4. **Uber Arkose** («Proteger a sua conta» / Iniciar desafio): modal **Desafio Uber** com stream JPEG do Chromium Playwright + cliques/arrasto (`authChallenge=bot`). Ligar conta usa Chromium **headed** + `DISPLAY`/Xvfb (`PORTAL_RPA_UBER_HEADED_CONNECT`) para o desafio pintar — headless costuma ter iframe sem UI. Não exige `PORTAL_RPA_UBER_INTERACTIVE` nem VNC. Depois o fluxo continua para SMS/OTP ou password.
+5. Estado passa a **Ligado** → **Sincronizar** descarrega export e corre os parsers existentes
+6. **Esquecer password** — remove só `passwordEncrypted` (mantém username + sessão). Distinto de Desligar.
+7. **Desligar** apaga password **e** sessão Playwright do tenant
+8. **Limpar** (ao lado de erros/avisos de sync) — remove `lastError` e a referência ao job falhado **sem** desligar a conta. Se o próximo sync falhar, o aviso volta até limpar de novo.
 
 No sync de **Pagamentos** (`portal-quick-login-modal.tsx`): se o estado já for `awaiting_otp`, o modal abre **directamente no formulário OTP**. Se há password guardada e a sessão expirou, **Login** oferece **Continuar** sem pedir password de novo (com opção «Esquecer password» / «Introduzir outra»).
 
@@ -103,6 +121,10 @@ Prefixo: `/api/v1` (superadmin + tenant na sessão)
 | GET | `/portal-connections/:portal` | Detalhe (`via_verde` \| `myprio` \| `uber`) |
 | POST | `/portal-connections/:portal/connect` | `{ username?, password?, useStoredCredentials? }` |
 | POST | `/portal-connections/:portal/otp` | `{ code }` |
+| POST | `/portal-connections/:portal/password` | Uber pós-OTP: `{ password }` (browser vivo) |
+| GET | `/portal-connections/:portal/jobs/:jobId/live-frame` | JPEG base64 do Chromium vivo (Arkose / passkey) |
+| POST | `/portal-connections/:portal/jobs/:jobId/live-input` | Clique/arrasto → `page.mouse` (coords da imagem) |
+| POST | `/portal-connections/:portal/jobs/:jobId/cancel` | Cancela job + fecha browser vivo |
 | POST | `/portal-connections/:portal/sync` | Dispara sync (`uberSync` / `syncScope` opcionais) |
 | POST | `/portal-connections/:portal/reports` | Uber: listar relatórios Supplier (~45–60s) |
 | POST | `/portal-connections/:portal/clear-messages` | Limpa `lastError` + job falhado persistente |
@@ -110,6 +132,38 @@ Prefixo: `/api/v1` (superadmin + tenant na sessão)
 | DELETE | `/portal-connections/:portal` | Desliga (password + sessão) |
 
 Jobs: `pending` → `running` → (`awaiting_otp`) → `completed` \| `failed`
+
+Campo `resultJson.authChallenge`: `bot` \| `passkey` \| `otp` \| `password` \| `null` (exposto na UI como `authChallenge`).
+
+### Contrato live-frame / live-input
+
+**AuthZ (ambos):** tenant na sessão + `connection.activeJobId === jobId` + job do mesmo tenant não `completed`/`failed` + sessão viva em memória (`assertTenantOwnsLiveJob`). Caso contrário → 400 («Job não activo…» / «Browser vivo indisponível…»).
+
+**GET `live-frame`** → `{ imageBase64, mimeType: 'image/jpeg', viewportWidth, viewportHeight, authChallenge, challengeVisible, capturedAt }`:
+
+- JPEG viewport (quality ~52); fallback CDP se `page.screenshot` falhar
+- `touchLiveOtpSession` em cada poll (prolonga TTL enquanto o gestor vê o stream)
+- `challengeVisible`: `false` = iframe/sinal bot mas paint ainda não pronto (identidade por baixo)
+- Ops Playwright serializadas por job (`withLivePageLock`) — evita hang screenshot vs nudge
+
+**POST `live-input`** body:
+
+```json
+{
+  "type": "click" | "mousedown" | "mouseup" | "mousemove" | "drag",
+  "x": 0, "y": 0,
+  "endX": 0, "endY": 0,
+  "button": "left",
+  "displayWidth": 800,
+  "displayHeight": 450
+}
+```
+
+Coords do elemento `<img>` no browser do gestor → escaladas para o viewport Playwright:
+
+`pageX = (x / displayWidth) * viewport.width` (clamp 0…width−1).
+
+Modal Uber (`uber-bot-challenge-modal.tsx`) usa sobretudo `mousedown` / `mousemove` / `mouseup` (arrasto), poll ~450 ms.
 
 ---
 
@@ -125,21 +179,54 @@ Dashboard (modal + poll)
 ```
 
 - Sessão: `storageState` Playwright encriptado em `portal_connections` — ver secção **Manter sessões activas** abaixo
-- OTP: browser **mantém-se aberto** em memória enquanto `awaiting_otp` (não reabre a meio do fluxo)
+- OTP / desafios: browser **mantém-se aberto** em memória (`registerLiveOtpSession`) enquanto `awaiting_otp` — ver **Sessões vivas** abaixo
+- Uber bot challenge: detalhe UX/diagnóstico em [`07-UBER.md` §13](./07-UBER.md#13-ligar-conta--fluxo-completo-arkose--otp--password)
 
 Ficheiros principais:
 
-- `apps/api/src/services/portal-rpa/*`
+- `apps/api/src/services/portal-rpa/*` (`types.ts` = sessões vivas + launch headed/Xvfb)
 - `apps/api/src/workers/portal-session-refresh.worker.ts`
 - `apps/api/src/routes/portal-connection.routes.ts`
 - `apps/web/src/components/portal/portal-connection-panel.tsx`
+- `apps/web/src/components/portal/uber-bot-challenge-modal.tsx`
 - `packages/shared/src/portal-rpa.ts`
-- `packages/shared/src/config.server.ts` (`portalRpaRefreshIntervalHours`)
+- `packages/shared/src/config.server.ts` (`portalRpaUberHeadedConnect`, …)
 - Migration: `20260715120000_portal_rpa_sync`
 
-Docs por portal: [`04-VIAVERDE.md`](./04-VIAVERDE.md) · [`05-PRIO.md`](./05-PRIO.md) · [`06-UBER.md`](./06-UBER.md) · [`07-UBER.md`](./07-UBER.md) (RPA Uber detalhado — sync generate / Em curso / selectors DevTools)
+Docs por portal: [`04-VIAVERDE.md`](./04-VIAVERDE.md) · [`05-PRIO.md`](./05-PRIO.md) · [`06-UBER.md`](./06-UBER.md) · [`07-UBER.md`](./07-UBER.md) (RPA Uber — login Arkose live + sync Relatórios)
 
 **Timeouts sync:** Via Verde / MyPRIO ~55–90s · **Uber 15 min** (poll «Em curso» até ~12 min antes do download CSV).
+
+---
+
+## Sessões vivas (OTP / Arkose / passkey)
+
+Enquanto o gestor resolve OTP, passkey ou Desafio Uber, o Chromium **não pode fechar**. Modelo em `apps/api/src/services/portal-rpa/types.ts`:
+
+| Peça | Valor |
+|------|--------|
+| Map | `liveOtpSessions: Map<jobId, { browser, context, page, createdAt }>` |
+| Registo | `registerLiveOtpSession(jobId, …)` após `awaiting_otp` / `awaiting_passkey` |
+| TTL base | **12 min** desde `createdAt`; `getLiveOtpSession` expira e faz `dispose` |
+| Touch | `touchLiveOtpSession` em live-frame / live-input / watcher — reinicia o relógio (desafio ~10 min) |
+| Cap | **6** browsers vivos; se cheio → evict a sessão mais antiga |
+| Dispose | `disposeLiveOtpSession` / `disposeAllLiveOtpSessions` (reload API / SIGTERM) |
+| Lock | `withLivePageLock(jobId)` — serializa screenshot, mouse e nudges no mesmo page |
+
+`withPlaywrightPage({ keepAlive: true })` deixa o browser aberto; o caller (`registerLiveOtpSession` + watcher / OTP) é responsável por fechar.
+
+### Headed vs headless (VM)
+
+| Cenário | Headless? | Notas |
+|---------|-----------|--------|
+| Sync / refresh gerais | `PORTAL_RPA_HEADLESS` (prod: `true`) | Sem UI no servidor |
+| Uber **Ligar conta** com Arkose | headed se `UBER_HEADED_CONNECT` ou `UBER_INTERACTIVE` | `ensureVirtualDisplay()` → Xvfb / socket `:1` |
+| Uber sync | headed só se `UBER_INTERACTIVE` | Produção: headless |
+| Sem DISPLAY + headed pedido | fallback headless | Log aviso — Arkose pode não pintar |
+
+Libs no Ubuntu mínimo: `npm run playwright:libs` → `.playwright-libs` (`LD_LIBRARY_PATH` + Fontconfig). PM2 (`ecosystem.config.js`) injeta `DISPLAY`, `XAUTHORITY`, `PORTAL_RPA_UBER_HEADED_CONNECT`, paths X11.
+
+Detalhe Uber (Desafio Uber, flags, falhas): [`07-UBER.md` §13](./07-UBER.md#13-ligar-conta--fluxo-completo-arkose--otp--password).
 
 ---
 
@@ -242,15 +329,20 @@ Checklist realista para manter sessões o máximo possível:
 
 | Sintoma | Causa provável | Fix |
 |---------|----------------|-----|
-| `Executable doesn't exist` / mensagem “Browser Playwright em falta” | Chromium não instalado **ou** erro antigo na BD | `npm run playwright:install` + **reiniciar a API** + clicar **Ligar conta** outra vez (o painel guardava o erro da tentativa anterior) |
-| Painel ainda diz “browser em falta” depois do install | API sem restart / `lastError` stale | Reiniciar API; ao carregar o estado o TVDE limpa esse erro se o Chromium já existir |
+| `Executable doesn't exist` / “Browser Playwright em falta” | Chromium não instalado ou apagado no deploy | Auto-heal no arranque da API; senão `npm run playwright:install` + restart. UI: `browserReady=false` (não misturar com estado da conta) |
+| `error while loading shared libraries` / browser fecha | Libs/fontes em falta (ex. após `rsync --delete`) | Auto-heal `playwright:libs`; senão `npm run playwright:libs` + restart. `.playwright-libs` deve estar **excluído** do rsync delete |
+| Painel ainda diz “browser em falta” | API sem restart / probe ainda a correr | Esperar log `[portal-rpa] playwright ready=…`; `/health` → `playwright.ready`; reload do painel limpa `lastError` de infra se Chromium OK |
 | Sync diz “modo mock” | `PORTAL_RPA_MOCK=true` | `PORTAL_RPA_MOCK=false` + Chromium |
 | Login falha / “sessão expirada” | Credenciais ou cookies inválidos; MyPRIO exige OTP de novo | Desligar → Ligar de novo (OTP se MyPRIO) |
 | MyPRIO “Sessão expirada” de manhã | Cookies mortos; API pode ter estado parada à noite; refresh não consegue OTP | Ligar conta + SMS; em prod manter API 24/7 |
 | Via Verde “Erro” após refresh nocturno | Falha de rede/DNS transitória (`ERR_NAME_NOT_RESOLVED`) | Esperar próximo tick (3h) ou reiniciar API; se persistir, Ligar conta |
 | Lista importada só aparece após F5 | Bug antigo do poll (tratava `connected` a meio do sync) | Já corrigido — refresh da lista no fim do job |
 | Export não encontrado | UI do portal mudou | Import manual XLSX/CSV; reportar selectores |
-| CAPTCHA / Cloudflare | Anti-bot | Import manual; não forçar |
+| CAPTCHA / Cloudflare (Via Verde / genérico) | Anti-bot | Import manual; não forçar |
+| Uber Desafio: JPEG = email, sem puzzle | Headless / sem `DISPLAY` / Arkose sem paint | `PORTAL_RPA_UBER_HEADED_CONNECT=true` + `DISPLAY=:1` + XAUTHORITY; ver [`07-UBER.md` §13.7](./07-UBER.md#137-falhas-comuns-e-diagnóstico) |
+| Live-frame «Browser vivo indisponível» | TTL, restart API, Chromium crash | Reiniciar API; Ligar conta outra vez; `playwright:libs` |
+| «Missing X server» (headed) | Sem Xvfb/VNC ou sem `XAUTHORITY` | Contentor `tvde-rpa-vnc` / Xvfb; sync `.xauthority-vnc` |
+| CORS no poll live-frame | `.env` com `localhost` vs acesso por IP | `CORS_ORIGIN` + `NEXT_PUBLIC_API_URL` = origem real; rebuild web |
 
 ---
 
