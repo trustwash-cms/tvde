@@ -710,6 +710,9 @@ model Invoice {
   dueDate      DateTime? @map("due_date") @db.Date
   issuedAt     DateTime? @map("issued_at")
   emailSentAt  DateTime? @map("email_sent_at")
+  /** Estado interno de pagamento: pendente | pago | parcial | cancelado */
+  paymentStatus String    @default("pendente") @map("payment_status")
+  paidAt        DateTime? @map("paid_at")
   notes        String?   @db.Text
   metadataJson Json?     @map("metadata_json")
   createdAt    DateTime  @default(now()) @map("created_at")
@@ -727,6 +730,8 @@ model Invoice {
   @@unique([workspaceId, number])
   @@index([tenantId, workspaceId])
   @@index([billingEntityId])
+  @@index([workspaceId, paymentStatus])
+  @@index([workspaceId, dueDate])
   @@map("invoices")
 }
 

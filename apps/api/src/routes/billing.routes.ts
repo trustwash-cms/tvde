@@ -67,6 +67,12 @@ import {
   syncDocumentsFromMoloni,
   syncEntitiesFromMoloni,
 } from '../services/billing-sync.service';
+import { getBillingDashboard } from '../services/billing-dashboard.service';
+import {
+  bulkMarkBillingInvoicesPaid,
+  markBillingInvoicePaid,
+  markBillingInvoicePending,
+} from '../services/billing-payment.service';
 import {
   MoloniDemoPurgeError,
   purgeMoloniDemoData,
@@ -144,6 +150,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
       q?: string;
       workspaceId?: string;
       documentType?: string;
+      paymentStatus?: string;
       page?: string;
       limit?: string;
     };
@@ -156,7 +163,146 @@ export async function billingRoutes(fastify: FastifyInstance) {
       query.workspaceId
     );
 
-    const data = await listInvoices(workspaceId, tenantId, q, query.documentType, page, limit);
+    const data = await listInvoices(
+      workspaceId,
+      tenantId,
+      q,
+      query.documentType,
+      page,
+      limit,
+      query.paymentStatus
+    );
+    return reply.send({ success: true, data });
+  });
+
+  fastify.post('/invoices/bulk/mark-paid', async (request, reply) => {
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        ids: z.array(z.string().uuid()).min(1).max(50),
+        paidAt: z.string().optional(),
+      })
+      .parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+    try {
+      const data = await bulkMarkBillingInvoicesPaid(body.ids, workspaceId, tenantId, body.paidAt);
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'invoice.bulk_mark_paid',
+        entityType: 'invoice',
+        ipAddress: request.ip,
+        afterJson: data,
+      });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/invoices/:id/mark-paid', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        paidAt: z.string().optional(),
+      })
+      .parse(request.body ?? {});
+    const invoiceRef = await fastify.db.invoice.findUnique({
+      where: { id },
+      select: { tenantId: true, workspaceId: true, paymentStatus: true, paidAt: true, number: true },
+    });
+    if (!invoiceRef) {
+      return reply.status(404).send({ success: false, error: 'Documento não encontrado' });
+    }
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId ?? invoiceRef.workspaceId
+    );
+    try {
+      const data = await markBillingInvoicePaid(id, workspaceId, tenantId, body.paidAt);
+      if (!data) return reply.status(404).send({ success: false, error: 'Documento não encontrado' });
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'invoice.mark_paid',
+        entityType: 'invoice',
+        entityId: id,
+        ipAddress: request.ip,
+        beforeJson: {
+          number: invoiceRef.number,
+          paymentStatus: invoiceRef.paymentStatus,
+          paidAt: invoiceRef.paidAt,
+        },
+        afterJson: { paymentStatus: data.paymentStatus, paidAt: data.paidAt },
+      });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/invoices/:id/mark-pending', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+      })
+      .parse(request.body ?? {});
+    const invoiceRef = await fastify.db.invoice.findUnique({
+      where: { id },
+      select: { tenantId: true, workspaceId: true, paymentStatus: true, paidAt: true, number: true },
+    });
+    if (!invoiceRef) {
+      return reply.status(404).send({ success: false, error: 'Documento não encontrado' });
+    }
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId ?? invoiceRef.workspaceId
+    );
+    try {
+      const data = await markBillingInvoicePending(id, workspaceId, tenantId);
+      if (!data) return reply.status(404).send({ success: false, error: 'Documento não encontrado' });
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'invoice.mark_pending',
+        entityType: 'invoice',
+        entityId: id,
+        ipAddress: request.ip,
+        beforeJson: {
+          number: invoiceRef.number,
+          paymentStatus: invoiceRef.paymentStatus,
+          paidAt: invoiceRef.paidAt,
+        },
+        afterJson: { paymentStatus: data.paymentStatus, paidAt: data.paidAt },
+      });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.get('/billing/dashboard', async (request, reply) => {
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    const data = await getBillingDashboard(workspaceId, tenantId);
     return reply.send({ success: true, data });
   });
 

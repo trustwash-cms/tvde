@@ -12,7 +12,7 @@ import {
   Plus,
   Trash2,
 } from 'lucide-react';
-import { WEB_ROUTES, BILLING_ENTITY_TYPES } from '@tvde/shared';
+import { WEB_ROUTES, BILLING_ENTITY_TYPES, formatAdminMgmtMoney } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
@@ -45,6 +45,8 @@ interface BillingEntity {
   cmsClient: { id: string; name: string; nif: string | null } | null;
   conflicts: Array<{ id: string; field: string }>;
   _count?: { invoices: number };
+  invoiceCount?: number;
+  openAmount?: string;
 }
 
 interface BillingConflict {
@@ -537,6 +539,12 @@ export function BillingEntitiesPanel() {
                 <th className="px-4 py-3">NIF</th>
                 <th className="px-4 py-3">Email</th>
                 <th className="px-4 py-3">Telefone</th>
+                {activeTab === 'customer' && (
+                  <>
+                    <th className="px-4 py-3 whitespace-nowrap">Nº faturas</th>
+                    <th className="px-4 py-3 whitespace-nowrap">Montante em aberto</th>
+                  </>
+                )}
                 <th className="px-4 py-3">Acções</th>
               </tr>
             </thead>
@@ -565,6 +573,16 @@ export function BillingEntitiesPanel() {
                   <td className="px-4 py-3">{e.vat ?? '—'}</td>
                   <td className="px-4 py-3">{e.email ?? '—'}</td>
                   <td className="px-4 py-3 whitespace-nowrap">{formatDisplayPhone(e.phone) || '—'}</td>
+                  {activeTab === 'customer' && (
+                    <>
+                      <td className="px-4 py-3 tabular-nums">{e.invoiceCount ?? e._count?.invoices ?? 0}</td>
+                      <td className="px-4 py-3 whitespace-nowrap tabular-nums">
+                        {Number(e.openAmount ?? 0) > 0
+                          ? formatAdminMgmtMoney(e.openAmount)
+                          : '—'}
+                      </td>
+                    </>
+                  )}
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="inline-flex flex-nowrap items-center gap-0.5">
                       {e.linkStatus === 'pending_confirm' && e.status === 'active' && (

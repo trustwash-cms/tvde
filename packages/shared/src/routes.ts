@@ -239,6 +239,9 @@ export const API_PATHS = {
     pdf: (id: string) => `/invoices/${id}/pdf`,
     sendEmail: (id: string) => `/invoices/${id}/send-email`,
     duplicate: (id: string) => `/invoices/${id}/duplicate`,
+    markPaid: (id: string) => `/invoices/${id}/mark-paid`,
+    markPending: (id: string) => `/invoices/${id}/mark-pending`,
+    bulkMarkPaid: '/invoices/bulk/mark-paid',
   },
   calendar: {
     calendars: '/calendar/calendars',
@@ -482,6 +485,7 @@ export const API_PATHS = {
     moloniApplyDocumentSet: '/billing/moloni/document-set/apply-recommended',
     moloniAuthUrl: '/billing/moloni/auth-url',
     moloniCallback: '/billing/moloni/callback',
+    dashboard: '/billing/dashboard',
     entities: '/billing/entities',
     entityById: (id: string) => `/billing/entities/${id}`,
     entityLink: (id: string) => `/billing/entities/${id}/link`,

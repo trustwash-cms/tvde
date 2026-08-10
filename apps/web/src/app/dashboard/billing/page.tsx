@@ -1,6 +1,5 @@
-import { redirect } from 'next/navigation';
-import { WEB_ROUTES } from '@tvde/shared';
+import { BillingDashboardPanel } from '@/components/billing/billing-dashboard-panel';
 
 export default function BillingIndexPage() {
-  redirect(WEB_ROUTES.dashboard.billing.faturas);
+  return <BillingDashboardPanel />;
 }

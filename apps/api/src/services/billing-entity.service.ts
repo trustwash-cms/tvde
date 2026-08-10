@@ -65,7 +65,7 @@ export async function listBillingEntities(
   const statusFilter =
     filters?.status === 'all' ? {} : { status: filters?.status ?? 'active' };
 
-  return prisma.billingEntity.findMany({
+  const entities = await prisma.billingEntity.findMany({
     where: {
       workspaceId,
       tenantId,
@@ -96,6 +96,47 @@ export async function listBillingEntities(
     },
     orderBy: { name: 'asc' },
   });
+
+  if (entities.length === 0) return [];
+
+  const entityIds = entities.map((e) => e.id);
+
+  const [issuedCounts, openSums] = await Promise.all([
+    prisma.invoice.groupBy({
+      by: ['billingEntityId'],
+      where: {
+        workspaceId,
+        tenantId,
+        billingEntityId: { in: entityIds },
+        status: 'issued',
+      },
+      _count: { _all: true },
+    }),
+    prisma.invoice.groupBy({
+      by: ['billingEntityId'],
+      where: {
+        workspaceId,
+        tenantId,
+        billingEntityId: { in: entityIds },
+        status: 'issued',
+        paymentStatus: { in: ['pendente', 'parcial'] },
+      },
+      _sum: { total: true },
+    }),
+  ]);
+
+  const invoiceCountByEntity = new Map(
+    issuedCounts.map((row) => [row.billingEntityId, row._count._all])
+  );
+  const openAmountByEntity = new Map(
+    openSums.map((row) => [row.billingEntityId, Number(row._sum.total ?? 0)])
+  );
+
+  return entities.map((entity) => ({
+    ...entity,
+    invoiceCount: invoiceCountByEntity.get(entity.id) ?? 0,
+    openAmount: (openAmountByEntity.get(entity.id) ?? 0).toFixed(2),
+  }));
 }
 
 export async function getBillingEntity(id: string, workspaceId: string, tenantId: string) {

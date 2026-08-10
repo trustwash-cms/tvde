@@ -38,6 +38,7 @@ import {
 } from './moloni-connection.service';
 import { syncAdminMgmtFromBillingInvoice } from './admin-mgmt-moloni-sync.service';
 import { getMoloniDocumentSetHealth } from './moloni-document-set-health.service';
+import { defaultPaymentStatusOnIssue } from './billing-payment.service';
 import {
   ensureMoloniPartyId,
   resolveForInvoice,
@@ -491,12 +492,23 @@ function invoiceListWhere(
   workspaceId: string,
   tenantId: string,
   q?: string,
-  documentType?: string
+  documentType?: string,
+  paymentStatus?: string
 ): Prisma.InvoiceWhereInput {
+  const paymentFilter =
+    paymentStatus && paymentStatus !== 'all'
+      ? {
+          paymentStatus,
+          // Estado de pagamento só faz sentido em documentos emitidos
+          status: 'issued' as const,
+        }
+      : {};
+
   return {
     workspaceId,
     tenantId,
     ...(documentType ? { documentType } : {}),
+    ...paymentFilter,
     ...(q
       ? {
           OR: [
@@ -515,10 +527,11 @@ export async function listInvoices(
   q?: string,
   documentType?: string,
   page = 0,
-  limit = 20
+  limit = 20,
+  paymentStatus?: string
 ) {
   const safeLimit = Math.min(Math.max(limit, 1), 50);
-  const where = invoiceListWhere(workspaceId, tenantId, q, documentType);
+  const where = invoiceListWhere(workspaceId, tenantId, q, documentType, paymentStatus);
 
   const [items, total] = await Promise.all([
     prisma.invoice.findMany({
@@ -961,6 +974,9 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
     }
   }
 
+  const issuedAt = new Date();
+  const paymentStatus = defaultPaymentStatusOnIssue(invoice.documentType);
+
   return prisma.invoice.update({
     where: { id: invoice.id },
     data: {
@@ -968,7 +984,9 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
       provider: 'moloni',
       externalId: result.externalId,
       number: documentNumber || invoice.number,
-      issuedAt: new Date(),
+      issuedAt,
+      paymentStatus,
+      paidAt: paymentStatus === 'pago' ? issuedAt : null,
     },
     include: { client: true, billingEntity: true, lines: true },
   }).then(async (updated) => {

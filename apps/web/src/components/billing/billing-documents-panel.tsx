@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Copy, FileDown, Mail, Pencil, Trash2 } from 'lucide-react';
+import { CheckCircle, Copy, FileDown, Mail, Pencil, RotateCcw, Trash2 } from 'lucide-react';
 import {
   BILLING_DOCUMENT_TYPES,
+  getAdminMgmtFaturaPagamentoLabel,
   getBillingDocumentEditPath,
   getDocumentTypeLabel,
   type MoloniDocumentType,
@@ -23,6 +24,8 @@ interface Invoice {
   id: string;
   number: string;
   status: string;
+  paymentStatus: string;
+  paidAt: string | null;
   documentType: MoloniDocumentType;
   externalId: string | null;
   total: string;
@@ -62,8 +65,32 @@ function statusBadge(status: string) {
     issued: 'bg-green-100 text-green-800',
     paid: 'bg-blue-100 text-blue-800',
     failed: 'bg-red-100 text-red-800',
+    cancelled: 'bg-slate-100 text-slate-500',
   };
   return map[status] ?? 'bg-slate-100 text-slate-700';
+}
+
+function paymentBadge(paymentStatus: string, docStatus: string) {
+  if (docStatus === 'draft') {
+    return (
+      <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-500">
+        —
+      </span>
+    );
+  }
+  const cls =
+    paymentStatus === 'pago'
+      ? 'bg-green-100 text-green-800'
+      : paymentStatus === 'pendente'
+        ? 'bg-amber-100 text-amber-800'
+        : paymentStatus === 'parcial'
+          ? 'bg-blue-100 text-blue-800'
+          : 'bg-slate-100 text-slate-700';
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>
+      {getAdminMgmtFaturaPagamentoLabel(paymentStatus)}
+    </span>
+  );
 }
 
 function formatInvoiceDate(issuedAt: string | null, createdAt: string) {
@@ -82,6 +109,10 @@ function canDuplicate(inv: Invoice): boolean {
   );
 }
 
+function canChangePayment(inv: Invoice): boolean {
+  return inv.status === 'issued';
+}
+
 export function BillingDocumentsPanel({
   documentTypeFilter,
 }: {
@@ -91,10 +122,12 @@ export function BillingDocumentsPanel({
   const searchParams = useSearchParams();
   const router = useRouter();
   const q = searchParams.get('q');
+  const paymentStatusParam = searchParams.get('paymentStatus') ?? '';
   const { workspaces, workspaceId, setWorkspaceId, loading: wsLoading } = useWorkspaceContext();
   const { confirm, confirmDialog } = useConfirmDialog();
 
   const [typeFilter, setTypeFilter] = useState<MoloniDocumentType | ''>(documentTypeFilter ?? '');
+  const [paymentFilter, setPaymentFilter] = useState(paymentStatusParam);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [invoiceTotal, setInvoiceTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -106,10 +139,17 @@ export function BillingDocumentsPanel({
   const [sendingEmailId, setSendingEmailId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [paymentBusyId, setPaymentBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const effectiveType = documentTypeFilter ?? (typeFilter || undefined);
   const showTypeColumn = !documentTypeFilter;
   const draftCount = invoices.filter((i) => i.status === 'draft').length;
+
+  useEffect(() => {
+    setPaymentFilter(paymentStatusParam);
+  }, [paymentStatusParam]);
 
   const loadInvoices = useCallback(() => {
     if (!workspaceId) return;
@@ -120,6 +160,7 @@ export function BillingDocumentsPanel({
         workspaceId,
         {
           ...(effectiveType ? { documentType: effectiveType } : {}),
+          ...(paymentFilter && paymentFilter !== 'all' ? { paymentStatus: paymentFilter } : {}),
           page: String(page),
           limit: String(limit),
         }
@@ -132,11 +173,12 @@ export function BillingDocumentsPanel({
         setInvoiceTotal(res.data.total);
       } else if (res.error) setError(res.error);
     });
-  }, [workspaceId, q, effectiveType, page, limit]);
+  }, [workspaceId, q, effectiveType, paymentFilter, page, limit]);
 
   useEffect(() => {
     setPage(0);
-  }, [q, workspaceId, effectiveType]);
+    setSelectedIds(new Set());
+  }, [q, workspaceId, effectiveType, paymentFilter]);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -154,6 +196,46 @@ export function BillingDocumentsPanel({
     loadInvoices();
   }, [loadInvoices]);
 
+  const selectableIds = useMemo(
+    () => invoices.filter((inv) => canChangePayment(inv) && inv.paymentStatus !== 'pago').map((i) => i.id),
+    [invoices]
+  );
+
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  function setPaymentFilterAndUrl(value: string) {
+    setPaymentFilter(value);
+    const params = new URLSearchParams(searchParams.toString());
+    if (!value || value === 'all') params.delete('paymentStatus');
+    else params.set('paymentStatus', value);
+    const qs = params.toString();
+    router.replace(qs ? `?${qs}` : '?', { scroll: false });
+  }
+
   async function issueInvoice(id: string, documentType: MoloniDocumentType) {
     const label = getDocumentTypeLabel(documentType);
     const ok = await confirm({
@@ -167,6 +249,80 @@ export function BillingDocumentsPanel({
     setLoading(false);
     if (res.success) {
       setSuccess('Documento emitido no Moloni');
+      loadInvoices();
+    } else {
+      setError(getApiErrorMessage(res));
+    }
+  }
+
+  async function markPaid(inv: Invoice) {
+    if (!canChangePayment(inv)) return;
+    const ok = await confirm({
+      title: 'Marcar como paga',
+      message: `Marcar o documento ${inv.number} como pago?`,
+    });
+    if (!ok) return;
+    setError('');
+    setSuccess('');
+    setPaymentBusyId(inv.id);
+    const res = await apiFetch(
+      API_PATHS.invoices.markPaid(inv.id),
+      { method: 'POST', body: JSON.stringify({ workspaceId }) },
+      getStoredToken()
+    );
+    setPaymentBusyId(null);
+    if (res.success) {
+      setSuccess('Documento marcado como pago');
+      loadInvoices();
+    } else {
+      setError(getApiErrorMessage(res));
+    }
+  }
+
+  async function markPending(inv: Invoice) {
+    if (!canChangePayment(inv)) return;
+    const ok = await confirm({
+      title: 'Marcar como pendente',
+      message: `Reverter o documento ${inv.number} para pendente?`,
+    });
+    if (!ok) return;
+    setError('');
+    setSuccess('');
+    setPaymentBusyId(inv.id);
+    const res = await apiFetch(
+      API_PATHS.invoices.markPending(inv.id),
+      { method: 'POST', body: JSON.stringify({ workspaceId }) },
+      getStoredToken()
+    );
+    setPaymentBusyId(null);
+    if (res.success) {
+      setSuccess('Documento marcado como pendente');
+      loadInvoices();
+    } else {
+      setError(getApiErrorMessage(res));
+    }
+  }
+
+  async function bulkMarkPaid() {
+    if (!workspaceId || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 50);
+    const ok = await confirm({
+      title: 'Marcar como pagas',
+      message: `Marcar ${ids.length} documento(s) como pago(s)?`,
+    });
+    if (!ok) return;
+    setError('');
+    setSuccess('');
+    setBulkBusy(true);
+    const res = await apiFetch<{ updated: number; skipped: number; requested: number }>(
+      API_PATHS.invoices.bulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ workspaceId, ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (res.success && res.data) {
+      setSuccess(`${res.data.updated} documento(s) marcado(s) como pago(s)`);
+      setSelectedIds(new Set());
       loadInvoices();
     } else {
       setError(getApiErrorMessage(res));
@@ -298,40 +454,100 @@ export function BillingDocumentsPanel({
               {draftCount > 0 ? ` · ${draftCount} rascunho${draftCount > 1 ? 's' : ''} nesta página` : ''}
             </p>
           </div>
-          {showTypeColumn && (
+          <div className="flex flex-wrap gap-2">
+            {showTypeColumn && (
+              <select
+                className="input max-w-xs text-sm"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as MoloniDocumentType | '')}
+              >
+                <option value="">Todos os tipos</option>
+                {BILLING_DOCUMENT_TYPES.map((type) => (
+                  <option key={type.id} value={type.id}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            )}
             <select
               className="input max-w-xs text-sm"
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value as MoloniDocumentType | '')}
+              value={paymentFilter || 'all'}
+              onChange={(e) => setPaymentFilterAndUrl(e.target.value)}
             >
-              <option value="">Todos os tipos</option>
-              {BILLING_DOCUMENT_TYPES.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.label}
-                </option>
-              ))}
+              <option value="all">Todos os pagamentos</option>
+              <option value="pendente">Pendente</option>
+              <option value="pago">Pago</option>
+              <option value="parcial">Parcial</option>
+              <option value="cancelado">Cancelado</option>
             </select>
-          )}
+          </div>
         </div>
 
         <ListPageSearch placeholder="Pesquisar documentos…" />
+
+        {selectedCount > 0 && (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="text-sm font-medium text-slate-700">
+              {selectedCount} seleccionada(s)
+            </p>
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+              disabled={bulkBusy || loading}
+              onClick={() => void bulkMarkPaid()}
+            >
+              <CheckCircle size={13} />
+              Marcar como paga
+            </button>
+            <button
+              type="button"
+              className="text-xs text-slate-500 hover:text-slate-700"
+              disabled={bulkBusy}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Limpar selecção
+            </button>
+          </div>
+        )}
 
         <div className="overflow-hidden rounded-lg border border-slate-200">
           <table className="w-full text-sm">
             <thead className="border-b bg-slate-50 text-left text-slate-500">
               <tr>
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={pageAllSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={selectableIds.length === 0}
+                    aria-label="Seleccionar documentos pendentes visíveis"
+                  />
+                </th>
                 <th className="px-4 py-3">Número</th>
                 {showTypeColumn && <th className="px-4 py-3">Tipo</th>}
                 <th className="px-4 py-3">Entidade</th>
                 <th className="px-4 py-3">Data</th>
                 <th className="px-4 py-3">Total</th>
                 <th className="px-4 py-3">Estado</th>
+                <th className="px-4 py-3">Pagamento</th>
                 <th className="px-4 py-3" />
               </tr>
             </thead>
             <tbody>
               {invoices.map((inv) => (
                 <tr key={inv.id} className="border-b last:border-0">
+                  <td className="px-4 py-3">
+                    {canChangePayment(inv) && inv.paymentStatus !== 'pago' ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(inv.id)}
+                        onChange={() => toggleRowSelection(inv.id)}
+                        aria-label={`Seleccionar ${inv.number}`}
+                      />
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs">{inv.number}</td>
                   {showTypeColumn && (
                     <td className="px-4 py-3 text-slate-600">
@@ -348,8 +564,31 @@ export function BillingDocumentsPanel({
                       {inv.status}
                     </span>
                   </td>
+                  <td className="px-4 py-3">{paymentBadge(inv.paymentStatus ?? 'pendente', inv.status)}</td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <div className="flex items-center gap-1">
+                      {canChangePayment(inv) && inv.paymentStatus !== 'pago' && (
+                        <button
+                          type="button"
+                          className="rounded-lg p-2 text-green-600 transition hover:bg-green-50 disabled:opacity-50"
+                          title="Marcar paga"
+                          disabled={loading || paymentBusyId === inv.id || bulkBusy}
+                          onClick={() => void markPaid(inv)}
+                        >
+                          <CheckCircle size={14} />
+                        </button>
+                      )}
+                      {canChangePayment(inv) && inv.paymentStatus === 'pago' && (
+                        <button
+                          type="button"
+                          className="rounded-lg p-2 text-amber-600 transition hover:bg-amber-50 disabled:opacity-50"
+                          title="Marcar pendente"
+                          disabled={loading || paymentBusyId === inv.id || bulkBusy}
+                          onClick={() => void markPending(inv)}
+                        >
+                          <RotateCcw size={14} />
+                        </button>
+                      )}
                       {inv.status !== 'draft' && inv.externalId && invoiceRecipientEmail(inv) && (
                         <button
                           type="button"
