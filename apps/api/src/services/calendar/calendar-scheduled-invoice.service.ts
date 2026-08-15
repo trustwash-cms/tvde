@@ -47,12 +47,18 @@ function parseDraftPayload(value: unknown): CalendarScheduledInvoiceDraft | null
 
   if (lines.length === 0) return null;
 
+  const yourReference =
+    typeof row.yourReference === 'string' && row.yourReference.trim()
+      ? row.yourReference.trim().slice(0, 100)
+      : undefined;
+
   return {
     billingEntityId: row.billingEntityId,
     clientEmail: row.clientEmail.trim(),
     lines,
     documentType: typeof row.documentType === 'string' ? row.documentType : 'invoice',
     notes: typeof row.notes === 'string' ? row.notes : undefined,
+    yourReference,
     autoIssue: row.autoIssue !== false,
     sendEmail: row.sendEmail !== false,
   };
@@ -311,6 +317,12 @@ async function processScheduledInvoiceRow(row: {
       notes: draft.notes,
       issueDate: new Date().toISOString().slice(0, 10),
       documentSetId,
+      metadata: {
+        // Same path as Facturação — never fall back to DRAFT number as V/ Ref.ª
+        ...(draft.yourReference?.trim()
+          ? { yourReference: draft.yourReference.trim() }
+          : {}),
+      },
     });
 
     await prisma.calendarScheduledInvoice.update({

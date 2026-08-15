@@ -44,6 +44,8 @@ interface CalendarInvoiceEventFieldsProps {
   onBillingEntityChange: (id: string) => void;
   clientEmail: string;
   onClientEmailChange: (email: string) => void;
+  yourReference: string;
+  onYourReferenceChange: (value: string) => void;
   lines: CalendarInvoiceLineForm[];
   onLinesChange: (lines: CalendarInvoiceLineForm[]) => void;
   autoIssue: boolean;
@@ -68,6 +70,8 @@ export function CalendarInvoiceEventFields({
   onBillingEntityChange,
   clientEmail,
   onClientEmailChange,
+  yourReference,
+  onYourReferenceChange,
   lines,
   onLinesChange,
   autoIssue,
@@ -300,6 +304,24 @@ export function CalendarInvoiceEventFields({
         />
       </div>
 
+      <div>
+        <label className={`mb-1 block text-xs font-medium ${dark ? 'text-slate-400' : 'text-slate-600'}`}>
+          V/ Ref.ª
+        </label>
+        <input
+          className="input"
+          value={yourReference}
+          disabled={readOnly}
+          onChange={(e) => onYourReferenceChange(e.target.value)}
+          placeholder="ex.: Avença Junho"
+          maxLength={100}
+          title="Referência do documento no Moloni (não é a Ref.ª Artigo da linha)"
+        />
+        <p className={`mt-1 text-[11px] ${dark ? 'text-slate-500' : 'text-slate-500'}`}>
+          Aparece no PDF Moloni como V/ Ref.ª do documento. Diferente da Ref.ª Artigo em cada linha.
+        </p>
+      </div>
+
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <label className={`text-xs font-medium ${dark ? 'text-slate-400' : 'text-slate-600'}`}>
@@ -372,7 +394,7 @@ export function CalendarInvoiceEventFields({
                   <label
                     className={`mb-1 block text-[11px] ${dark ? 'text-slate-400' : 'text-slate-500'}`}
                   >
-                    Ref.ª
+                    Ref.ª Artigo
                   </label>
                   <input
                     className="input w-full font-mono text-xs"
@@ -385,7 +407,7 @@ export function CalendarInvoiceEventFields({
                       })
                     }
                     placeholder="SERV-01"
-                    title="Código curto — não é gerado a partir da descrição"
+                    title="Código do artigo — distinto de V/ Ref.ª do documento"
                     required={!line.moloniProductId}
                   />
                 </div>

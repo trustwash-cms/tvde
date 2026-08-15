@@ -100,11 +100,13 @@ const scheduledInvoiceSchema = z
     lines: z.array(scheduledInvoiceLineSchema).min(1),
     documentType: z.string().optional(),
     notes: z.string().max(5000).optional(),
+    yourReference: z.string().max(100).optional(),
     autoIssue: z.boolean().optional(),
     sendEmail: z.boolean().optional(),
   })
   .transform((data) => ({
     ...data,
+    yourReference: data.yourReference?.trim() || undefined,
     autoIssue: data.autoIssue ?? true,
     sendEmail: data.sendEmail ?? true,
   }));

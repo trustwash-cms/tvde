@@ -110,6 +110,36 @@ function invoiceDateFields(
   };
 }
 
+/** Suggest +1 month same clock time for a duplicated scheduled invoice. */
+function suggestDuplicateInvoiceStart(start: string, timezone: string): string {
+  if (!start.includes('T')) {
+    const range = buildDefaultEventRange(timezone, false);
+    return toLocalInputValue(range.start, false, timezone);
+  }
+  const instant = parseLocalInput(start, false, timezone);
+  const next = new Date(instant);
+  const day = next.getDate();
+  next.setMonth(next.getMonth() + 1);
+  // If month rolled over (e.g. 31 Jan → Mar), clamp to last day of target month
+  if (next.getDate() !== day) {
+    next.setDate(0);
+  }
+  // Keep advancing months until the suggested time is in the future
+  while (next.getTime() <= Date.now()) {
+    const d = next.getDate();
+    next.setMonth(next.getMonth() + 1);
+    if (next.getDate() !== d) next.setDate(0);
+  }
+  return toLocalInputValue(next, false, timezone);
+}
+
+function titleWithCopySuffix(title: string): string {
+  const trimmed = title.trim();
+  if (!trimmed) return '';
+  if (/\(cópia\)$/i.test(trimmed)) return trimmed;
+  return `${trimmed} (cópia)`;
+}
+
 interface CalendarEventModalProps {
   open: boolean;
   onClose: () => void;
@@ -137,7 +167,8 @@ export function CalendarEventModal({
   onDeleted,
   panelClassName,
 }: CalendarEventModalProps) {
-  const isEdit = Boolean(event);
+  const [duplicateMode, setDuplicateMode] = useState(false);
+  const isEdit = Boolean(event) && !duplicateMode;
   const shareableUsers = useMemo(
     () => users.filter((u) => u.id !== currentUserId),
     [users, currentUserId]
@@ -166,6 +197,8 @@ export function CalendarEventModal({
     notifyByEmail: true,
     invoiceBillingEntityId: '',
     invoiceClientEmail: '',
+    invoiceYourReference: '',
+    invoiceDocumentType: 'invoice',
     invoiceLines: [emptyInvoiceLine()] as CalendarInvoiceLineForm[],
     invoiceAutoIssue: true,
     invoiceSendEmail: true,
@@ -188,9 +221,9 @@ export function CalendarEventModal({
     form.eventType === 'invoice' ||
     event?.eventType === 'invoice';
   const isInvoiceEvent = form.eventType === 'invoice';
-  const invoiceProcessed = ['completed', 'processing'].includes(
-    event?.scheduledInvoice?.status ?? ''
-  );
+  const invoiceProcessed =
+    !duplicateMode &&
+    ['completed', 'processing'].includes(event?.scheduledInvoice?.status ?? '');
 
   useEffect(() => {
     if (!open || !workspaceId) return;
@@ -216,6 +249,7 @@ export function CalendarEventModal({
   useEffect(() => {
     if (!open) return;
     setEmailOverride(null);
+    setDuplicateMode(false);
 
     if (event) {
       const eventTimezone =
@@ -261,6 +295,8 @@ export function CalendarEventModal({
         notifyByEmail: hasInvitees(attendeeIds, guestEmails, guestPhones),
         invoiceBillingEntityId: draft?.billingEntityId ?? event.scheduledInvoice?.billingEntityId ?? '',
         invoiceClientEmail: draft?.clientEmail ?? event.scheduledInvoice?.billingEntity?.email ?? '',
+        invoiceYourReference: draft?.yourReference ?? '',
+        invoiceDocumentType: draft?.documentType ?? 'invoice',
         invoiceLines: draft?.lines?.length ? draft.lines : [emptyInvoiceLine()],
         invoiceAutoIssue: draft?.autoIssue ?? true,
         invoiceSendEmail: draft?.sendEmail ?? true,
@@ -295,6 +331,8 @@ export function CalendarEventModal({
         notifyByEmail: true,
         invoiceBillingEntityId: '',
         invoiceClientEmail: '',
+        invoiceYourReference: '',
+        invoiceDocumentType: 'invoice',
         invoiceLines: [emptyInvoiceLine()],
         invoiceAutoIssue: true,
         invoiceSendEmail: true,
@@ -506,6 +544,8 @@ export function CalendarEventModal({
             moloniExemptionReason:
               (line.vatRate ?? 23) === 0 ? line.moloniExemptionReason ?? 'M07' : undefined,
           })),
+        documentType: form.invoiceDocumentType || 'invoice',
+        yourReference: form.invoiceYourReference.trim() || undefined,
         autoIssue: form.invoiceAutoIssue,
         sendEmail: form.invoiceSendEmail,
         notes: form.description || undefined,
@@ -582,7 +622,7 @@ export function CalendarEventModal({
   }
 
   async function handleDelete() {
-    if (!event) return;
+    if (!event || duplicateMode) return;
     setLoading(true);
     const res = await apiFetch(
       API_PATHS.calendar.eventById(event.seriesMasterId ?? event.id),
@@ -599,6 +639,29 @@ export function CalendarEventModal({
     }
   }
 
+  function handleDuplicateInvoice() {
+    if (!isInvoiceEvent || !event) return;
+    const nextStart = suggestDuplicateInvoiceStart(form.start, calendarTimezone);
+    const nextEnd = coerceEndAfterStart(nextStart, form.end, false, calendarTimezone);
+    setDuplicateMode(true);
+    setOriginalStart('');
+    setAttachments([]);
+    setPendingFiles([]);
+    setEmailOverride(null);
+    setError('');
+    setForm((f) => ({
+      ...f,
+      eventType: 'invoice',
+      title: titleWithCopySuffix(f.title),
+      start: nextStart,
+      end: nextEnd,
+      allDay: false,
+      recurrencePreset: 'none',
+      recurrenceUntil: '',
+      invoiceLines: f.invoiceLines.map((line) => ({ ...line })),
+    }));
+  }
+
   const showNotify = hasInvitees(form.attendeeIds, form.guestEmails, form.guestPhones);
   const attachmentEventId = isEdit ? event?.seriesMasterId ?? event?.id ?? null : null;
   const parsedLocation = parseLocation(form.location);
@@ -612,14 +675,27 @@ export function CalendarEventModal({
   const actionFooter = (
     <div className="flex flex-wrap justify-between gap-2">
       {isEdit ? (
-        <button
-          type="button"
-          className="btn-danger"
-          onClick={handleDelete}
-          disabled={loading}
-        >
-          Eliminar
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            className="btn-danger"
+            onClick={handleDelete}
+            disabled={loading}
+          >
+            Eliminar
+          </button>
+          {isInvoiceEvent && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleDuplicateInvoice}
+              disabled={loading}
+              title="Cria um novo evento com os mesmos dados (sem anexos nem fatura emitida)"
+            >
+              Duplicar
+            </button>
+          )}
+        </div>
       ) : (
         <span />
       )}
@@ -638,7 +714,17 @@ export function CalendarEventModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={isEdit ? (isInvoiceEvent ? 'Editar fatura agendada' : 'Editar evento') : isInvoiceEvent ? 'Nova fatura agendada' : 'Novo evento'}
+      title={
+        duplicateMode
+          ? 'Nova fatura agendada (cópia)'
+          : isEdit
+            ? isInvoiceEvent
+              ? 'Editar fatura agendada'
+              : 'Editar evento'
+            : isInvoiceEvent
+              ? 'Nova fatura agendada'
+              : 'Novo evento'
+      }
       panelClassName={panelClassName ? `${panelClassName} max-w-lg` : 'max-w-lg'}
       scrollBody
       footer={actionFooter}
@@ -650,6 +736,12 @@ export function CalendarEventModal({
           </div>
         )}
 
+        {duplicateMode && (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            Cópia nova — ajuste a data e guarde. O evento original e a fatura Moloni não são alterados.
+            Recorrência desligada; anexos anteriores não são copiados.
+          </div>
+        )}
         {showInvoiceType && (
           <div>
             <label className="mb-1 block text-xs font-medium text-slate-600">Tipo de evento</label>
@@ -903,6 +995,10 @@ export function CalendarEventModal({
             }}
             clientEmail={form.invoiceClientEmail}
             onClientEmailChange={(invoiceClientEmail) => setForm((f) => ({ ...f, invoiceClientEmail }))}
+            yourReference={form.invoiceYourReference}
+            onYourReferenceChange={(invoiceYourReference) =>
+              setForm((f) => ({ ...f, invoiceYourReference }))
+            }
             lines={form.invoiceLines}
             onLinesChange={(invoiceLines) => setForm((f) => ({ ...f, invoiceLines }))}
             autoIssue={form.invoiceAutoIssue}
@@ -916,21 +1012,33 @@ export function CalendarEventModal({
             sendEmail={form.invoiceSendEmail}
             onSendEmailChange={(invoiceSendEmail) => setForm((f) => ({ ...f, invoiceSendEmail }))}
             readOnly={invoiceProcessed}
-            statusLabel={scheduledInvoiceStatusLabel(
-              event?.scheduledInvoice?.status,
-              form.invoiceAutoIssue
-            )}
-            errorMessage={event?.scheduledInvoice?.errorMessage ?? null}
-            emailSent={emailOverride?.emailSent ?? event?.scheduledInvoice?.emailSent}
+            statusLabel={
+              duplicateMode
+                ? 'Nova (cópia)'
+                : scheduledInvoiceStatusLabel(
+                    event?.scheduledInvoice?.status,
+                    form.invoiceAutoIssue
+                  )
+            }
+            errorMessage={duplicateMode ? null : (event?.scheduledInvoice?.errorMessage ?? null)}
+            emailSent={
+              duplicateMode
+                ? false
+                : (emailOverride?.emailSent ?? event?.scheduledInvoice?.emailSent)
+            }
             emailSentAt={
-              emailOverride?.emailSentAt ?? event?.scheduledInvoice?.emailSentAt ?? null
+              duplicateMode
+                ? null
+                : (emailOverride?.emailSentAt ?? event?.scheduledInvoice?.emailSentAt ?? null)
             }
             emailErrorMessage={
-              emailOverride
-                ? emailOverride.emailErrorMessage
-                : (event?.scheduledInvoice?.emailErrorMessage ?? null)
+              duplicateMode
+                ? null
+                : emailOverride
+                  ? emailOverride.emailErrorMessage
+                  : (event?.scheduledInvoice?.emailErrorMessage ?? null)
             }
-            scheduledInvoiceId={event?.scheduledInvoice?.id ?? null}
+            scheduledInvoiceId={duplicateMode ? null : (event?.scheduledInvoice?.id ?? null)}
             onEmailResent={({ emailSentAt }) => {
               setEmailOverride({
                 emailSent: true,

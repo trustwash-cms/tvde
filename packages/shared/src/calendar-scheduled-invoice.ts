@@ -27,6 +27,8 @@ export interface CalendarScheduledInvoiceDraft {
   lines: CalendarScheduledInvoiceLine[];
   documentType?: string;
   notes?: string;
+  /** V/ Ref.ª Moloni (documento) — nunca o número DRAFT interno */
+  yourReference?: string;
   autoIssue: boolean;
   sendEmail: boolean;
 }
