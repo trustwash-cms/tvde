@@ -2330,7 +2330,8 @@ model AuditLog {
   userId     String?  @map("user_id") @db.Uuid
   action     String
   entityType String   @map("entity_type")
-  entityId   String?  @map("entity_id") @db.Uuid
+  /** Internal UUID or external id (WHMCS invoice/client, Moloni category, …). */
+  entityId   String?  @map("entity_id") @db.Text
   beforeJson Json?    @map("before_json")
   afterJson  Json?    @map("after_json")
   ipAddress  String?  @map("ip_address")

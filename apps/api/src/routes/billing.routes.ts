@@ -27,6 +27,7 @@ import {
   sendBillingSmtpTestEmail,
   upsertBillingEmailSettings,
 } from '../services/billing-email.service';
+import { parseEmailListInput } from '../services/email.service';
 import { applyRecommendedMoloniDocumentSet } from '../services/moloni-document-set-health.service';
 import {
   archiveBillingEntity,
@@ -493,6 +494,9 @@ export async function billingRoutes(fastify: FastifyInstance) {
         toEmail: body.toEmail,
       });
 
+      const bccNote =
+        result.bcc.length > 0 ? ` (BCC: ${result.bcc.join(', ')})` : '';
+
       await createAuditLog({
         tenantId: invoiceRef.tenantId,
         userId: request.user.sub,
@@ -500,10 +504,19 @@ export async function billingRoutes(fastify: FastifyInstance) {
         entityType: 'invoice',
         entityId: id,
         ipAddress: request.ip,
-        afterJson: { emailSentAt: result.emailSentAt, toEmail: body.toEmail ?? null },
+        afterJson: {
+          emailSentAt: result.emailSentAt,
+          toEmail: result.to,
+          bcc: result.bcc,
+          accepted: result.accepted,
+        },
       });
 
-      return reply.send({ success: true, data: result, message: 'Fatura enviada por email' });
+      return reply.send({
+        success: true,
+        data: result,
+        message: `Fatura enviada por email${bccNote}`,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao enviar email';
       const status =
@@ -1281,7 +1294,7 @@ export async function billingRoutes(fastify: FastifyInstance) {
         action: 'billing.products_imported',
         entityType: 'product_category',
         entityId: String(categoryId),
-        afterJson: data,
+        afterJson: { moloniCategoryId: Number(categoryId), result: data },
         ipAddress: request.ip,
       });
 
@@ -1582,7 +1595,24 @@ export async function billingRoutes(fastify: FastifyInstance) {
           .union([z.string().email(), z.literal(''), z.null()])
           .optional(),
         emailBcc: z
-          .union([z.string().email(), z.literal(''), z.null()])
+          .union([
+            z
+              .string()
+              .max(500)
+              .superRefine((v, ctx) => {
+                if (!v.trim()) return;
+                try {
+                  parseEmailListInput(v);
+                } catch (err) {
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: err instanceof Error ? err.message : 'BCC inválido',
+                  });
+                }
+              }),
+            z.literal(''),
+            z.null(),
+          ])
           .optional(),
         smtpHost: z.string().max(255).nullable().optional(),
         smtpPort: z.coerce.number().int().min(1).max(65535).nullable().optional(),

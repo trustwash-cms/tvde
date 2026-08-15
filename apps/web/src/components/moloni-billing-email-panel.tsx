@@ -277,7 +277,9 @@ export function MoloniBillingEmailPanel({
           </label>
           <input
             className="input"
-            type="email"
+            type="text"
+            inputMode="email"
+            autoComplete="email"
             placeholder="contabilidade@empresa.pt"
             value={form.emailBcc}
             onChange={(e) => setForm({ ...form, emailBcc: e.target.value })}
@@ -285,7 +287,8 @@ export function MoloniBillingEmailPanel({
           />
           <p className="text-xs text-slate-500">
             Se preenchido, todos os emails de faturas (emissão Moloni, autofaturação do calendário e
-            reenvio) incluem este endereço em BCC. O email de teste SMTP também o usa.
+            reenvio) incluem este endereço em BCC. Pode indicar vários emails separados por vírgula.
+            O email de teste SMTP também o usa.
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm text-slate-700 md:col-span-2">

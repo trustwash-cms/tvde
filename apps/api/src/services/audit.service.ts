@@ -11,6 +11,12 @@ interface AuditParams {
   ipAddress?: string | null;
 }
 
+function normalizeEntityId(entityId?: string | null): string | null {
+  if (entityId == null) return null;
+  const trimmed = String(entityId).trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function createAuditLog(params: AuditParams) {
   return prisma.auditLog.create({
     data: {
@@ -18,7 +24,7 @@ export async function createAuditLog(params: AuditParams) {
       userId: params.userId ?? null,
       action: params.action,
       entityType: params.entityType,
-      entityId: params.entityId ?? null,
+      entityId: normalizeEntityId(params.entityId),
       beforeJson: params.beforeJson ? (params.beforeJson as object) : undefined,
       afterJson: params.afterJson ? (params.afterJson as object) : undefined,
       ipAddress: params.ipAddress ?? null,

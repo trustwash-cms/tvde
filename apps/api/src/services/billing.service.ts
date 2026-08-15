@@ -919,7 +919,8 @@ export async function issueInvoiceToMoloni(invoiceId: string, tenantId: string) 
     lines: enrichedLines,
     dueDate: invoice.dueDate?.toISOString(),
     notes: invoice.notes ?? undefined,
-    yourReference: metadata.yourReference ?? invoice.number,
+    // Never send CMS draft numbers (DRAFT-…) as Moloni "V/ Ref.ª" — only user-set labels.
+    yourReference: metadata.yourReference?.trim() || undefined,
     issueDate: metadata.issueDate,
     documentSetId: resolvedDocumentSetId,
     metadata: { ...metadata, documentSetId: resolvedDocumentSetId },
@@ -1088,7 +1089,7 @@ export async function sendInvoiceEmail(
     /* fallback de brand sem nome Moloni */
   }
 
-  await sendBillingInvoiceTemplateEmail({
+  const sendResult = await sendBillingInvoiceTemplateEmail({
     workspaceId: invoice.workspaceId,
     tenantId,
     to,
@@ -1111,11 +1112,18 @@ export async function sendInvoiceEmail(
     },
   });
 
-  return prisma.invoice.update({
+  const updated = await prisma.invoice.update({
     where: { id: invoiceId },
     data: { emailSentAt: new Date() },
     select: { id: true, emailSentAt: true },
   });
+
+  return {
+    ...updated,
+    to,
+    bcc: sendResult.bcc,
+    accepted: sendResult.accepted,
+  };
 }
 
 export async function searchMoloniProducts(workspaceId: string, q?: string) {

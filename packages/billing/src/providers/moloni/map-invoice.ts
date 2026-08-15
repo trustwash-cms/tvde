@@ -56,14 +56,18 @@ export function mapDraftToMoloniInvoice(
     draft.dueDate?.slice(0, 10) ??
     issueDate;
 
+  const yourReference =
+    (draft.yourReference ?? meta.yourReference)?.trim() || undefined;
+  const ourReference = meta.ourReference?.trim() || undefined;
+
   const payload: MoloniInvoicePayload = {
     company_id: options.companyId,
     customer_id: options.customerId,
     document_set_id: draft.documentSetId ?? meta.documentSetId ?? options.documentSetId,
     date: issueDate,
     expiration_date: expirationDate,
-    your_reference: draft.yourReference ?? meta.yourReference ?? '',
-    our_reference: meta.ourReference ?? '',
+    ...(yourReference ? { your_reference: yourReference } : {}),
+    ...(ourReference ? { our_reference: ourReference } : {}),
     notes: draft.notes ?? '',
     status: 1,
     products: draft.lines.map((line) => {

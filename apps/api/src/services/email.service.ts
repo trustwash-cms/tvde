@@ -376,7 +376,13 @@ function createTransport(config: SmtpConnection): Transporter {
   });
 }
 
-export async function sendEmail(input: SendEmailInput): Promise<{ messageId: string; source: string }> {
+export async function sendEmail(input: SendEmailInput): Promise<{
+  messageId: string;
+  source: string;
+  accepted: string[];
+  rejected: string[];
+  bcc: string[];
+}> {
   const smtp = input.smtpOverride ?? (await resolveSmtpConnection(input.tenantId));
   const transport = createTransport(smtp);
   const useSystemCopies = !input.skipDefaultCopies && !input.smtpOverride;
@@ -384,14 +390,21 @@ export async function sendEmail(input: SendEmailInput): Promise<{ messageId: str
     ? await resolveDefaultEmailCopies(input.tenantId)
     : { cc: [] as string[], bcc: [] as string[] };
   const explicitBcc = (Array.isArray(input.bcc) ? input.bcc : input.bcc ? [input.bcc] : [])
-    .map((e) => e.trim())
-    .filter(Boolean);
+    .flatMap((entry) => {
+      try {
+        return parseEmailListInput(entry);
+      } catch {
+        const trimmed = entry.trim();
+        return trimmed ? [trimmed] : [];
+      }
+    });
   const copies = mergeCopyRecipients(
     input.to,
     defaultCopies.cc,
     [...defaultCopies.bcc, ...explicitBcc]
   );
   const fromName = input.fromName ?? smtp.fromName ?? getServerConfig().appName;
+  const bccList = copies.bcc ?? [];
 
   const info = await transport.sendMail({
     from: formatEmailFromAddress(smtp.from, fromName),
@@ -402,7 +415,30 @@ export async function sendEmail(input: SendEmailInput): Promise<{ messageId: str
     attachments: input.attachments,
   });
 
-  return { messageId: info.messageId, source: smtp.source };
+  const accepted = (info.accepted ?? []).map((a: string | { address?: string }) =>
+    typeof a === 'string' ? a : String(a.address ?? a)
+  );
+  const rejected = (info.rejected ?? []).map((a: string | { address?: string }) =>
+    typeof a === 'string' ? a : String(a.address ?? a)
+  );
+  if (accepted.length > 0 && bccList.length > 0) {
+    const acceptedLower = new Set(accepted.map((a: string) => a.toLowerCase()));
+    const missingBcc = bccList.filter((email) => !acceptedLower.has(email.toLowerCase()));
+    if (missingBcc.length > 0) {
+      throw new Error(
+        `Email enviado mas BCC não aceite pelo SMTP: ${missingBcc.join(', ')}. ` +
+          `Verifique o servidor SMTP de facturação.`
+      );
+    }
+  }
+
+  return {
+    messageId: info.messageId,
+    source: smtp.source,
+    accepted,
+    rejected,
+    bcc: bccList,
+  };
 }
 
 export async function getEmailTemplate(

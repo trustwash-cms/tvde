@@ -6,6 +6,7 @@ import {
   resolveSmtpConnection,
   sendEmail,
   renderEmailTemplate,
+  parseEmailListInput,
   type SmtpConnection,
 } from './email.service';
 import { INVOICE_EMAIL_TEMPLATE } from './invoice-email-template';
@@ -158,9 +159,16 @@ export async function upsertBillingEmailSettings(
 }
 
 /** BCC configurado no workspace de facturação (vazio = sem BCC). */
-export async function resolveBillingEmailBcc(workspaceId: string): Promise<string | null> {
+export async function resolveBillingEmailBcc(workspaceId: string): Promise<string[]> {
   const row = await getBillingConnection(workspaceId);
-  return emptyToNull(row?.emailBcc ?? null);
+  const raw = emptyToNull(row?.emailBcc ?? null);
+  if (!raw) return [];
+  try {
+    return parseEmailListInput(raw);
+  } catch {
+    // Valor legado inválido — não bloquear envio da fatura.
+    return [];
+  }
 }
 
 function decryptBillingSmtpPassword(encryptedPassword: string): string {
@@ -292,7 +300,9 @@ export async function sendBillingInvoiceTemplateEmail(input: {
       subject,
       html,
       fromName: brand.fromName,
-      ...(bcc ? { bcc } : {}),
+      ...(bcc.length > 0 ? { bcc } : {}),
+      // Com SMTP de facturação: não misturar CC/BCC do SMTP do sistema,
+      // mas o BCC do workspace (email_bcc) continua a ser passado acima.
       smtpOverride: usingBillingSmtp ? smtp : undefined,
       skipDefaultCopies: usingBillingSmtp,
     });
@@ -322,8 +332,8 @@ export async function sendBillingSmtpTestEmail(input: {
   }
   const brand = await resolveBillingEmailBrand(input.workspaceId, input.tenantId);
   const bcc = await resolveBillingEmailBcc(input.workspaceId);
-  const bccNote = bcc
-    ? `<p>BCC (cópia oculta): <code>${bcc}</code></p>`
+  const bccNote = bcc.length
+    ? `<p>BCC (cópia oculta): <code>${bcc.join(', ')}</code></p>`
     : '<p>BCC: não configurado.</p>';
   return sendEmail({
     tenantId: input.tenantId,
@@ -334,7 +344,7 @@ export async function sendBillingSmtpTestEmail(input: {
 ${bccNote}
 <p>Se recebeu esta mensagem, a configuração está correcta.</p>`,
     fromName: brand.fromName,
-    ...(bcc ? { bcc } : {}),
+    ...(bcc.length > 0 ? { bcc } : {}),
     smtpOverride: smtp,
     skipDefaultCopies: true,
   });

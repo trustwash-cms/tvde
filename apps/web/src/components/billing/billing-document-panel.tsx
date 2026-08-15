@@ -826,11 +826,13 @@ function BillingDocumentPanelInner({ documentType }: { documentType: MoloniDocum
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs text-slate-600">V/ referência</label>
+                <label className="mb-1 block text-xs text-slate-600">V/ Ref.ª</label>
                 <input
                   className="input"
                   value={form.yourReference}
                   onChange={(e) => setForm({ ...form, yourReference: e.target.value })}
+                  placeholder="ex.: Avença Junho"
+                  maxLength={100}
                   disabled={!workspaceId}
                 />
               </div>

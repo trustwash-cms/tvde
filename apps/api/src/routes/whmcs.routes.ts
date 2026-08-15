@@ -416,7 +416,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.client_updated',
         entityType: 'whmcs_client',
         entityId: String(clientId),
-        afterJson: fields as Record<string, unknown>,
+        afterJson: { whmcsClientId: clientId, ...(fields as Record<string, unknown>) },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Cliente actualizado no WHMCS' });
@@ -456,7 +456,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.client_email_sent',
         entityType: 'whmcs_client',
         entityId: String(clientId),
-        afterJson: { subject: body.subject },
+        afterJson: { whmcsClientId: clientId, subject: body.subject },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Email enviado' });
@@ -509,6 +509,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.invoice_email_sent',
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
+        afterJson: { whmcsInvoiceId: invoiceId },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Email de fatura enviado' });
@@ -552,7 +553,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.invoice_mark_paid',
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
-        afterJson: { gateway: body.gateway },
+        afterJson: { whmcsInvoiceId: invoiceId, gateway: body.gateway },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Fatura marcada como paga no WHMCS' });
@@ -583,6 +584,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.invoice_cancelled',
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
+        afterJson: { whmcsInvoiceId: invoiceId },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Fatura cancelada no WHMCS' });
@@ -613,6 +615,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: 'whmcs.invoice_mark_unpaid',
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
+        afterJson: { whmcsInvoiceId: invoiceId },
         ipAddress: request.ip,
       });
       return reply.send({ success: true, data, message: 'Fatura marcada como Unpaid no WHMCS' });
@@ -672,6 +675,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
         afterJson: {
+          whmcsInvoiceId: invoiceId,
           status: body.status,
           lines: body.lines?.length,
           newLines: body.newLines?.length,
@@ -707,7 +711,7 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         action: data.deleted ? 'whmcs.invoice_deleted' : 'whmcs.invoice_cancelled',
         entityType: 'whmcs_invoice',
         entityId: String(invoiceId),
-        afterJson: { fallbackCancelled: data.fallbackCancelled },
+        afterJson: { whmcsInvoiceId: invoiceId, fallbackCancelled: data.fallbackCancelled },
         ipAddress: request.ip,
       });
       return reply.send({
@@ -746,8 +750,12 @@ export async function whmcsRoutes(fastify: FastifyInstance) {
         userId: request.user.sub,
         action: `whmcs.invoice_bulk_${body.action}`,
         entityType: 'whmcs_invoice',
-        entityId: body.invoiceIds.join(','),
-        afterJson: { succeeded: data.succeeded, failed: data.failed },
+        entityId: null,
+        afterJson: {
+          whmcsInvoiceIds: body.invoiceIds,
+          succeeded: data.succeeded,
+          failed: data.failed,
+        },
         ipAddress: request.ip,
       });
       return reply.send({
