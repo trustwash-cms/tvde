@@ -1,4 +1,5 @@
 import { prisma, Prisma } from '@tvde/database';
+import { defaultEstadoPagamentoForTipoDocumento } from '@tvde/shared';
 import { getAdminMgmtSettings } from './admin-mgmt-settings.service';
 import { importAdminMgmtClienteFromSource } from './admin-mgmt-cliente.service';
 
@@ -9,11 +10,6 @@ function mapMoloniDocumentType(documentType: string): string {
   if (n.includes('receipt')) return 'recibo_verde';
   if (n.includes('credit') || n === 'debit_note') return 'nota_credito';
   return 'fatura';
-}
-
-function inferEstadoPagamento(tipoDocumento: string): string {
-  if (tipoDocumento === 'fatura_recibo' || tipoDocumento === 'recibo_verde') return 'pago';
-  return 'pendente';
 }
 
 export async function syncAdminMgmtFromBillingInvoice(invoiceId: string, tenantId: string) {
@@ -78,10 +74,10 @@ export async function syncAdminMgmtFromBillingInvoice(invoiceId: string, tenantI
   if (!cliente) return null;
 
   const tipoDocumento = mapMoloniDocumentType(invoice.documentType);
+  const inferred = defaultEstadoPagamentoForTipoDocumento(tipoDocumento);
+  // When setting is off, keep receipt-like docs as pendente (manual control).
   const estadoPagamento =
-    settings.syncMoloniMarkPaidOnReceipt && inferEstadoPagamento(tipoDocumento) === 'pago'
-      ? 'pago'
-      : inferEstadoPagamento(tipoDocumento);
+    inferred === 'pago' && !settings.syncMoloniMarkPaidOnReceipt ? 'pendente' : inferred;
 
   const dataEmissao = invoice.issuedAt ?? new Date();
   const dataPagamento = estadoPagamento === 'pago' ? dataEmissao : null;

@@ -206,6 +206,17 @@ export function formatAdminMgmtAlertSubject(descricao: string, origemTipo: strin
     : `Alerta de Vencimento ${origem}`;
 }
 
+/** Fatura-recibo / recibo verde are settled on issue — not open AR. */
+export function isAdminMgmtAutoPaidDocumento(tipoDocumento: string): boolean {
+  return tipoDocumento === 'fatura_recibo' || tipoDocumento === 'recibo_verde';
+}
+
+export function defaultEstadoPagamentoForTipoDocumento(
+  tipoDocumento: string
+): 'pago' | 'pendente' {
+  return isAdminMgmtAutoPaidDocumento(tipoDocumento) ? 'pago' : 'pendente';
+}
+
 export function getAdminMgmtFaturaTipoLabel(tipo: string): string {
   const labels: Record<string, string> = {
     fatura: 'Fatura',

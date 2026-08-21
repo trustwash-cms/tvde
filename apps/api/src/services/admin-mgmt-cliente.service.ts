@@ -1,4 +1,5 @@
 import { prisma, Prisma } from '@tvde/database';
+import { isAdminMgmtAutoPaidDocumento } from '@tvde/shared';
 import {
   markAdminMgmtFaturaPending,
 } from './admin-mgmt-fatura.service';
@@ -28,7 +29,11 @@ function startOfDay(date: Date): Date {
   return d;
 }
 
-type FaturaSaldoInput = { valorTotal: Prisma.Decimal | number; estadoPagamento: string };
+type FaturaSaldoInput = {
+  valorTotal: Prisma.Decimal | number;
+  estadoPagamento: string;
+  tipoDocumento: string;
+};
 type LancamentoSaldoInput = { valorAbatimento: Prisma.Decimal | number };
 
 type FaturaParaLiquidacao = {
@@ -38,15 +43,17 @@ type FaturaParaLiquidacao = {
   dataEmissao: Date;
   dataVencimento: Date | null;
   estadoPagamento: string;
+  tipoDocumento: string;
 };
 
-function isFaturaEmAberto(estadoPagamento: string): boolean {
-  return estadoPagamento === 'pendente' || estadoPagamento === 'parcial';
+function isFaturaEmAberto(fatura: { estadoPagamento: string; tipoDocumento: string }): boolean {
+  if (isAdminMgmtAutoPaidDocumento(fatura.tipoDocumento)) return false;
+  return fatura.estadoPagamento === 'pendente' || fatura.estadoPagamento === 'parcial';
 }
 
 function sortFaturasParaLiquidacao(faturas: FaturaParaLiquidacao[], today: Date) {
   return faturas
-    .filter((f) => isFaturaEmAberto(f.estadoPagamento))
+    .filter((f) => isFaturaEmAberto(f))
     .sort((a, b) => {
       const aDue = a.dataVencimento ? startOfDay(a.dataVencimento).getTime() : Number.POSITIVE_INFINITY;
       const bDue = b.dataVencimento ? startOfDay(b.dataVencimento).getTime() : Number.POSITIVE_INFINITY;
@@ -75,6 +82,7 @@ async function computeLiquidacaoPreview(
       dataEmissao: true,
       dataVencimento: true,
       estadoPagamento: true,
+      tipoDocumento: true,
     },
   });
 
@@ -110,7 +118,7 @@ async function computeLiquidacaoPreview(
 
 function sumFaturasEmAberto(faturas: FaturaSaldoInput[]): number {
   return faturas
-    .filter((f) => isFaturaEmAberto(f.estadoPagamento))
+    .filter((f) => isFaturaEmAberto(f))
     .reduce((sum, f) => sum + Number(f.valorTotal), 0);
 }
 
@@ -147,7 +155,7 @@ const lancamentoInclude = {
 function mapCliente(
   row: Prisma.AdminMgmtClienteGetPayload<{
     include: {
-      faturas: { select: { valorTotal: true; estadoPagamento: true } };
+      faturas: { select: { valorTotal: true; estadoPagamento: true; tipoDocumento: true } };
       lancamentos: { select: { valorAbatimento: true } };
     };
   }>
@@ -193,7 +201,7 @@ export async function listAdminMgmtClientes(workspaceId: string, tenantId: strin
   const rows = await prisma.adminMgmtCliente.findMany({
     where: { workspaceId, tenantId },
     include: {
-      faturas: { select: { valorTotal: true, estadoPagamento: true } },
+      faturas: { select: { valorTotal: true, estadoPagamento: true, tipoDocumento: true } },
       lancamentos: { select: { valorAbatimento: true } },
     },
     orderBy: [{ nome: 'asc' }],
@@ -236,7 +244,7 @@ export async function getAdminMgmtCliente(id: string, workspaceId: string, tenan
     .reduce((sum, l) => sum + Number(l.valorAbatimento), 0);
 
   const faturasEmAtraso = row.faturas.filter((f) => {
-    if (f.estadoPagamento !== 'pendente' && f.estadoPagamento !== 'parcial') return false;
+    if (!isFaturaEmAberto(f)) return false;
     if (!f.dataVencimento) return false;
     const due = new Date(f.dataVencimento);
     due.setHours(0, 0, 0, 0);
@@ -272,8 +280,7 @@ export async function getAdminMgmtCliente(id: string, workspaceId: string, tenan
       metodoPagamento: f.metodoPagamento,
       notificarCliente: f.notificarCliente,
       emAtraso:
-        (f.estadoPagamento === 'pendente' || f.estadoPagamento === 'parcial') &&
-        f.dataVencimento
+        isFaturaEmAberto(f) && f.dataVencimento
           ? (() => {
               const due = new Date(f.dataVencimento);
               due.setHours(0, 0, 0, 0);
@@ -499,7 +506,7 @@ export async function createAdminMgmtCliente(
       billingEntityId: input.billingEntityId ? String(input.billingEntityId) : null,
     },
     include: {
-      faturas: { select: { valorTotal: true, estadoPagamento: true } },
+      faturas: { select: { valorTotal: true, estadoPagamento: true, tipoDocumento: true } },
       lancamentos: { select: { valorAbatimento: true } },
     },
   });
@@ -529,7 +536,7 @@ export async function updateAdminMgmtCliente(
       ...(input.morada !== undefined ? { morada: input.morada ? String(input.morada).trim() : null } : {}),
     },
     include: {
-      faturas: { select: { valorTotal: true, estadoPagamento: true } },
+      faturas: { select: { valorTotal: true, estadoPagamento: true, tipoDocumento: true } },
       lancamentos: { select: { valorAbatimento: true } },
     },
   });

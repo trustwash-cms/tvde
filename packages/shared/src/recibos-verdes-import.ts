@@ -36,7 +36,7 @@ export interface RecibosVerdesCsvParsedRow {
   valorLiquido: string;
   valorIva: string;
   valorTotal: string;
-  estadoPagamento: 'pago' | 'pendente';
+  estadoPagamento: 'pago' | 'pendente' | 'cancelado';
   origemExternaId: string;
 }
 
@@ -93,12 +93,21 @@ export function mapSireTipoDocumento(raw: string): string {
   return 'outro';
 }
 
-export function inferEstadoPagamentoFromSire(tipoDocumentoCms: string, situacao: string): 'pago' | 'pendente' {
-  const sit = situacao.trim().toLowerCase();
-  if (sit === 'emitido' && (tipoDocumentoCms === 'fatura_recibo' || tipoDocumentoCms === 'recibo_verde')) {
+export function inferEstadoPagamentoFromSire(
+  tipoDocumentoCms: string,
+  situacao: string
+): 'pago' | 'pendente' | 'cancelado' {
+  const sit = situacao
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (sit.includes('anul') || sit.includes('cancel')) return 'cancelado';
+  // Fatura-recibo / recibo verde are paid on issue; Situação varies (Emitido, Comunicado, …)
+  if (tipoDocumentoCms === 'fatura_recibo' || tipoDocumentoCms === 'recibo_verde') {
     return 'pago';
   }
-  if (sit === 'pago' || sit === 'liquidado') return 'pago';
+  if (sit === 'pago' || sit === 'liquidado' || sit === 'emitido') return 'pago';
   return 'pendente';
 }
 

@@ -5,6 +5,7 @@ import {
   ADMIN_MGMT_FATURA_METODOS_PAGAMENTO,
   ADMIN_MGMT_FATURA_TIPOS,
   ADMIN_MGMT_MAX_FATURA_ANEXOS,
+  defaultEstadoPagamentoForTipoDocumento,
   type AdminMgmtFaturaAnexo,
 } from '@tvde/shared';
 import {
@@ -163,6 +164,9 @@ export async function createAdminMgmtFatura(
     throw new Error('Tipo de documento inválido');
   }
 
+  const estadoPagamento = defaultEstadoPagamentoForTipoDocumento(tipoDocumento);
+  const dataPagamento = estadoPagamento === 'pago' ? dataEmissao : null;
+
   const row = await prisma.adminMgmtFatura.create({
     data: {
       tenantId,
@@ -178,7 +182,9 @@ export async function createAdminMgmtFatura(
       valorIva: parseDecimal(input.valorIva),
       valorTotal,
       moeda: String(input.moeda ?? 'EUR'),
-      estadoPagamento: 'pendente',
+      estadoPagamento,
+      dataPagamento,
+      metodoPagamento: estadoPagamento === 'pago' ? 'conta_corrente' : null,
       notificarCliente: Boolean(input.notificarCliente),
       notas: input.notas ? String(input.notas).trim() : null,
       anexosJson: [],
