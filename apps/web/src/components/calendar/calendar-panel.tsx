@@ -3,7 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Search } from 'lucide-react';
-import { WEB_ROUTES } from '@tvde/shared';
+import {
+  WEB_ROUTES,
+  canAccessDashboardArea,
+  DEFAULT_CALENDAR_TIMEZONE,
+  formatDateTimeLocal,
+  parseCalendarOccurrenceId,
+  type Role,
+} from '@tvde/shared';
 import ptLocale from '@fullcalendar/core/locales/pt';
 import FullCalendar from '@fullcalendar/react';
 import dayGridPlugin from '@fullcalendar/daygrid';
@@ -17,12 +24,6 @@ import type {
   EventInput,
 } from '@fullcalendar/core';
 import type { DateClickArg, EventResizeDoneArg } from '@fullcalendar/interaction';
-import type { Role } from '@tvde/shared';
-import {
-  DEFAULT_CALENDAR_TIMEZONE,
-  formatDateTimeLocal,
-  parseCalendarOccurrenceId,
-} from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { buildCalendarEventContent } from '@/components/calendar/calendar-event-content';
 import { getTimeGreeting, greetingFirstName } from '@/components/calendar/calendar-greeting';
@@ -65,6 +66,7 @@ export default function CalendarPanel() {
   const [currentUserEmail, setCurrentUserEmail] = useState('');
   const [currentUserFullName, setCurrentUserFullName] = useState<string | null>(null);
   const [currentUserUsername, setCurrentUserUsername] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<Role | null>(null);
   const [selectedDate, setSelectedDate] = useState(() => startOfDay(new Date()));
   const [searchQuery, setSearchQuery] = useState('');
   const [gridHeight, setGridHeight] = useState(520);
@@ -187,6 +189,7 @@ export default function CalendarPanel() {
       if (res.data) {
         setCurrentUserFullName(res.data.fullName ?? null);
         setCurrentUserUsername(res.data.username ?? null);
+        setCurrentUserRole(res.data.role);
       }
     });
   }, []);
@@ -385,8 +388,18 @@ export default function CalendarPanel() {
 
       {workspaceId && calendars.length === 0 && (
         <div className="calendar-pro-empty shrink-0">
-          Sem calendários neste workspace.{' '}
-          <Link href={WEB_ROUTES.dashboard.settings.calendar}>Criar em Configurações → Calendário</Link>
+          {currentUserRole && canAccessDashboardArea(currentUserRole, 'settings') ? (
+            <>
+              Sem calendários neste workspace.{' '}
+              <Link href={WEB_ROUTES.dashboard.settings.calendar}>
+                Criar em Configurações → Calendário
+              </Link>
+            </>
+          ) : (
+            <>
+              Ainda não tem calendário. Se o problema continuar, contacte o gestor da frota.
+            </>
+          )}
         </div>
       )}
 
@@ -476,6 +489,7 @@ export default function CalendarPanel() {
         calendars={calendars}
         users={users}
         currentUserId={currentUserId}
+        currentUserRole={currentUserRole}
         workspaceId={workspaceId}
         event={editingEvent}
         initialRange={selectRange}

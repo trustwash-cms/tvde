@@ -11,6 +11,7 @@ export {
   canAccessDashboardArea,
   canAccessClientsDashboard,
   canAccessDriverSelfService,
+  canCreateCalendarScheduledInvoice,
 } from './permissions';
 export {
   REMOVED_MODULE_KEYS,

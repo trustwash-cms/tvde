@@ -5,13 +5,16 @@ import {
   buildRecurrenceRule,
   CALENDAR_INVOICE_RECURRENCE_OPTIONS,
   CALENDAR_RECURRENCE_OPTIONS,
+  canCreateCalendarScheduledInvoice,
   DEFAULT_CALENDAR_TIMEZONE,
   formatTimezoneLabel,
+  isDriverRole,
   isStartInPast,
   minStartDateTimeLocal,
   parseRecurrencePreset,
   type CalendarEventType,
   type CalendarRecurrencePreset,
+  type Role,
 } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
@@ -146,6 +149,7 @@ interface CalendarEventModalProps {
   calendars: CalendarRecord[];
   users: CalendarUser[];
   currentUserId: string | null;
+  currentUserRole?: Role | null;
   workspaceId: string | null;
   event?: CalendarEventRecord | null;
   initialRange?: { start: Date; end: Date; allDay: boolean } | null;
@@ -160,6 +164,7 @@ export function CalendarEventModal({
   calendars,
   users,
   currentUserId,
+  currentUserRole = null,
   workspaceId,
   event,
   initialRange,
@@ -169,9 +174,10 @@ export function CalendarEventModal({
 }: CalendarEventModalProps) {
   const [duplicateMode, setDuplicateMode] = useState(false);
   const isEdit = Boolean(event) && !duplicateMode;
+  const isDriver = currentUserRole != null && isDriverRole(currentUserRole);
   const shareableUsers = useMemo(
-    () => users.filter((u) => u.id !== currentUserId),
-    [users, currentUserId]
+    () => (isDriver ? [] : users.filter((u) => u.id !== currentUserId)),
+    [users, currentUserId, isDriver]
   );
 
   const [error, setError] = useState('');
@@ -216,17 +222,24 @@ export function CalendarEventModal({
     [calendars, form.calendarId]
   );
   const calendarTimezone = selectedCalendar?.timezone ?? DEFAULT_CALENDAR_TIMEZONE;
+  const canUseScheduledInvoice =
+    currentUserRole != null && canCreateCalendarScheduledInvoice(currentUserRole);
   const showInvoiceType =
-    Boolean(invoiceFeature?.enabled && invoiceFeature.billing.canEnable) ||
-    form.eventType === 'invoice' ||
-    event?.eventType === 'invoice';
+    canUseScheduledInvoice &&
+    (Boolean(invoiceFeature?.enabled && invoiceFeature.billing.canEnable) ||
+      form.eventType === 'invoice' ||
+      event?.eventType === 'invoice');
   const isInvoiceEvent = form.eventType === 'invoice';
   const invoiceProcessed =
     !duplicateMode &&
     ['completed', 'processing'].includes(event?.scheduledInvoice?.status ?? '');
 
   useEffect(() => {
-    if (!open || !workspaceId) return;
+    if (!open || !workspaceId || !canUseScheduledInvoice) {
+      setInvoiceFeature(null);
+      setBillingEntities([]);
+      return;
+    }
     apiFetch<ScheduledInvoiceFeatureSettings>(
       withWorkspaceQuery(API_PATHS.calendar.scheduledInvoiceSettings, workspaceId),
       {},
@@ -244,7 +257,7 @@ export function CalendarEventModal({
     ).then((res) => {
       if (res.data) setBillingEntities(res.data);
     });
-  }, [open, workspaceId]);
+  }, [open, workspaceId, canUseScheduledInvoice]);
 
   useEffect(() => {
     if (!open) return;

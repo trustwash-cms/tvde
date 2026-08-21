@@ -89,7 +89,7 @@ export function GuestContactChips({
   }
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-2 focus-within:border-[var(--color-primary)] focus-within:ring-1 focus-within:ring-[var(--color-primary)]">
+    <div className="guest-contact-chips rounded-lg border border-slate-200 bg-white p-2 text-slate-900 focus-within:border-[var(--color-primary)] focus-within:ring-1 focus-within:ring-[var(--color-primary)]">
       <div className="flex flex-wrap gap-1.5">
         {emails.map((email) => (
           <span
@@ -136,7 +136,7 @@ export function GuestContactChips({
           spellCheck={false}
           data-1p-ignore
           data-lpignore="true"
-          className="min-w-[10rem] flex-1 border-0 bg-transparent py-1 text-sm outline-none placeholder:text-slate-400"
+          className="min-w-[10rem] flex-1 border-0 bg-transparent py-1 text-sm text-slate-900 caret-slate-900 outline-none placeholder:text-slate-500"
           placeholder={emails.length + phones.length === 0 ? placeholder : 'Adicionar…'}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -146,7 +146,7 @@ export function GuestContactChips({
           }}
         />
       </div>
-      <p className="mt-1.5 text-[11px] text-slate-400">
+      <p className="mt-1.5 text-[11px] text-slate-500">
         Enter ou vírgula · aceita email ou telefone (+351…)
       </p>
     </div>

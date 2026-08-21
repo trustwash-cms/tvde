@@ -176,12 +176,57 @@ function serializeEvent<
   };
 }
 
+/** Default personal calendar for motoristas who cannot access Configurações. */
+export const DEFAULT_PERSONAL_CALENDAR_NAME = 'O meu calendário';
+
+/**
+ * Idempotent: if the user owns no calendar in this workspace, create a private default.
+ * Returns the new calendar, or null when one already exists.
+ */
+export async function ensureDefaultPersonalCalendar(
+  userId: string,
+  tenantId: string,
+  workspaceId: string,
+  opts?: { name?: string }
+) {
+  const ownedCount = await prisma.calendar.count({
+    where: { ownerUserId: userId, workspaceId, tenantId },
+  });
+  if (ownedCount > 0) return null;
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { fullName: true, username: true },
+  });
+  const name =
+    opts?.name?.trim() ||
+    user?.fullName?.trim() ||
+    DEFAULT_PERSONAL_CALENDAR_NAME;
+
+  return createCalendar(userId, tenantId, workspaceId, {
+    name,
+    isDefault: true,
+    visibility: 'private',
+  });
+}
+
 export async function listCalendars(
   userId: string,
   workspaceId: string,
-  tenantId: string
+  tenantId: string,
+  opts?: { ensureDefaultForDriver?: boolean }
 ) {
-  const ids = await listVisibleCalendarIds(userId, workspaceId, tenantId);
+  let ids = await listVisibleCalendarIds(userId, workspaceId, tenantId);
+
+  if (ids.length === 0 && opts?.ensureDefaultForDriver) {
+    try {
+      await ensureDefaultPersonalCalendar(userId, tenantId, workspaceId);
+      ids = await listVisibleCalendarIds(userId, workspaceId, tenantId);
+    } catch {
+      // Listing must not fail if auto-create fails; empty state handles UX.
+    }
+  }
+
   if (ids.length === 0) return [];
 
   return prisma.calendar.findMany({

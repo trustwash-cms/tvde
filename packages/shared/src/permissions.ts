@@ -96,3 +96,11 @@ export function canAccessClientsDashboard(actor: Role): boolean {
 export function canAccessDriverSelfService(actor: Role): boolean {
   return isDriverRole(actor);
 }
+
+/**
+ * Eventos «Fatura agendada» no calendário — gestores/staff (não motoristas).
+ * A feature também depende de autofaturação activa + Moloni no workspace.
+ */
+export function canCreateCalendarScheduledInvoice(actor: Role): boolean {
+  return !isDriverRole(actor);
+}

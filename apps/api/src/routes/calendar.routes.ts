@@ -47,7 +47,12 @@ import {
   buildMapPreviewImageUrl,
   resolveCoordinatesForMap,
 } from '../services/calendar/calendar-location-format';
-import { hasMinRole } from '@tvde/shared';
+import {
+  canCreateCalendarScheduledInvoice,
+  hasMinRole,
+  isDriverRole,
+  type Role,
+} from '@tvde/shared';
 
 const visibilitySchema = z.enum(['private', 'workspace', 'shared']);
 const memberRoleSchema = z.enum(['owner', 'editor', 'viewer']);
@@ -182,7 +187,11 @@ export async function calendarRoutes(fastify: FastifyInstance) {
       (request.query as { workspaceId?: string }).workspaceId
     );
 
-    const data = await listCalendars(request.user.sub, workspaceId, tenantId);
+    // Motoristas cannot open Configurações → auto-create personal calendar if none.
+    const ensureDefaultForDriver = isDriverRole(request.user.role as Role);
+    const data = await listCalendars(request.user.sub, workspaceId, tenantId, {
+      ensureDefaultForDriver,
+    });
     return reply.send({ success: true, data });
   });
 
@@ -410,6 +419,16 @@ export async function calendarRoutes(fastify: FastifyInstance) {
       })
       .parse(request.body);
 
+    if (
+      (body.eventType === 'invoice' || body.scheduledInvoice) &&
+      !canCreateCalendarScheduledInvoice(request.user.role as Role)
+    ) {
+      return reply.status(403).send({
+        success: false,
+        error: 'Sem permissão para criar fatura agendada',
+      });
+    }
+
     const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
@@ -516,6 +535,16 @@ export async function calendarRoutes(fastify: FastifyInstance) {
         scheduledInvoice: scheduledInvoiceSchema.optional(),
       })
       .parse(request.body);
+
+    if (
+      (body.eventType === 'invoice' || body.scheduledInvoice) &&
+      !canCreateCalendarScheduledInvoice(request.user.role as Role)
+    ) {
+      return reply.status(403).send({
+        success: false,
+        error: 'Sem permissão para fatura agendada',
+      });
+    }
 
     const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(fastify, request.user);
 

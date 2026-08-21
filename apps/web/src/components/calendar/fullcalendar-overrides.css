@@ -550,6 +550,26 @@
   color: #64748b;
 }
 
+/* Guest chip field: match .input (avoid white bg + inherited light text) */
+.calendar-pro-modal .guest-contact-chips {
+  border-color: rgba(148, 163, 184, 0.25);
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.calendar-pro-modal .guest-contact-chips input {
+  color: #e2e8f0;
+  caret-color: #e2e8f0;
+}
+
+.calendar-pro-modal .guest-contact-chips input::placeholder {
+  color: #64748b;
+}
+
+.calendar-pro-modal .guest-contact-chips .text-slate-500 {
+  color: #64748b !important;
+}
+
 .calendar-pro-modal .input:focus,
 .calendar-pro-modal select:focus,
 .calendar-pro-modal textarea:focus {
