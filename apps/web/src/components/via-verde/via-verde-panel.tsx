@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Trash2, Upload, X } from 'lucide-react';
 import {
   VIA_VERDE_PAGE_SIZE,
@@ -43,8 +43,11 @@ export function ViaVerdePanel() {
   const [filteredCount, setFilteredCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [importResult, setImportResult] = useState<ViaVerdeImportResult | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [licensePlate, setLicensePlate] = useState('');
@@ -112,6 +115,40 @@ export function ViaVerdePanel() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, applied]);
+
+  const selectableIds = useMemo(
+    () => (canManage ? items.filter((item) => !item.isPaid).map((item) => item.id) : []),
+    [canManage, items]
+  );
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
   function applyFilters() {
     setPage(1);
     setApplied({
@@ -154,6 +191,8 @@ export function ViaVerdePanel() {
 
   async function markPaid(id: string, isPaid: boolean) {
     setBusyId(id);
+    setError('');
+    setSuccess('');
     const res = await apiFetch<ViaVerdeMovementItem>(
       API_PATHS.viaVerde.movementPaid(id),
       {
@@ -167,6 +206,41 @@ export function ViaVerdePanel() {
       setError(res.error ?? (isPaid ? 'Falha ao marcar como pago' : 'Falha ao desmarcar'));
       return;
     }
+    if (isPaid) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+    await loadData();
+  }
+
+  async function bulkMarkPaid() {
+    if (!canManage || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 100);
+    const ok = await confirm({
+      title: 'Marcar como pago',
+      message: `Marcar ${ids.length} movimento(s) como pago(s)?`,
+      confirmLabel: 'Marcar como pago',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<{ updated: number; requested: number }>(
+      API_PATHS.viaVerde.movementsBulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSuccess(`${res.data?.updated ?? 0} movimento(s) marcado(s) como pago(s)`);
+    setSelectedIds(new Set());
     await loadData();
   }
 
@@ -337,11 +411,46 @@ export function ViaVerdePanel() {
         ) : null}
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
+
+        {canManage && selectedCount > 0 ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="text-sm font-medium text-slate-700">{selectedCount} seleccionada(s)</p>
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+              disabled={bulkBusy || loading}
+              onClick={() => void bulkMarkPaid()}
+            >
+              <Check size={13} />
+              Marcar como pago
+            </button>
+            <button
+              type="button"
+              className="text-xs text-slate-500 hover:text-slate-700"
+              disabled={bulkBusy}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Limpar selecção
+            </button>
+          </div>
+        ) : null}
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
+                {canManage ? (
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={pageAllSelected}
+                      onChange={toggleSelectAllVisible}
+                      disabled={selectableIds.length === 0 || bulkBusy}
+                      aria-label="Seleccionar movimentos pendentes visíveis"
+                    />
+                  </th>
+                ) : null}
                 <th className="px-4 py-3">Matrícula</th>
                 <th className="px-4 py-3">Data entrada</th>
                 <th className="px-4 py-3">Data cobrança</th>
@@ -358,6 +467,21 @@ export function ViaVerdePanel() {
                   key={item.id}
                   className={`border-t ${item.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/60'}`}
                 >
+                  {canManage ? (
+                    <td className="px-4 py-3">
+                      {!item.isPaid ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(item.id)}
+                          onChange={() => toggleRowSelection(item.id)}
+                          disabled={bulkBusy}
+                          aria-label={`Seleccionar movimento ${item.licensePlate}`}
+                        />
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                  ) : null}
                   <td className="px-4 py-3 font-medium">{item.licensePlate}</td>
                   <td className="px-4 py-3">{formatDateTime(item.entryDate)}</td>
                   <td className="px-4 py-3">{formatDate(item.systemEntryDate)}</td>
@@ -383,7 +507,7 @@ export function ViaVerdePanel() {
                             type="button"
                             className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
                             title="Marcar como pago"
-                            disabled={busyId === item.id}
+                            disabled={busyId === item.id || bulkBusy}
                             onClick={() => void markPaid(item.id, true)}
                           >
                             <Check size={16} />
@@ -393,7 +517,7 @@ export function ViaVerdePanel() {
                             type="button"
                             className="rounded p-1 text-slate-600 hover:bg-slate-100"
                             title="Desmarcar pago"
-                            disabled={busyId === item.id}
+                            disabled={busyId === item.id || bulkBusy}
                             onClick={() => void markPaid(item.id, false)}
                           >
                             <X size={16} />
@@ -403,7 +527,7 @@ export function ViaVerdePanel() {
                           type="button"
                           className="rounded p-1 text-red-700 hover:bg-red-100"
                           title="Eliminar"
-                          disabled={busyId === item.id}
+                          disabled={busyId === item.id || bulkBusy}
                           onClick={() => void removeMovement(item.id)}
                         >
                           <Trash2 size={16} />
@@ -415,7 +539,7 @@ export function ViaVerdePanel() {
               ))}
               {!loading && !items.length ? (
                 <tr>
-                  <td colSpan={canManage ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={canManage ? 9 : 7} className="px-4 py-8 text-center text-slate-400">
                     Sem movimentos — importe um ficheiro CSV Via Verde.
                   </td>
                 </tr>

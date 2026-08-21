@@ -194,6 +194,22 @@ export async function markViaVerdeMovementPaid(
   return mapMovement(updated);
 }
 
+export async function bulkMarkViaVerdeMovementsPaid(
+  db: PrismaClient,
+  tenantId: string,
+  ids: string[]
+) {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) throw new Error('Seleccione pelo menos um movimento');
+
+  const result = await db.viaVerdeMovement.updateMany({
+    where: { tenantId, id: { in: unique }, isPaid: false },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+
+  return { updated: result.count, requested: unique.length };
+}
+
 export async function deleteViaVerdeMovement(
   db: PrismaClient,
   tenantId: string,

@@ -326,6 +326,17 @@ export {
   currentYearMonthOptions,
 } from './month-filter';
 export {
+  getYearWeekStart,
+  getWeeksInYear,
+  getWeekRange,
+  getWeekNumber,
+  shiftWeek,
+  getLisbonCalendarDate,
+  getCurrentWeek,
+  parseWeekQuery,
+  formatWeekDate,
+} from './week-number';
+export {
   SPREADSHEET_IMPORT_EXTENSIONS,
   cellToImportString,
   normalizeSpreadsheetRows,

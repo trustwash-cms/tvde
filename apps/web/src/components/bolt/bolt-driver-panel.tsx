@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { currentMonthKey } from '@tvde/shared';
+import { currentMonthKey, getCurrentWeek, shiftWeek } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { MonthTotalCard } from '@/components/month-total-card';
+import { WeekTotalCard } from '@/components/week-total-card';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 
@@ -11,6 +12,11 @@ interface Dashboard {
   ordersCount: number;
   monthTotal: string;
   totalRevenue: string;
+  weekNumber?: number;
+  weekYear?: number;
+  weekTotal?: string;
+  weekStart?: string;
+  weekEnd?: string;
 }
 
 interface OrderItem {
@@ -48,13 +54,19 @@ export function BoltDriverPanel() {
   const [total, setTotal] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+  const [selectedWeek, setSelectedWeek] = useState(getCurrentWeek);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
     const token = getStoredToken();
+    const dashQs = new URLSearchParams({
+      month: selectedMonth,
+      weekYear: String(selectedWeek.year),
+      week: String(selectedWeek.week),
+    });
     const dashUrl = withWorkspaceQuery(
-      `${API_PATHS.bolt.dashboard}?month=${encodeURIComponent(selectedMonth)}`,
+      `${API_PATHS.bolt.dashboard}?${dashQs.toString()}`,
       workspaceId
     );
     const ordersBase = withWorkspaceQuery(API_PATHS.bolt.orders, workspaceId);
@@ -73,7 +85,7 @@ export function BoltDriverPanel() {
     }
     if (!dash.success) setError(dash.error ?? 'Erro ao carregar Bolt');
     else setError('');
-  }, [workspaceId, selectedMonth, page]);
+  }, [workspaceId, selectedMonth, selectedWeek, page]);
 
   useEffect(() => {
     void load();
@@ -82,10 +94,15 @@ export function BoltDriverPanel() {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <div className="card">
-          <p className="text-sm text-slate-500">Corridas (total)</p>
-          <p className="text-2xl font-bold">{dashboard?.ordersCount ?? 0}</p>
-        </div>
+        <WeekTotalCard
+          weekNumber={dashboard?.weekNumber ?? selectedWeek.week}
+          weekYear={dashboard?.weekYear ?? selectedWeek.year}
+          value={formatMoney(dashboard?.weekTotal ?? 0)}
+          weekStart={dashboard?.weekStart}
+          weekEnd={dashboard?.weekEnd}
+          onPrevWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, -1))}
+          onNextWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, 1))}
+        />
         <MonthTotalCard
           selectId="bolt-month"
           label="Valor do mês (Pago a si)"

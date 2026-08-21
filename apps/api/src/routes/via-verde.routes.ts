@@ -7,6 +7,7 @@ import {
   getViaVerdeDashboard,
   listViaVerdeMovements,
   markViaVerdeMovementPaid,
+  bulkMarkViaVerdeMovementsPaid,
 } from '../services/via-verde.service';
 import { importViaVerdeCsv } from '../services/via-verde-import.service';
 
@@ -134,6 +135,36 @@ export async function viaVerdeRoutes(fastify: FastifyInstance) {
         success: true,
         data,
         message: isPaid ? 'Movimento marcado como pago' : 'Movimento marcado como não pago',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro';
+      return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.post('/via-verde/movements/bulk/mark-paid', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const body = z
+        .object({ ids: z.array(z.string().uuid()).min(1).max(100) })
+        .parse(request.body ?? {});
+      const data = await bulkMarkViaVerdeMovementsPaid(fastify.db, tenantId, body.ids);
+
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'via_verde.bulk_mark_paid',
+        entityType: 'via_verde_movement',
+        afterJson: data,
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        data,
+        message: `${data.updated} movimento(s) marcado(s) como pago(s)`,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro';

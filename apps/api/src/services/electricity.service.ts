@@ -1,7 +1,10 @@
 import type { Prisma, PrismaClient } from '@tvde/database';
 import {
   ELECTRICITY_PAGE_SIZE,
+  formatWeekDate,
   getMonthUtcRange,
+  getWeekRange,
+  parseWeekQuery,
   type ElectricityChargeItem,
   type ElectricityDashboardStats,
 } from '@tvde/shared';
@@ -108,12 +111,16 @@ export async function getElectricityDashboard(
   tenantId: string,
   actorId: string,
   actorRole: Role,
-  monthKey?: string
+  monthKey?: string,
+  weekYear?: string | number,
+  week?: string | number
 ): Promise<ElectricityDashboardStats> {
   const baseWhere = await buildWhere(db, tenantId, actorId, actorRole, {});
   const { start, endExclusive, key } = getMonthUtcRange(monthKey);
+  const { year: wYear, week: wNum } = parseWeekQuery(weekYear, week);
+  const weekRange = getWeekRange(wYear, wNum);
 
-  const [totalCharges, unpaidAgg, monthAgg] = await Promise.all([
+  const [totalCharges, unpaidAgg, monthAgg, weekAgg] = await Promise.all([
     db.electricityCharge.count({ where: baseWhere }),
     db.electricityCharge.aggregate({
       where: { ...baseWhere, isPaid: false },
@@ -127,6 +134,13 @@ export async function getElectricityDashboard(
       },
       _sum: { totalWithVat: true },
     }),
+    db.electricityCharge.aggregate({
+      where: {
+        ...baseWhere,
+        chargeDate: { gte: weekRange.start, lt: weekRange.endExclusive },
+      },
+      _sum: { totalWithVat: true },
+    }),
   ]);
 
   return {
@@ -135,6 +149,11 @@ export async function getElectricityDashboard(
     unpaidTotal: decimalToString(unpaidAgg._sum.totalWithVat ?? 0),
     monthTotal: decimalToString(monthAgg._sum.totalWithVat ?? 0),
     selectedMonth: key,
+    weekNumber: weekRange.week,
+    weekYear: weekRange.year,
+    weekTotal: decimalToString(weekAgg._sum.totalWithVat ?? 0),
+    weekStart: formatWeekDate(weekRange.start),
+    weekEnd: formatWeekDate(weekRange.end),
   };
 }
 
@@ -196,6 +215,22 @@ export async function markElectricityChargePaid(
   });
 
   return mapCharge(updated);
+}
+
+export async function bulkMarkElectricityChargesPaid(
+  db: PrismaClient,
+  tenantId: string,
+  ids: string[]
+) {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) throw new Error('Seleccione pelo menos um carregamento');
+
+  const result = await db.electricityCharge.updateMany({
+    where: { tenantId, id: { in: unique }, isPaid: false },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+
+  return { updated: result.count, requested: unique.length };
 }
 
 export async function deleteElectricityCharge(

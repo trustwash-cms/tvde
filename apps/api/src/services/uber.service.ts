@@ -1,5 +1,12 @@
 import type { Prisma, PrismaClient } from '@tvde/database';
-import { getMonthUtcRange, parseUberCsv, type Role } from '@tvde/shared';
+import {
+  formatWeekDate,
+  getMonthUtcRange,
+  getWeekRange,
+  parseUberCsv,
+  parseWeekQuery,
+  type Role,
+} from '@tvde/shared';
 import { getDriverFleetScope } from './user-vehicle-matching.service';
 
 function decimalToString(value: Prisma.Decimal | number | string): string {
@@ -10,6 +17,11 @@ export interface UberDashboardStats {
   totalPayments: number;
   monthTotal: string;
   selectedMonth: string;
+  weekNumber: number;
+  weekYear: number;
+  weekTotal: string;
+  weekStart: string;
+  weekEnd: string;
 }
 
 export interface UberPaymentItem {
@@ -59,15 +71,26 @@ export async function getUberDashboard(
   tenantId: string,
   actorId: string,
   actorRole: Role,
-  monthKey?: string
+  monthKey?: string,
+  weekYear?: string | number,
+  week?: string | number
 ): Promise<UberDashboardStats> {
   const { start, endExclusive, key } = getMonthUtcRange(monthKey);
+  const { year: wYear, week: wNum } = parseWeekQuery(weekYear, week);
+  const weekRange = getWeekRange(wYear, wNum);
   const baseWhere = await buildUberWhere(db, tenantId, actorId, actorRole);
 
-  const [totalPayments, monthAgg] = await Promise.all([
+  const [totalPayments, monthAgg, weekAgg] = await Promise.all([
     db.uberPayment.count({ where: baseWhere }),
     db.uberPayment.aggregate({
       where: { ...baseWhere, reportDate: { gte: start, lt: endExclusive } },
+      _sum: { amount: true },
+    }),
+    db.uberPayment.aggregate({
+      where: {
+        ...baseWhere,
+        reportDate: { gte: weekRange.start, lt: weekRange.endExclusive },
+      },
       _sum: { amount: true },
     }),
   ]);
@@ -76,6 +99,11 @@ export async function getUberDashboard(
     totalPayments,
     monthTotal: decimalToString(monthAgg._sum.amount ?? 0),
     selectedMonth: key,
+    weekNumber: weekRange.week,
+    weekYear: weekRange.year,
+    weekTotal: decimalToString(weekAgg._sum.amount ?? 0),
+    weekStart: formatWeekDate(weekRange.start),
+    weekEnd: formatWeekDate(weekRange.end),
   };
 }
 
@@ -150,4 +178,35 @@ export async function importUberCsvText(
     }
   }
   return { total: rows.length, inserted, skipped, failed: errors.length, errors };
+}
+
+export async function markUberPaymentPaid(db: PrismaClient, tenantId: string, id: string) {
+  const existing = await db.uberPayment.findFirst({ where: { id, tenantId } });
+  if (!existing) throw new Error('Pagamento não encontrado');
+  const updated = await db.uberPayment.update({
+    where: { id },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+  return {
+    id: updated.id,
+    driverUuid: updated.driverUuid,
+    firstName: updated.firstName,
+    lastName: updated.lastName,
+    reportDate: updated.reportDate.toISOString(),
+    amount: decimalToString(updated.amount),
+    description: updated.description,
+    isPaid: updated.isPaid,
+  } satisfies UberPaymentItem;
+}
+
+export async function bulkMarkUberPaymentsPaid(db: PrismaClient, tenantId: string, ids: string[]) {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) throw new Error('Seleccione pelo menos um pagamento');
+
+  const result = await db.uberPayment.updateMany({
+    where: { tenantId, id: { in: unique }, isPaid: false },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+
+  return { updated: result.count, requested: unique.length };
 }

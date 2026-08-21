@@ -6,7 +6,7 @@ import {
   type BoltSyncCounters,
   type BoltSyncType,
 } from '@tvde/bolt';
-import { getMonthUtcRange } from '@tvde/shared';
+import { formatWeekDate, getMonthUtcRange, getWeekRange, parseWeekQuery } from '@tvde/shared';
 import { textOr } from './search.service';
 import { ensureBoltClient, getBoltConnection } from './bolt-connection.service';
 
@@ -393,7 +393,12 @@ export async function listBoltOrders(
 
 export async function getBoltDashboardStats(
   workspaceId: string,
-  options?: { driverUuids?: string[]; monthKey?: string }
+  options?: {
+    driverUuids?: string[];
+    monthKey?: string;
+    weekYear?: string | number;
+    week?: string | number;
+  }
 ) {
   const driverFilter =
     options?.driverUuids != null
@@ -403,8 +408,10 @@ export async function getBoltDashboardStats(
       : undefined;
   const billableWhere = boltBillableOrderWhere(workspaceId, driverFilter);
   const { start, endExclusive, key } = getMonthUtcRange(options?.monthKey);
+  const { year: wYear, week: wNum } = parseWeekQuery(options?.weekYear, options?.week);
+  const weekRange = getWeekRange(wYear, wNum);
 
-  const [ordersCount, driversCount, vehiclesCount, revenueAgg, monthAgg, recentOrders] =
+  const [ordersCount, driversCount, vehiclesCount, revenueAgg, monthAgg, weekAgg, recentOrders] =
     await Promise.all([
       prisma.boltOrder.count({ where: billableWhere }),
       options?.driverUuids != null
@@ -428,6 +435,13 @@ export async function getBoltDashboardStats(
         where: {
           ...billableWhere,
           orderCreatedTimestamp: { gte: start, lt: endExclusive },
+        },
+        _sum: { ridePrice: true },
+      }),
+      prisma.boltOrder.aggregate({
+        where: {
+          ...billableWhere,
+          orderCreatedTimestamp: { gte: weekRange.start, lt: weekRange.endExclusive },
         },
         _sum: { ridePrice: true },
       }),
@@ -456,10 +470,39 @@ export async function getBoltDashboardStats(
     totalRevenue: revenueAgg._sum.ridePrice?.toString() ?? '0',
     monthTotal: monthAgg._sum.ridePrice?.toString() ?? '0',
     selectedMonth: key,
+    weekNumber: weekRange.week,
+    weekYear: weekRange.year,
+    weekTotal: weekAgg._sum.ridePrice?.toString() ?? '0',
+    weekStart: formatWeekDate(weekRange.start),
+    weekEnd: formatWeekDate(weekRange.end),
     recentOrders: recentOrders.map((o) => ({
       ...o,
       ridePrice: o.ridePrice?.toString() ?? null,
       stopsCount: o._count.stops,
     })),
   };
+}
+
+export async function markBoltOrderPaid(workspaceId: string, orderId: string) {
+  const existing = await prisma.boltOrder.findFirst({
+    where: { id: orderId, workspaceId },
+  });
+  if (!existing) throw new Error('Pedido não encontrado');
+
+  return prisma.boltOrder.update({
+    where: { id: orderId },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+}
+
+export async function bulkMarkBoltOrdersPaid(workspaceId: string, ids: string[]) {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) throw new Error('Seleccione pelo menos um pedido');
+
+  const result = await prisma.boltOrder.updateMany({
+    where: { workspaceId, id: { in: unique }, isPaid: false },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+
+  return { updated: result.count, requested: unique.length };
 }

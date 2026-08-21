@@ -1,10 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Trash2, Upload } from 'lucide-react';
-import { COMBUSTIVEL_PAGE_SIZE, currentMonthKey, hasMinRole, type Role } from '@tvde/shared';
+import {
+  COMBUSTIVEL_PAGE_SIZE,
+  currentMonthKey,
+  getCurrentWeek,
+  hasMinRole,
+  isDriverRole,
+  shiftWeek,
+  type Role,
+} from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { MonthTotalCard } from '@/components/month-total-card';
+import { WeekTotalCard } from '@/components/week-total-card';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
@@ -13,6 +22,11 @@ interface Dashboard {
   unpaidCount: number;
   unpaidTotal: string;
   monthTotal: string;
+  weekNumber?: number;
+  weekYear?: number;
+  weekTotal?: string;
+  weekStart?: string;
+  weekEnd?: string;
 }
 
 interface Item {
@@ -55,16 +69,26 @@ export function CombustivelPanel() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+  const [selectedWeek, setSelectedWeek] = useState(getCurrentWeek);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [importMsg, setImportMsg] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const canManage = role ? hasMinRole(role, 'superadmin') : false;
+  const driverMode = role != null && isDriverRole(role);
 
   const load = useCallback(async () => {
     const token = getStoredToken();
+    const dashQs = new URLSearchParams({ month: selectedMonth });
+    if (driverMode) {
+      dashQs.set('weekYear', String(selectedWeek.year));
+      dashQs.set('week', String(selectedWeek.week));
+    }
     const [dash, list] = await Promise.all([
-      apiFetch<Dashboard>(`${API_PATHS.combustivel.dashboard}?month=${selectedMonth}`, {}, token),
+      apiFetch<Dashboard>(`${API_PATHS.combustivel.dashboard}?${dashQs.toString()}`, {}, token),
       apiFetch<{ items: Item[]; total: number; totalPages: number }>(
         `${API_PATHS.combustivel.transactions}?page=${page}`,
         {},
@@ -78,7 +102,8 @@ export function CombustivelPanel() {
       setTotalPages(list.data.totalPages ?? 1);
     }
     if (!dash.success) setError(dash.error ?? 'Erro');
-  }, [selectedMonth, page]);
+    else if (!list.success) setError(list.error ?? 'Erro');
+  }, [selectedMonth, page, driverMode, selectedWeek]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -90,7 +115,43 @@ export function CombustivelPanel() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page]);
+
+  const selectableIds = useMemo(
+    () => (canManage ? items.filter((item) => !item.isPaid).map((item) => item.id) : []),
+    [canManage, items]
+  );
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
   async function handleImport(file: File) {
+    setError('');
+    setSuccess('');
     const form = new FormData();
     form.append('file', file);
     const token = getStoredToken();
@@ -112,6 +173,7 @@ export function CombustivelPanel() {
   async function markPaid(id: string) {
     setBusyId(id);
     setError('');
+    setSuccess('');
     const res = await apiFetch<Item>(
       API_PATHS.combustivel.transactionPaid(id),
       { method: 'PATCH' },
@@ -122,6 +184,39 @@ export function CombustivelPanel() {
       setError(res.error ?? 'Falha ao marcar como pago');
       return;
     }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    await load();
+  }
+
+  async function bulkMarkPaid() {
+    if (!canManage || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 100);
+    const ok = await confirm({
+      title: 'Marcar como pago',
+      message: `Marcar ${ids.length} abastecimento(s) como pago(s)?`,
+      confirmLabel: 'Marcar como pago',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<{ updated: number; requested: number }>(
+      API_PATHS.combustivel.transactionsBulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSuccess(`${res.data?.updated ?? 0} abastecimento(s) marcado(s) como pago(s)`);
+    setSelectedIds(new Set());
     await load();
   }
 
@@ -146,6 +241,11 @@ export function CombustivelPanel() {
       setError(res.error ?? 'Falha ao eliminar');
       return;
     }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     await load();
   }
 
@@ -162,10 +262,22 @@ export function CombustivelPanel() {
           </p>
           <p className="text-xs text-slate-500">{dashboard?.unpaidCount ?? 0} abastecimento(s) não pago(s)</p>
         </div>
-        <div className="card">
-          <p className="text-sm text-slate-500">Abastecimentos</p>
-          <p className="text-2xl font-bold text-slate-900">{dashboard?.totalTransactions ?? 0}</p>
-        </div>
+        {driverMode ? (
+          <WeekTotalCard
+            weekNumber={dashboard?.weekNumber ?? selectedWeek.week}
+            weekYear={dashboard?.weekYear ?? selectedWeek.year}
+            value={formatMoney(dashboard?.weekTotal ?? 0)}
+            weekStart={dashboard?.weekStart}
+            weekEnd={dashboard?.weekEnd}
+            onPrevWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, -1))}
+            onNextWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, 1))}
+          />
+        ) : (
+          <div className="card">
+            <p className="text-sm text-slate-500">Abastecimentos</p>
+            <p className="text-2xl font-bold text-slate-900">{dashboard?.totalTransactions ?? 0}</p>
+          </div>
+        )}
         <MonthTotalCard
           selectId="combustivel-month"
           value={formatMoney(dashboard?.monthTotal ?? 0)}
@@ -210,11 +322,46 @@ export function CombustivelPanel() {
         />
       ) : null}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
+
+      {canManage && selectedCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+          <p className="text-sm font-medium text-slate-700">{selectedCount} seleccionada(s)</p>
+          <button
+            type="button"
+            className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+            disabled={bulkBusy}
+            onClick={() => void bulkMarkPaid()}
+          >
+            <Check size={13} />
+            Marcar como pago
+          </button>
+          <button
+            type="button"
+            className="text-xs text-slate-500 hover:text-slate-700"
+            disabled={bulkBusy}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Limpar selecção
+          </button>
+        </div>
+      ) : null}
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-slate-500">
             <tr>
+              {canManage ? (
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={pageAllSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={selectableIds.length === 0 || bulkBusy}
+                    aria-label="Seleccionar abastecimentos pendentes visíveis"
+                  />
+                </th>
+              ) : null}
               <th className="px-4 py-3">Data</th>
               <th className="px-4 py-3">Posto</th>
               <th className="px-4 py-3">Cartão</th>
@@ -231,6 +378,21 @@ export function CombustivelPanel() {
                 key={item.id}
                 className={`border-t ${item.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/60'}`}
               >
+                {canManage ? (
+                  <td className="px-4 py-3">
+                    {!item.isPaid ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={() => toggleRowSelection(item.id)}
+                        disabled={bulkBusy}
+                        aria-label={`Seleccionar abastecimento ${item.cardNumber ?? item.id}`}
+                      />
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                ) : null}
                 <td className="px-4 py-3 whitespace-nowrap">{formatDateTime(item.chargeDate)}</td>
                 <td className="px-4 py-3">{item.station ?? '—'}</td>
                 <td className="px-4 py-3">{item.cardNumber ?? '—'}</td>
@@ -256,7 +418,7 @@ export function CombustivelPanel() {
                           type="button"
                           className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
                           title="Marcar como pago"
-                          disabled={busyId === item.id}
+                          disabled={busyId === item.id || bulkBusy}
                           onClick={() => void markPaid(item.id)}
                         >
                           <Check size={16} />
@@ -266,7 +428,7 @@ export function CombustivelPanel() {
                         type="button"
                         className="rounded p-1 text-red-700 hover:bg-red-100"
                         title="Eliminar"
-                        disabled={busyId === item.id}
+                        disabled={busyId === item.id || bulkBusy}
                         onClick={() => void removeTransaction(item.id)}
                       >
                         <Trash2 size={16} />
@@ -278,7 +440,7 @@ export function CombustivelPanel() {
             ))}
             {!items.length ? (
               <tr>
-                <td colSpan={canManage ? 8 : 7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={canManage ? 9 : 7} className="px-4 py-8 text-center text-slate-400">
                   Sem abastecimentos — importe XLSX frota PRIO ou sincronize a conta MyPRIO.
                 </td>
               </tr>

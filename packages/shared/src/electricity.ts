@@ -45,6 +45,11 @@ export interface ElectricityDashboardStats {
   unpaidTotal: string;
   monthTotal: string;
   selectedMonth: string;
+  weekNumber: number;
+  weekYear: number;
+  weekTotal: string;
+  weekStart: string;
+  weekEnd: string;
 }
 
 export interface ElectricityImportRowError {

@@ -1,5 +1,12 @@
 import type { Prisma, PrismaClient } from '@tvde/database';
-import { COMBUSTIVEL_PAGE_SIZE, getMonthUtcRange, type Role } from '@tvde/shared';
+import {
+  COMBUSTIVEL_PAGE_SIZE,
+  formatWeekDate,
+  getMonthUtcRange,
+  getWeekRange,
+  parseWeekQuery,
+  type Role,
+} from '@tvde/shared';
 import { getDriverFleetScope } from './user-vehicle-matching.service';
 import { parseCombustivelRows } from '@tvde/shared';
 import { parseImportFileToRows, validateImportFilename } from '../lib/spreadsheet-import';
@@ -14,6 +21,11 @@ export interface CombustivelDashboardStats {
   unpaidTotal: string;
   monthTotal: string;
   selectedMonth: string;
+  weekNumber: number;
+  weekYear: number;
+  weekTotal: string;
+  weekStart: string;
+  weekEnd: string;
 }
 
 export interface CombustivelTransactionItem {
@@ -65,12 +77,16 @@ export async function getCombustivelDashboard(
   tenantId: string,
   actorId: string,
   actorRole: Role,
-  monthKey?: string
+  monthKey?: string,
+  weekYear?: string | number,
+  week?: string | number
 ): Promise<CombustivelDashboardStats> {
   const baseWhere = await buildWhere(db, tenantId, actorId, actorRole, {});
   const { start, endExclusive, key } = getMonthUtcRange(monthKey);
+  const { year: wYear, week: wNum } = parseWeekQuery(weekYear, week);
+  const weekRange = getWeekRange(wYear, wNum);
 
-  const [totalTransactions, unpaidAgg, monthAgg] = await Promise.all([
+  const [totalTransactions, unpaidAgg, monthAgg, weekAgg] = await Promise.all([
     db.fuelTransaction.count({ where: baseWhere }),
     db.fuelTransaction.aggregate({
       where: { ...baseWhere, isPaid: false },
@@ -81,6 +97,13 @@ export async function getCombustivelDashboard(
       where: { ...baseWhere, chargeDate: { gte: start, lt: endExclusive } },
       _sum: { totalWithVat: true },
     }),
+    db.fuelTransaction.aggregate({
+      where: {
+        ...baseWhere,
+        chargeDate: { gte: weekRange.start, lt: weekRange.endExclusive },
+      },
+      _sum: { totalWithVat: true },
+    }),
   ]);
 
   return {
@@ -89,6 +112,11 @@ export async function getCombustivelDashboard(
     unpaidTotal: decimalToString(unpaidAgg._sum.totalWithVat ?? 0),
     monthTotal: decimalToString(monthAgg._sum.totalWithVat ?? 0),
     selectedMonth: key,
+    weekNumber: weekRange.week,
+    weekYear: weekRange.year,
+    weekTotal: decimalToString(weekAgg._sum.totalWithVat ?? 0),
+    weekStart: formatWeekDate(weekRange.start),
+    weekEnd: formatWeekDate(weekRange.end),
   };
 }
 
@@ -183,6 +211,18 @@ export async function markCombustivelPaid(db: PrismaClient, tenantId: string, id
     where: { id },
     data: { isPaid: true, paymentDate: new Date() },
   });
+}
+
+export async function bulkMarkCombustivelPaid(db: PrismaClient, tenantId: string, ids: string[]) {
+  const unique = [...new Set(ids)].slice(0, 100);
+  if (!unique.length) throw new Error('Seleccione pelo menos um abastecimento');
+
+  const result = await db.fuelTransaction.updateMany({
+    where: { tenantId, id: { in: unique }, isPaid: false },
+    data: { isPaid: true, paymentDate: new Date() },
+  });
+
+  return { updated: result.count, requested: unique.length };
 }
 
 export async function deleteCombustivelTransaction(db: PrismaClient, tenantId: string, id: string) {

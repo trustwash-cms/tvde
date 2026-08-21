@@ -1,15 +1,29 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Upload } from 'lucide-react';
-import { currentMonthKey, hasMinRole, type Role } from '@tvde/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Upload } from 'lucide-react';
+import {
+  currentMonthKey,
+  getCurrentWeek,
+  hasMinRole,
+  isDriverRole,
+  shiftWeek,
+  type Role,
+} from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { MonthTotalCard } from '@/components/month-total-card';
+import { WeekTotalCard } from '@/components/week-total-card';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface Dashboard {
   totalPayments: number;
   monthTotal: string;
+  weekNumber?: number;
+  weekYear?: number;
+  weekTotal?: string;
+  weekStart?: string;
+  weekEnd?: string;
 }
 
 interface Item {
@@ -32,6 +46,7 @@ function formatMoney(value: string | number) {
 }
 
 export function UberPanel() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [role, setRole] = useState<Role | null>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [items, setItems] = useState<Item[]>([]);
@@ -39,15 +54,26 @@ export function UberPanel() {
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+  const [selectedWeek, setSelectedWeek] = useState(getCurrentWeek);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [importMsg, setImportMsg] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const canManage = role ? hasMinRole(role, 'superadmin') : false;
+  const driverMode = role != null && isDriverRole(role);
 
   const load = useCallback(async () => {
     const token = getStoredToken();
+    const dashQs = new URLSearchParams({ month: selectedMonth });
+    if (driverMode) {
+      dashQs.set('weekYear', String(selectedWeek.year));
+      dashQs.set('week', String(selectedWeek.week));
+    }
     const [dash, list] = await Promise.all([
-      apiFetch<Dashboard>(`${API_PATHS.uber.dashboard}?month=${selectedMonth}`, {}, token),
+      apiFetch<Dashboard>(`${API_PATHS.uber.dashboard}?${dashQs.toString()}`, {}, token),
       apiFetch<{ items: Item[]; total: number; totalPages: number; page: number }>(
         `${API_PATHS.uber.payments}?page=${page}`,
         {},
@@ -61,7 +87,7 @@ export function UberPanel() {
       setTotalPages(list.data.totalPages ?? 1);
     }
     if (!dash.success) setError(dash.error ?? 'Erro');
-  }, [selectedMonth, page]);
+  }, [selectedMonth, page, driverMode, selectedWeek]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -73,7 +99,43 @@ export function UberPanel() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page]);
+
+  const selectableIds = useMemo(
+    () => (canManage ? items.filter((item) => !item.isPaid).map((item) => item.id) : []),
+    [canManage, items]
+  );
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
   async function handleImport(file: File) {
+    setError('');
+    setSuccess('');
     const form = new FormData();
     form.append('file', file);
     const token = getStoredToken();
@@ -92,13 +154,76 @@ export function UberPanel() {
     await load();
   }
 
+  async function markPaid(id: string) {
+    setBusyId(id);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<Item>(
+      API_PATHS.uber.paymentPaid(id),
+      { method: 'PATCH' },
+      getStoredToken()
+    );
+    setBusyId(null);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    await load();
+  }
+
+  async function bulkMarkPaid() {
+    if (!canManage || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 100);
+    const ok = await confirm({
+      title: 'Marcar como pago',
+      message: `Marcar ${ids.length} pagamento(s) como pago(s)?`,
+      confirmLabel: 'Marcar como pago',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<{ updated: number; requested: number }>(
+      API_PATHS.uber.paymentsBulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSuccess(`${res.data?.updated ?? 0} pagamento(s) marcado(s) como pago(s)`);
+    setSelectedIds(new Set());
+    await load();
+  }
+
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <div className="card">
-          <p className="text-sm text-slate-500">Pagamentos (total)</p>
-          <p className="text-2xl font-bold">{dashboard?.totalPayments ?? 0}</p>
-        </div>
+        {driverMode ? (
+          <WeekTotalCard
+            weekNumber={dashboard?.weekNumber ?? selectedWeek.week}
+            weekYear={dashboard?.weekYear ?? selectedWeek.year}
+            value={formatMoney(dashboard?.weekTotal ?? 0)}
+            weekStart={dashboard?.weekStart}
+            weekEnd={dashboard?.weekEnd}
+            onPrevWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, -1))}
+            onNextWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, 1))}
+          />
+        ) : (
+          <div className="card">
+            <p className="text-sm text-slate-500">Pagamentos (total)</p>
+            <p className="text-2xl font-bold">{dashboard?.totalPayments ?? 0}</p>
+          </div>
+        )}
         <MonthTotalCard
           selectId="uber-month"
           label="Valor do mês (Pago a si)"
@@ -138,11 +263,46 @@ export function UberPanel() {
         />
       ) : null}
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
+
+      {canManage && selectedCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+          <p className="text-sm font-medium text-slate-700">{selectedCount} seleccionada(s)</p>
+          <button
+            type="button"
+            className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+            disabled={bulkBusy}
+            onClick={() => void bulkMarkPaid()}
+          >
+            <Check size={13} />
+            Marcar como pago
+          </button>
+          <button
+            type="button"
+            className="text-xs text-slate-500 hover:text-slate-700"
+            disabled={bulkBusy}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Limpar selecção
+          </button>
+        </div>
+      ) : null}
 
       <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-slate-500">
             <tr>
+              {canManage ? (
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={pageAllSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={selectableIds.length === 0 || bulkBusy}
+                    aria-label="Seleccionar pagamentos pendentes visíveis"
+                  />
+                </th>
+              ) : null}
               <th className="px-4 py-3">Data</th>
               <th className="px-4 py-3">UUID</th>
               <th className="px-4 py-3">Nome</th>
@@ -150,6 +310,7 @@ export function UberPanel() {
               <th className="px-4 py-3">Valor</th>
               <th className="px-4 py-3">Pago</th>
               <th className="px-4 py-3">Descrição</th>
+              {canManage ? <th className="px-4 py-3">Ações</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -158,6 +319,21 @@ export function UberPanel() {
                 key={item.id}
                 className={`border-t ${item.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/40'}`}
               >
+                {canManage ? (
+                  <td className="px-4 py-3">
+                    {!item.isPaid ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(item.id)}
+                        onChange={() => toggleRowSelection(item.id)}
+                        disabled={bulkBusy}
+                        aria-label={`Seleccionar pagamento ${item.driverUuid}`}
+                      />
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                ) : null}
                 <td className="px-4 py-3">{new Date(item.reportDate).toLocaleString('pt-PT')}</td>
                 <td className="px-4 py-3 font-mono text-xs">{item.driverUuid.slice(0, 8)}…</td>
                 <td className="px-4 py-3">{item.firstName ?? '—'}</td>
@@ -175,11 +351,26 @@ export function UberPanel() {
                   </span>
                 </td>
                 <td className="px-4 py-3">{item.description ?? '—'}</td>
+                {canManage ? (
+                  <td className="px-4 py-3">
+                    {!item.isPaid ? (
+                      <button
+                        type="button"
+                        className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
+                        title="Marcar como pago"
+                        disabled={busyId === item.id || bulkBusy}
+                        onClick={() => void markPaid(item.id)}
+                      >
+                        <Check size={16} />
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
               </tr>
             ))}
             {!items.length ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={canManage ? 9 : 7} className="px-4 py-8 text-center text-slate-400">
                   Sem pagamentos — importe CSV (UUID, Nome, Apelido, Data, Valor) ou sincronize a conta Uber.
                 </td>
               </tr>

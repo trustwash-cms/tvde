@@ -7,6 +7,7 @@ import {
   importCombustivelFile,
   listCombustivelTransactions,
   markCombustivelPaid,
+  bulkMarkCombustivelPaid,
 } from '../services/combustivel.service';
 
 function requireTenant(request: { user: { tenantId: string | null } }) {
@@ -22,13 +23,21 @@ export async function combustivelRoutes(fastify: FastifyInstance) {
   fastify.get('/combustivel/dashboard', async (request, reply) => {
     try {
       const tenantId = requireTenant(request);
-      const query = z.object({ month: z.string().optional() }).parse(request.query);
+      const query = z
+        .object({
+          month: z.string().optional(),
+          weekYear: z.coerce.number().optional(),
+          week: z.coerce.number().optional(),
+        })
+        .parse(request.query);
       const data = await getCombustivelDashboard(
         fastify.db,
         tenantId,
         request.user.sub,
         request.user.role as Role,
-        query.month
+        query.month,
+        query.weekYear,
+        query.week
       );
       return reply.send({ success: true, data });
     } catch (err) {
@@ -85,6 +94,25 @@ export async function combustivelRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       await markCombustivelPaid(fastify.db, tenantId, id);
       return reply.send({ success: true, message: 'Marcado como pago' });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/combustivel/transactions/bulk/mark-paid', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const body = z
+        .object({ ids: z.array(z.string().uuid()).min(1).max(100) })
+        .parse(request.body ?? {});
+      const data = await bulkMarkCombustivelPaid(fastify.db, tenantId, body.ids);
+      return reply.send({
+        success: true,
+        data,
+        message: `${data.updated} abastecimento(s) marcado(s) como pago(s)`,
+      });
     } catch (err) {
       return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
     }

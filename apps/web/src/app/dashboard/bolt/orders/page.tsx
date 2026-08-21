@@ -1,11 +1,14 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { Check } from 'lucide-react';
+import { hasMinRole, type Role } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { withSearchQuery } from '@/lib/list-search';
 import { ListPagination } from '@/components/list-pagination';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface BoltOrderRow {
   id: string;
@@ -30,12 +33,21 @@ interface OrdersResponse {
 const PAGE_SIZE = 50;
 
 export default function BoltOrdersPage() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const { workspaceId } = useWorkspaceContext();
+  const [role, setRole] = useState<Role | null>(null);
   const [rows, setRows] = useState<BoltOrderRow[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  const canManage = role ? hasMinRole(role, 'superadmin') : false;
 
   const load = useCallback(
     async (search: string, pageIndex: number) => {
@@ -47,20 +59,63 @@ export default function BoltOrdersPage() {
         setRows(res.data.items);
         setTotal(res.data.total);
         setPage(res.data.page);
+      } else if (res.error) {
+        setError(res.error);
       }
     },
     [workspaceId]
   );
 
   useEffect(() => {
+    apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
+      if (res.data?.role) setRole(res.data.role);
+    });
+  }, []);
+
+  useEffect(() => {
     setPage(0);
     setAppliedQ('');
     setQ('');
+    setSelectedIds(new Set());
   }, [workspaceId]);
 
   useEffect(() => {
     void load(appliedQ, page);
   }, [workspaceId, page, appliedQ, load]);
+
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, appliedQ]);
+
+  const selectableIds = useMemo(
+    () => (canManage ? rows.filter((row) => !row.isPaid).map((row) => row.id) : []),
+    [canManage, rows]
+  );
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
 
   function onFilter(e: FormEvent) {
     e.preventDefault();
@@ -74,8 +129,60 @@ export default function BoltOrdersPage() {
     setPage(0);
   }
 
+  async function markPaid(id: string) {
+    if (!workspaceId) return;
+    setBusyId(id);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch(
+      API_PATHS.bolt.orderPaid(id),
+      { method: 'PATCH', body: JSON.stringify({ workspaceId }) },
+      getStoredToken()
+    );
+    setBusyId(null);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    await load(appliedQ, page);
+  }
+
+  async function bulkMarkPaid() {
+    if (!canManage || !workspaceId || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 100);
+    const ok = await confirm({
+      title: 'Marcar como pago',
+      message: `Marcar ${ids.length} pedido(s) como pago(s)?`,
+      confirmLabel: 'Marcar como pago',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<{ updated: number; requested: number }>(
+      API_PATHS.bolt.ordersBulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ workspaceId, ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSuccess(`${res.data?.updated ?? 0} pedido(s) marcado(s) como pago(s)`);
+    setSelectedIds(new Set());
+    await load(appliedQ, page);
+  }
+
   return (
     <div className="space-y-6">
+      {confirmDialog}
       <p className="text-sm text-slate-500">
         Corridas <strong>finished</strong> com valor. Coluna «Preço» ={' '}
         <code className="text-xs">ride_price</code> da Fleet API (valor da corrida para a
@@ -100,10 +207,47 @@ export default function BoltOrdersPage() {
         </button>
       </form>
 
+      {error ? <p className="text-sm text-red-600">{error}</p> : null}
+      {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
+
+      {canManage && selectedCount > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+          <p className="text-sm font-medium text-slate-700">{selectedCount} seleccionada(s)</p>
+          <button
+            type="button"
+            className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+            disabled={bulkBusy}
+            onClick={() => void bulkMarkPaid()}
+          >
+            <Check size={13} />
+            Marcar como pago
+          </button>
+          <button
+            type="button"
+            className="text-xs text-slate-500 hover:text-slate-700"
+            disabled={bulkBusy}
+            onClick={() => setSelectedIds(new Set())}
+          >
+            Limpar selecção
+          </button>
+        </div>
+      ) : null}
+
       <div className="card overflow-hidden p-0">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-left text-slate-500">
             <tr>
+              {canManage ? (
+                <th className="w-10 px-6 py-3">
+                  <input
+                    type="checkbox"
+                    checked={pageAllSelected}
+                    onChange={toggleSelectAllVisible}
+                    disabled={selectableIds.length === 0 || bulkBusy}
+                    aria-label="Seleccionar pedidos pendentes visíveis"
+                  />
+                </th>
+              ) : null}
               <th className="px-6 py-3">Empresa</th>
               <th className="px-6 py-3">Motorista</th>
               <th className="px-6 py-3">Status</th>
@@ -112,6 +256,7 @@ export default function BoltOrdersPage() {
               <th className="px-6 py-3">Pago</th>
               <th className="px-6 py-3">Data</th>
               <th className="px-6 py-3">Paradas</th>
+              {canManage ? <th className="px-6 py-3">Ações</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -120,6 +265,21 @@ export default function BoltOrdersPage() {
                 key={row.id}
                 className={`border-t ${row.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/40'}`}
               >
+                {canManage ? (
+                  <td className="px-6 py-3">
+                    {!row.isPaid ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(row.id)}
+                        onChange={() => toggleRowSelection(row.id)}
+                        disabled={bulkBusy}
+                        aria-label={`Seleccionar pedido ${row.orderReference}`}
+                      />
+                    ) : (
+                      <span className="text-slate-300">—</span>
+                    )}
+                  </td>
+                ) : null}
                 <td className="px-6 py-3">{row.boltCompanyId ?? '—'}</td>
                 <td className="px-6 py-3">{row.driverName ?? '—'}</td>
                 <td className="px-6 py-3">
@@ -148,11 +308,26 @@ export default function BoltOrdersPage() {
                     {row.stopsCount} parada(s)
                   </span>
                 </td>
+                {canManage ? (
+                  <td className="px-6 py-3">
+                    {!row.isPaid ? (
+                      <button
+                        type="button"
+                        className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
+                        title="Marcar como pago"
+                        disabled={busyId === row.id || bulkBusy}
+                        onClick={() => void markPaid(row.id)}
+                      >
+                        <Check size={16} />
+                      </button>
+                    ) : null}
+                  </td>
+                ) : null}
               </tr>
             ))}
             {!rows.length && (
               <tr>
-                <td colSpan={8} className="px-6 py-8 text-center text-slate-400">
+                <td colSpan={canManage ? 10 : 8} className="px-6 py-8 text-center text-slate-400">
                   Sem corridas concluídas com valor
                 </td>
               </tr>

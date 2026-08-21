@@ -546,6 +546,8 @@ export const API_PATHS = {
     dashboard: '/bolt/dashboard',
     orders: '/bolt/orders',
     orderById: (id: string) => `/bolt/orders/${id}`,
+    orderPaid: (id: string) => `/bolt/orders/${id}/paid`,
+    ordersBulkMarkPaid: '/bolt/orders/bulk/mark-paid',
     drivers: '/bolt/drivers',
     vehicles: '/bolt/vehicles',
     syncLogs: '/bolt/sync-logs',
@@ -556,6 +558,7 @@ export const API_PATHS = {
     movements: '/via-verde/movements',
     import: '/via-verde/import',
     movementPaid: (id: string) => `/via-verde/movements/${id}/paid`,
+    movementsBulkMarkPaid: '/via-verde/movements/bulk/mark-paid',
     movementById: (id: string) => `/via-verde/movements/${id}`,
   },
   electricity: {
@@ -563,6 +566,7 @@ export const API_PATHS = {
     charges: '/electricity/charges',
     import: '/electricity/import',
     chargePaid: (id: string) => `/electricity/charges/${id}/paid`,
+    chargesBulkMarkPaid: '/electricity/charges/bulk/mark-paid',
     chargeById: (id: string) => `/electricity/charges/${id}`,
   },
   combustivel: {
@@ -570,6 +574,7 @@ export const API_PATHS = {
     transactions: '/combustivel/transactions',
     import: '/combustivel/import',
     transactionPaid: (id: string) => `/combustivel/transactions/${id}/paid`,
+    transactionsBulkMarkPaid: '/combustivel/transactions/bulk/mark-paid',
     transactionById: (id: string) => `/combustivel/transactions/${id}`,
   },
   uber: {
@@ -577,6 +582,7 @@ export const API_PATHS = {
     payments: '/uber/payments',
     import: '/uber/import',
     paymentPaid: (id: string) => `/uber/payments/${id}/paid`,
+    paymentsBulkMarkPaid: '/uber/payments/bulk/mark-paid',
     paymentById: (id: string) => `/uber/payments/${id}`,
   },
   pagamentos: {

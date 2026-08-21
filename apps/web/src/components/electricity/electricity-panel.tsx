@@ -1,11 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Trash2, Upload } from 'lucide-react';
 import {
   ELECTRICITY_PAGE_SIZE,
   currentMonthKey,
+  getCurrentWeek,
   hasMinRole,
+  isDriverRole,
+  shiftWeek,
   type ElectricityChargeItem,
   type ElectricityDashboardStats,
   type ElectricityImportResult,
@@ -13,6 +16,7 @@ import {
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { MonthTotalCard } from '@/components/month-total-card';
+import { WeekTotalCard } from '@/components/week-total-card';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
@@ -36,8 +40,11 @@ export function ElectricityPanel() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [importResult, setImportResult] = useState<ElectricityImportResult | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState('');
@@ -45,8 +52,10 @@ export function ElectricityPanel() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
+  const [selectedWeek, setSelectedWeek] = useState(getCurrentWeek);
 
   const canManage = role ? hasMinRole(role, 'superadmin') : false;
+  const driverMode = role != null && isDriverRole(role);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -61,6 +70,10 @@ export function ElectricityPanel() {
     params.set('pageSize', String(ELECTRICITY_PAGE_SIZE));
 
     const dashParams = new URLSearchParams({ month: selectedMonth });
+    if (driverMode) {
+      dashParams.set('weekYear', String(selectedWeek.year));
+      dashParams.set('week', String(selectedWeek.week));
+    }
 
     const [dashRes, listRes] = await Promise.all([
       apiFetch<ElectricityDashboardStats>(
@@ -87,7 +100,7 @@ export function ElectricityPanel() {
     setDashboard(dashRes.data ?? null);
     setItems(listRes.data?.items ?? []);
     setTotalPages(listRes.data?.totalPages ?? 1);
-  }, [cardNumber, endDate, name, page, selectedMonth, startDate]);
+  }, [cardNumber, driverMode, endDate, name, page, selectedMonth, selectedWeek, startDate]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -99,8 +112,43 @@ export function ElectricityPanel() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [page, name, cardNumber, startDate, endDate]);
+
+  const selectableIds = useMemo(
+    () => (canManage ? items.filter((item) => !item.isPaid).map((item) => item.id) : []),
+    [canManage, items]
+  );
+  const selectedCount = selectedIds.size;
+  const pageAllSelected =
+    selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+
+  function toggleRowSelection(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleSelectAllVisible() {
+    setSelectedIds((prev) => {
+      if (pageAllSelected) {
+        const next = new Set(prev);
+        selectableIds.forEach((id) => next.delete(id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
   async function handleImport(file: File) {
     setError('');
+    setSuccess('');
     setImportResult(null);
     const formData = new FormData();
     formData.append('file', file);
@@ -124,6 +172,8 @@ export function ElectricityPanel() {
 
   async function markPaid(id: string) {
     setBusyId(id);
+    setError('');
+    setSuccess('');
     const res = await apiFetch<ElectricityChargeItem>(
       API_PATHS.electricity.chargePaid(id),
       { method: 'PATCH' },
@@ -134,6 +184,39 @@ export function ElectricityPanel() {
       setError(res.error ?? 'Falha ao marcar como pago');
       return;
     }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    await loadData();
+  }
+
+  async function bulkMarkPaid() {
+    if (!canManage || selectedIds.size === 0) return;
+    const ids = Array.from(selectedIds).slice(0, 100);
+    const ok = await confirm({
+      title: 'Marcar como pago',
+      message: `Marcar ${ids.length} carregamento(s) como pago(s)?`,
+      confirmLabel: 'Marcar como pago',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    setError('');
+    setSuccess('');
+    const res = await apiFetch<{ updated: number; requested: number }>(
+      API_PATHS.electricity.chargesBulkMarkPaid,
+      { method: 'POST', body: JSON.stringify({ ids }) },
+      getStoredToken()
+    );
+    setBulkBusy(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao marcar como pago');
+      return;
+    }
+    setSuccess(`${res.data?.updated ?? 0} carregamento(s) marcado(s) como pago(s)`);
+    setSelectedIds(new Set());
     await loadData();
   }
 
@@ -157,6 +240,11 @@ export function ElectricityPanel() {
       setError(res.error ?? 'Falha ao eliminar');
       return;
     }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     await loadData();
   }
 
@@ -173,10 +261,22 @@ export function ElectricityPanel() {
           </p>
           <p className="text-xs text-slate-500">{dashboard?.unpaidCount ?? 0} carregamento(s) não pago(s)</p>
         </div>
-        <div className="card">
-          <p className="text-sm text-slate-500">Carregamentos (total)</p>
-          <p className="text-2xl font-bold text-slate-900">{dashboard?.totalCharges ?? 0}</p>
-        </div>
+        {driverMode ? (
+          <WeekTotalCard
+            weekNumber={dashboard?.weekNumber ?? selectedWeek.week}
+            weekYear={dashboard?.weekYear ?? selectedWeek.year}
+            value={formatMoney(dashboard?.weekTotal ?? 0)}
+            weekStart={dashboard?.weekStart}
+            weekEnd={dashboard?.weekEnd}
+            onPrevWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, -1))}
+            onNextWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, 1))}
+          />
+        ) : (
+          <div className="card">
+            <p className="text-sm text-slate-500">Carregamentos (total)</p>
+            <p className="text-2xl font-bold text-slate-900">{dashboard?.totalCharges ?? 0}</p>
+          </div>
+        )}
         <MonthTotalCard
           selectId="electricity-month-total"
           value={formatMoney(dashboard?.monthTotal ?? 0)}
@@ -274,11 +374,46 @@ export function ElectricityPanel() {
         </div>
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
+        {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
+
+        {canManage && selectedCount > 0 ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+            <p className="text-sm font-medium text-slate-700">{selectedCount} seleccionada(s)</p>
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-1.5 text-xs"
+              disabled={bulkBusy || loading}
+              onClick={() => void bulkMarkPaid()}
+            >
+              <Check size={13} />
+              Marcar como pago
+            </button>
+            <button
+              type="button"
+              className="text-xs text-slate-500 hover:text-slate-700"
+              disabled={bulkBusy}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Limpar selecção
+            </button>
+          </div>
+        ) : null}
 
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
+                {canManage ? (
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={pageAllSelected}
+                      onChange={toggleSelectAllVisible}
+                      disabled={selectableIds.length === 0 || bulkBusy}
+                      aria-label="Seleccionar carregamentos pendentes visíveis"
+                    />
+                  </th>
+                ) : null}
                 <th className="px-4 py-3">Data</th>
                 <th className="px-4 py-3">Nome</th>
                 <th className="px-4 py-3">Nº cartão</th>
@@ -296,6 +431,21 @@ export function ElectricityPanel() {
                   key={item.id}
                   className={`border-t ${item.isPaid ? 'bg-emerald-50/60' : 'bg-red-50/60'}`}
                 >
+                  {canManage ? (
+                    <td className="px-4 py-3">
+                      {!item.isPaid ? (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(item.id)}
+                          onChange={() => toggleRowSelection(item.id)}
+                          disabled={bulkBusy}
+                          aria-label={`Seleccionar carregamento de ${item.name ?? item.cardNumber ?? item.id}`}
+                        />
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                  ) : null}
                   <td className="px-4 py-3">{formatDate(item.chargeDate)}</td>
                   <td className="px-4 py-3">{item.name ?? '—'}</td>
                   <td className="px-4 py-3">{item.cardNumber ?? '—'}</td>
@@ -324,7 +474,7 @@ export function ElectricityPanel() {
                             type="button"
                             className="rounded p-1 text-emerald-700 hover:bg-emerald-100"
                             title="Marcar como pago"
-                            disabled={busyId === item.id}
+                            disabled={busyId === item.id || bulkBusy}
                             onClick={() => void markPaid(item.id)}
                           >
                             <Check size={16} />
@@ -334,7 +484,7 @@ export function ElectricityPanel() {
                           type="button"
                           className="rounded p-1 text-red-700 hover:bg-red-100"
                           title="Eliminar"
-                          disabled={busyId === item.id}
+                          disabled={busyId === item.id || bulkBusy}
                           onClick={() => void removeCharge(item.id)}
                         >
                           <Trash2 size={16} />
@@ -346,7 +496,7 @@ export function ElectricityPanel() {
               ))}
               {!loading && !items.length ? (
                 <tr>
-                  <td colSpan={canManage ? 10 : 9} className="px-4 py-8 text-center text-slate-400">
+                  <td colSpan={canManage ? 10 : 8} className="px-4 py-8 text-center text-slate-400">
                     Sem carregamentos — importe um ficheiro CSV PRIO.
                   </td>
                 </tr>

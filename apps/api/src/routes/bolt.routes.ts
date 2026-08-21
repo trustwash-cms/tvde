@@ -14,6 +14,8 @@ import {
   getBoltDashboardStats,
   listBoltOrders,
   syncBoltData,
+  markBoltOrderPaid,
+  bulkMarkBoltOrdersPaid,
 } from '../services/bolt-sync.service';
 import { getDriverFleetScope } from '../services/user-vehicle-matching.service';
 
@@ -143,6 +145,8 @@ export async function boltRoutes(fastify: FastifyInstance) {
       .object({
         workspaceId: z.string().uuid().optional(),
         month: z.string().optional(),
+        weekYear: z.coerce.number().optional(),
+        week: z.coerce.number().optional(),
       })
       .parse(request.query);
     const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
@@ -154,6 +158,8 @@ export async function boltRoutes(fastify: FastifyInstance) {
     const data = await getBoltDashboardStats(workspaceId, {
       driverUuids,
       monthKey: query.month,
+      weekYear: query.weekYear,
+      week: query.week,
     });
     return reply.send({ success: true, data });
   });
@@ -221,6 +227,70 @@ export async function boltRoutes(fastify: FastifyInstance) {
         tollFee: order.tollFee?.toString() ?? null,
       },
     });
+  });
+
+  fastify.patch('/bolt/orders/:id/paid', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = z.object({ workspaceId: z.string().uuid().optional() }).parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+    try {
+      const data = await markBoltOrderPaid(workspaceId, id);
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'bolt.mark_paid',
+        entityType: 'bolt_order',
+        entityId: id,
+        ipAddress: request.ip,
+      });
+      return reply.send({ success: true, data, message: 'Pedido marcado como pago' });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.post('/bolt/orders/bulk/mark-paid', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const body = z
+      .object({
+        workspaceId: z.string().uuid().optional(),
+        ids: z.array(z.string().uuid()).min(1).max(100),
+      })
+      .parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+    try {
+      const data = await bulkMarkBoltOrdersPaid(workspaceId, body.ids);
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'bolt.bulk_mark_paid',
+        entityType: 'bolt_order',
+        afterJson: data,
+        ipAddress: request.ip,
+      });
+      return reply.send({
+        success: true,
+        data,
+        message: `${data.updated} pedido(s) marcado(s) como pago(s)`,
+      });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
   });
 
   fastify.get('/bolt/drivers', {

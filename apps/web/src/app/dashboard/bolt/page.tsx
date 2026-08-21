@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Car, Euro, ShoppingCart, Smartphone } from 'lucide-react';
-import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
+import { useCallback, useEffect, useState } from 'react';
+import { Car, Euro, Loader2, RefreshCw, ShoppingCart, Smartphone } from 'lucide-react';
+import { hasMinRole, type Role } from '@tvde/shared';
+import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 
@@ -31,9 +32,15 @@ function formatMoney(value: string) {
 
 export default function BoltDashboardPage() {
   const { workspaceId } = useWorkspaceContext();
+  const [role, setRole] = useState<Role | null>(null);
   const [data, setData] = useState<DashboardData | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncError, setSyncError] = useState('');
+  const [syncSuccess, setSyncSuccess] = useState('');
 
-  useEffect(() => {
+  const canManage = role ? hasMinRole(role, 'superadmin') : false;
+
+  const loadDashboard = useCallback(() => {
     if (!workspaceId) return;
     apiFetch<DashboardData>(
       withWorkspaceQuery(API_PATHS.bolt.dashboard, workspaceId),
@@ -43,6 +50,38 @@ export default function BoltDashboardPage() {
       if (res.data) setData(res.data);
     });
   }, [workspaceId]);
+
+  useEffect(() => {
+    apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
+      if (res.data?.role) setRole(res.data.role);
+    });
+  }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  async function handleSync() {
+    if (!workspaceId || !canManage) return;
+    setSyncing(true);
+    setSyncError('');
+    setSyncSuccess('');
+    const res = await apiFetch(
+      API_PATHS.bolt.sync,
+      {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId, type: 'all' }),
+      },
+      getStoredToken()
+    );
+    setSyncing(false);
+    if (res.success) {
+      setSyncSuccess('Sincronização concluída');
+      loadDashboard();
+    } else {
+      setSyncError(getApiErrorMessage(res));
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -68,9 +107,23 @@ export default function BoltDashboardPage() {
         })}
       </div>
 
+      {syncError ? <p className="text-sm text-red-600">{syncError}</p> : null}
+      {syncSuccess ? <p className="text-sm text-emerald-700">{syncSuccess}</p> : null}
+
       <div className="card overflow-hidden p-0">
-        <div className="border-b px-6 py-4">
+        <div className="flex items-center justify-between gap-3 border-b px-6 py-4">
           <h2 className="font-semibold text-slate-900">Corridas recentes (finished)</h2>
+          {canManage ? (
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-2 text-sm"
+              disabled={syncing || !workspaceId}
+              onClick={() => void handleSync()}
+            >
+              {syncing ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+              {syncing ? 'A sincronizar…' : 'Sync'}
+            </button>
+          ) : null}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

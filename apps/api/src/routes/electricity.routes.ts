@@ -7,6 +7,7 @@ import {
   getElectricityDashboard,
   listElectricityCharges,
   markElectricityChargePaid,
+  bulkMarkElectricityChargesPaid,
 } from '../services/electricity.service';
 import { importElectricityCsv } from '../services/electricity-import.service';
 
@@ -42,13 +43,21 @@ export async function electricityRoutes(fastify: FastifyInstance) {
   fastify.get('/electricity/dashboard', async (request, reply) => {
     try {
       const tenantId = requireTenant(request);
-      const query = z.object({ month: z.string().optional() }).parse(request.query);
+      const query = z
+        .object({
+          month: z.string().optional(),
+          weekYear: z.coerce.number().optional(),
+          week: z.coerce.number().optional(),
+        })
+        .parse(request.query);
       const data = await getElectricityDashboard(
         fastify.db,
         tenantId,
         request.user.sub,
         request.user.role as Role,
-        query.month
+        query.month,
+        query.weekYear,
+        query.week
       );
       return reply.send({ success: true, data });
     } catch (err) {
@@ -128,6 +137,36 @@ export async function electricityRoutes(fastify: FastifyInstance) {
       });
 
       return reply.send({ success: true, data, message: 'Carregamento marcado como pago' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro';
+      return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.post('/electricity/charges/bulk/mark-paid', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const body = z
+        .object({ ids: z.array(z.string().uuid()).min(1).max(100) })
+        .parse(request.body ?? {});
+      const data = await bulkMarkElectricityChargesPaid(fastify.db, tenantId, body.ids);
+
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'electricity.bulk_mark_paid',
+        entityType: 'electricity_charge',
+        afterJson: data,
+        ipAddress: request.ip,
+      });
+
+      return reply.send({
+        success: true,
+        data,
+        message: `${data.updated} carregamento(s) marcado(s) como pago(s)`,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro';
       return reply.status(400).send({ success: false, error: message });
