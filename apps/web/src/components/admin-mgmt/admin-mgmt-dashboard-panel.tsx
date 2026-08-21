@@ -110,7 +110,7 @@ export function AdminMgmtDashboardPanel() {
             value: data.totals.overdue + data.totals.faturasEmAtraso,
             subtitle:
               data.totals.faturasEmAtraso > 0
-                ? `${data.totals.faturasEmAtraso} fatura(s) com vencimento ultrapassado`
+                ? `${data.totals.faturasEmAtraso} fatura(s) em dívida`
                 : null,
             tone: 'text-red-700',
             href: '#em-atraso',

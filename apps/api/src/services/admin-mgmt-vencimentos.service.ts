@@ -2,12 +2,6 @@ import { prisma } from '@tvde/database';
 import type { AdminMgmtVencimentoOrigem } from '@tvde/shared';
 import { getAdminMgmtSettings } from './admin-mgmt-settings.service';
 
-/** Open AR excludes receipt-like docs (settled on issue) even if estado is wrongly pendente. */
-const openFaturaWhere = {
-  estadoPagamento: { in: ['pendente', 'parcial'] as string[] },
-  tipoDocumento: { notIn: ['fatura_recibo', 'recibo_verde'] },
-};
-
 function startOfDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
@@ -215,7 +209,7 @@ export async function getAdminMgmtDashboard(workspaceId: string, tenantId: strin
     where: {
       workspaceId,
       tenantId,
-      ...openFaturaWhere,
+      estadoPagamento: { in: ['pendente', 'parcial'] },
     },
   });
 
@@ -223,7 +217,7 @@ export async function getAdminMgmtDashboard(workspaceId: string, tenantId: strin
     where: {
       workspaceId,
       tenantId,
-      ...openFaturaWhere,
+      estadoPagamento: { in: ['pendente', 'parcial'] },
     },
     select: { valorTotal: true, dataVencimento: true, clienteId: true },
   });

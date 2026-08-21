@@ -176,8 +176,6 @@ export {
   ADMIN_MGMT_FATURA_PAGAMENTO_STATUSES,
   ADMIN_MGMT_FATURA_METODOS_PAGAMENTO,
   ADMIN_MGMT_FATURA_ANEXO_MIME_TYPES,
-  isAdminMgmtAutoPaidDocumento,
-  defaultEstadoPagamentoForTipoDocumento,
   getAdminMgmtFaturaTipoLabel,
   getAdminMgmtFaturaPagamentoLabel,
   getAdminMgmtFaturaMetodoPagamentoLabel,
