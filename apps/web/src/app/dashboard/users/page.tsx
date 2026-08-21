@@ -357,7 +357,14 @@ export default function UsersPage() {
           open={!!detailsUser}
           user={detailsUser}
           onClose={() => setDetailsUser(null)}
-          onSaved={load}
+          onSaved={() => {
+            load();
+            void alert({
+              title: 'Detalhes guardados',
+              message: 'Os dados do utilizador foram actualizados com sucesso.',
+              variant: 'default',
+            });
+          }}
         />
 
         <UserVehiclesModal

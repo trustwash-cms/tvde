@@ -83,6 +83,7 @@ export function UserDetailsModal({
       setDetail(res.data);
       setDocuments(res.data.documents);
       onSaved?.();
+      onClose();
       return;
     }
 
