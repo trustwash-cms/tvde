@@ -41,6 +41,10 @@ export default function BoltOrdersPage() {
   const [page, setPage] = useState(0);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [appliedStartDate, setAppliedStartDate] = useState('');
+  const [appliedEndDate, setAppliedEndDate] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -50,10 +54,20 @@ export default function BoltOrdersPage() {
   const canManage = role ? hasMinRole(role, 'superadmin') : false;
 
   const load = useCallback(
-    async (search: string, pageIndex: number) => {
+    async (
+      search: string,
+      pageIndex: number,
+      from: string,
+      to: string
+    ) => {
       if (!workspaceId) return;
       const base = withSearchQuery(withWorkspaceQuery(API_PATHS.bolt.orders, workspaceId), search);
-      const url = `${base}${base.includes('?') ? '&' : '?'}page=${pageIndex}&limit=${PAGE_SIZE}`;
+      const params = new URLSearchParams();
+      params.set('page', String(pageIndex));
+      params.set('limit', String(PAGE_SIZE));
+      if (from) params.set('startDate', from);
+      if (to) params.set('endDate', to);
+      const url = `${base}${base.includes('?') ? '&' : '?'}${params.toString()}`;
       const res = await apiFetch<OrdersResponse>(url, {}, getStoredToken());
       if (res.data) {
         setRows(res.data.items);
@@ -76,16 +90,20 @@ export default function BoltOrdersPage() {
     setPage(0);
     setAppliedQ('');
     setQ('');
+    setStartDate('');
+    setEndDate('');
+    setAppliedStartDate('');
+    setAppliedEndDate('');
     setSelectedIds(new Set());
   }, [workspaceId]);
 
   useEffect(() => {
-    void load(appliedQ, page);
-  }, [workspaceId, page, appliedQ, load]);
+    void load(appliedQ, page, appliedStartDate, appliedEndDate);
+  }, [workspaceId, page, appliedQ, appliedStartDate, appliedEndDate, load]);
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page, appliedQ]);
+  }, [page, appliedQ, appliedStartDate, appliedEndDate]);
 
   const selectableIds = useMemo(
     () => (canManage ? rows.filter((row) => !row.isPaid).map((row) => row.id) : []),
@@ -120,12 +138,18 @@ export default function BoltOrdersPage() {
   function onFilter(e: FormEvent) {
     e.preventDefault();
     setAppliedQ(q.trim());
+    setAppliedStartDate(startDate);
+    setAppliedEndDate(endDate);
     setPage(0);
   }
 
   function onClear() {
     setQ('');
     setAppliedQ('');
+    setStartDate('');
+    setEndDate('');
+    setAppliedStartDate('');
+    setAppliedEndDate('');
     setPage(0);
   }
 
@@ -149,7 +173,7 @@ export default function BoltOrdersPage() {
       next.delete(id);
       return next;
     });
-    await load(appliedQ, page);
+    await load(appliedQ, page, appliedStartDate, appliedEndDate);
   }
 
   async function bulkMarkPaid() {
@@ -177,7 +201,7 @@ export default function BoltOrdersPage() {
     }
     setSuccess(`${res.data?.updated ?? 0} pedido(s) marcado(s) como pago(s)`);
     setSelectedIds(new Set());
-    await load(appliedQ, page);
+    await load(appliedQ, page, appliedStartDate, appliedEndDate);
   }
 
   return (
@@ -197,6 +221,24 @@ export default function BoltOrdersPage() {
             placeholder="Referência, motorista ou veículo"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+        <div className="min-w-[160px]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Data início</label>
+          <input
+            type="date"
+            className="input w-full"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </div>
+        <div className="min-w-[160px]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Data fim</label>
+          <input
+            type="date"
+            className="input w-full"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
           />
         </div>
         <button type="submit" className="btn-primary">

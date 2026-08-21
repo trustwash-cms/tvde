@@ -359,16 +359,29 @@ export function ElectricityPanel() {
               onChange={(e) => setEndDate(e.target.value)}
             />
           </label>
-          <div className="flex items-end">
+          <div className="flex items-end gap-2">
             <button
               type="button"
-              className="btn-primary w-full"
+              className="btn-primary flex-1"
               onClick={() => {
                 setPage(1);
                 void loadData();
               }}
             >
               Filtrar
+            </button>
+            <button
+              type="button"
+              className="btn-secondary flex-1"
+              onClick={() => {
+                setName('');
+                setCardNumber('');
+                setStartDate('');
+                setEndDate('');
+                setPage(1);
+              }}
+            >
+              Limpar
             </button>
           </div>
         </div>

@@ -171,6 +171,8 @@ export async function boltRoutes(fastify: FastifyInstance) {
         q: z.string().optional(),
         page: z.coerce.number().int().min(0).optional(),
         limit: z.coerce.number().int().min(1).max(100).optional(),
+        startDate: z.string().optional(),
+        endDate: z.string().optional(),
       })
       .parse(request.query);
 
@@ -187,6 +189,8 @@ export async function boltRoutes(fastify: FastifyInstance) {
       page: query.page,
       limit: query.limit ?? 50,
       driverUuids,
+      startDate: query.startDate,
+      endDate: query.endDate,
     });
 
     return reply.send({ success: true, data });

@@ -341,9 +341,24 @@ export async function syncAllBoltWorkspaces(type: BoltSyncType = 'all') {
   return summary;
 }
 
+function parseOrderDateFilter(value: string | undefined): Date | undefined {
+  if (!value?.trim()) return undefined;
+  const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return undefined;
+  const dt = new Date(`${match[1]}-${match[2]}-${match[3]}T00:00:00.000Z`);
+  return Number.isNaN(dt.getTime()) ? undefined : dt;
+}
+
 export async function listBoltOrders(
   workspaceId: string,
-  input: { q?: string; page?: number; limit?: number; driverUuids?: string[] }
+  input: {
+    q?: string;
+    page?: number;
+    limit?: number;
+    driverUuids?: string[];
+    startDate?: string;
+    endDate?: string;
+  }
 ) {
   const page = Math.max(0, input.page ?? 0);
   const limit = Math.min(100, Math.max(1, input.limit ?? 50));
@@ -353,11 +368,24 @@ export async function listBoltOrders(
         ? { driverUuid: { in: input.driverUuids } }
         : { id: { in: [] as string[] } }
       : undefined;
+  const start = parseOrderDateFilter(input.startDate);
+  const end = parseOrderDateFilter(input.endDate);
+  let orderCreatedTimestamp: Prisma.DateTimeNullableFilter | undefined;
+  if (start || end) {
+    orderCreatedTimestamp = {};
+    if (start) orderCreatedTimestamp.gte = start;
+    if (end) {
+      const endOfDay = new Date(end);
+      endOfDay.setUTCHours(23, 59, 59, 999);
+      orderCreatedTimestamp.lte = endOfDay;
+    }
+  }
   const where = boltBillableOrderWhere(workspaceId, {
     ...(driverFilter ?? {}),
     ...(input.q
       ? textOr(input.q, ['orderReference', 'driverName', 'vehicleModel', 'vehicleLicensePlate'])
       : {}),
+    ...(orderCreatedTimestamp ? { orderCreatedTimestamp } : {}),
   });
 
   const [total, orders] = await Promise.all([
