@@ -6,6 +6,7 @@ import {
   Info,
   Key,
   Mail,
+  BookOpen,
   SquarePen,
   ToggleLeft,
   ToggleRight,
@@ -13,6 +14,8 @@ import {
   UserRoundSearch,
 } from 'lucide-react';
 import clsx from 'clsx';
+import Link from 'next/link';
+import { WEB_ROUTES } from '@tvde/shared';
 
 export interface UserListItem {
   id: string;
@@ -69,6 +72,7 @@ export function UserListCard({
   canDetails,
   canVehicles,
   canImpersonate,
+  canContaCorrente,
   onEdit,
   onDelete,
   onToggleStatus,
@@ -83,6 +87,7 @@ export function UserListCard({
   canDetails?: boolean;
   canVehicles?: boolean;
   canImpersonate?: boolean;
+  canContaCorrente?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
   onToggleStatus?: () => void;
@@ -165,6 +170,16 @@ export function UserListCard({
         >
           <Car size={18} />
         </ActionIconButton>
+        {canContaCorrente && user.role === 'admin' ? (
+          <Link
+            href={`${WEB_ROUTES.dashboard.contaCorrente.root}?driverId=${encodeURIComponent(user.id)}`}
+            title="Conta corrente"
+            aria-label="Conta corrente"
+            className="rounded-md p-1.5 text-indigo-600 transition hover:bg-indigo-50"
+          >
+            <BookOpen size={18} />
+          </Link>
+        ) : null}
         <ActionIconButton label="Acessos" className="text-slate-500">
           <Key size={18} />
         </ActionIconButton>

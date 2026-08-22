@@ -310,6 +310,7 @@ export default function UsersPage() {
                 canDetails={canViewDetails(u)}
                 canVehicles={canViewDetails(u)}
                 canImpersonate={canImpersonateUser(u)}
+                canContaCorrente={actorRole === 'master' || actorRole === 'superadmin'}
                 onEdit={() => setEditUser(u)}
                 onDelete={() => setDeleteUser(u)}
                 onToggleStatus={() => handleToggleStatus(u)}

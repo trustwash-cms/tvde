@@ -70,6 +70,8 @@ export const DASHBOARD_ACCESS: Record<string, Role> = {
   combustivel: 'staff',
   /** Gestão completa de pagamentos (calculadora / sync) — só gestor+ */
   pagamentos: 'superadmin',
+  /** Conta corrente dos motoristas (créditos/débitos) — só gestor+ */
+  conta_corrente: 'superadmin',
   /** Lista dos próprios payment_reports — motorista e acima */
   meus_pagamentos: 'admin',
   /** Documentos pessoais do motorista (consulta) */

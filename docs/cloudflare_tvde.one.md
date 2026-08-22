@@ -14,6 +14,8 @@ Deploy da VM: `[deploy_tvde.one.md](./deploy_tvde.one.md)`.
 
 ---
 
+
+
 ## 0. Estado actual (2026-07-26) — já funcional
 
 
@@ -64,6 +66,8 @@ O CNAME já está provisionado (`cloudflared tunnel route dns --overwrite-dns tv
 
 ---
 
+
+
 ## 1. Arquitectura
 
 ```
@@ -86,16 +90,20 @@ tvde.one / www  →  A 213.13.1.95 (site)  [não mexer]
 
 ---
 
+
+
 ## 2. Lições aprendidas (erros a evitar)
 
 1. `**cert.pem` de outra conta Cloudflare** → `tunnel create` / `route dns` criam recursos na conta errada; o dashboard da zona `tvde.one` mostra túnel **Down** / Routes **0** enquanto a VM fala com outro túnel.
-  Solução: `cloudflared tunnel login` autorizando **a zona `tvde.one`** (mesma conta do DNS).
-2. **Placeholder `<UUID>` no `config.yml`** → o serviço falha (`credentials file doesn't exist`).
+  Solução: `cloudflared tunnel login` autorizando **a zona** `tvde.one` (mesma conta do DNS).
+2. **Placeholder** `<UUID>` **no** `config.yml` → o serviço falha (`credentials file doesn't exist`).
 3. **CNAME em falta** para `fleet`/`api` → erro **1033** / **530** mesmo com conector ligado.
 4. **Apex redirect** → **não** redireccionar `tvde.one` para `fleet` (o site institucional fica no apex).
 5. `**NEXT_PUBLIC_API_URL**` → exige **rebuild** do web depois de mudar o `.env`.
 
 ---
+
+
 
 ## 3. Pré-requisitos na VM
 
@@ -110,6 +118,8 @@ cloudflared --version
 
 ---
 
+
+
 ## 4. Login Cloudflare (conta da zona `tvde.one`)
 
 ```bash
@@ -122,6 +132,8 @@ cloudflared tunnel login
 No browser: autorizar o domínio `**tvde.one**`. Fica `~/.cloudflared/cert.pem`.
 
 ---
+
+
 
 ## 5. Criar túnel + `config.yml`
 
@@ -154,6 +166,8 @@ cloudflared tunnel ingress validate
 
 ---
 
+
+
 ## 6. DNS (`fleet` + `api`)
 
 **Opção recomendada (CLI, com cert da zona certa):**
@@ -176,6 +190,8 @@ Não alterar o `A` de `tvde.one` / `www`. O antigo `app.tvde.one` pode ficar (le
 
 ---
 
+
+
 ## 7. Arrancar o conector
 
 Teste manual:
@@ -188,6 +204,8 @@ curl -sS -o /dev/null -w "%{http_code}\n" https://fleet.tvde.one/login
 ```
 
 ---
+
+
 
 ## 8. Serviço systemd (obrigatório para produção)
 
@@ -229,6 +247,8 @@ cloudflared tunnel info tvde
 
 ---
 
+
+
 ## 9. `.env` + rebuild web
 
 Em `~/tvde/.env`:
@@ -268,6 +288,8 @@ Verificação: `curl -sS -o /dev/null -w "%{http_code}\n" "https://api.tvde.one/
 
 ---
 
+
+
 ## 10. SSL/TLS (dashboard)
 
 - **SSL/TLS → Overview:** Full  
@@ -276,6 +298,8 @@ Verificação: `curl -sS -o /dev/null -w "%{http_code}\n" "https://api.tvde.one/
 (Origem local HTTP em `127.0.0.1` é normal com Tunnel.)
 
 ---
+
+
 
 ## 11. Checklist de aceitação
 
@@ -288,6 +312,8 @@ Verificação: `curl -sS -o /dev/null -w "%{http_code}\n" "https://api.tvde.one/
 - [x] `https://tvde.one` sem redirect para fleet
 
 ---
+
+
 
 ## 12. Troubleshooting
 
@@ -312,6 +338,8 @@ dig +short api.tvde.one @1.1.1.1
 
 ---
 
+
+
 ## 13. Alternativa: modo B (token)
 
 Só se quiseres abandonar o `config.yml`:
@@ -322,6 +350,8 @@ Só se quiseres abandonar o `config.yml`:
 4. Não uses `config.yml` em paralelo
 
 ---
+
+
 
 ## 14. Ordem rápida (recriar do zero)
 
@@ -335,4 +365,4 @@ Só se quiseres abandonar o `config.yml`:
 
 ---
 
-*Actualizado 2026-07-26 — produção em `https://fleet.tvde.one` / `https://api.tvde.one`, túnel `db71ae8d-0ad4-4eba-995c-3bb9548e9eab`.*
+*Actualizado 2026-07-26 — produção em* `https://fleet.tvde.one` */* `https://api.tvde.one`*, túnel* `db71ae8d-0ad4-4eba-995c-3bb9548e9eab`*.*

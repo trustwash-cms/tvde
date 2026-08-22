@@ -23,6 +23,7 @@ import {
   Wallet,
   FileText,
   Eye,
+  BookOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
@@ -68,6 +69,13 @@ const navItems = [
     label: 'Pagamentos',
     icon: Wallet,
     area: 'pagamentos' as const,
+    moduleKey: 'pagamentos',
+  },
+  {
+    href: WEB_ROUTES.dashboard.contaCorrente.root,
+    label: 'Conta corrente',
+    icon: BookOpen,
+    area: 'conta_corrente' as const,
     moduleKey: 'pagamentos',
   },
   {
@@ -139,6 +147,7 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (area === 'eletricidade' && pathname.startsWith('/dashboard/eletricidade')) return true;
   if (area === 'combustivel' && pathname.startsWith('/dashboard/combustivel')) return true;
   if (area === 'pagamentos' && pathname.startsWith('/dashboard/pagamentos')) return true;
+  if (area === 'conta_corrente' && pathname.startsWith('/dashboard/conta-corrente')) return true;
   if (area === 'meus_pagamentos' && pathname.startsWith('/dashboard/meus-pagamentos')) return true;
   if (area === 'documentos' && pathname.startsWith('/dashboard/documentos')) return true;
   if (area === 'calendar' && pathname.startsWith('/dashboard/calendar')) return true;

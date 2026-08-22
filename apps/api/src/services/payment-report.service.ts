@@ -1,6 +1,11 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { PaymentCalculation } from '@tvde/shared';
 import { calculateDriverPayment } from './payment-calculator.service';
+import { cleanupPaymentReportAttachmentFiles } from './payment-report-attachment.service';
+import {
+  applyContaCorrenteOnPaymentConfirm,
+  reverseContaCorrenteOnPaymentDelete,
+} from './driver-current-account.service';
 
 function parseDateOnly(ymd: string): Date {
   const [y, m, d] = ymd.split('-').map(Number);
@@ -86,6 +91,7 @@ function mapReportRow(r: {
   lastSentAt: Date | null;
   createdAt: Date;
   user: { fullName: string | null; username: string | null; email: string };
+  _count?: { attachments?: number };
 }): PaymentReportRow {
   const uber = Number(r.receitasUber.toString());
   const bolt = Number(r.receitasBolt.toString());
@@ -123,7 +129,7 @@ function mapReportRow(r: {
     isPaid: r.isPaid,
     paymentMethod: r.paymentMethod,
     lastSentAt: r.lastSentAt?.toISOString() ?? null,
-    attachmentsCount: 0,
+    attachmentsCount: r._count?.attachments ?? 0,
     createdAt: r.createdAt.toISOString(),
   };
 }
@@ -189,6 +195,7 @@ export async function listPaymentReports(
       take: perPage,
       include: {
         user: { select: { fullName: true, username: true, email: true } },
+        _count: { select: { attachments: true } },
       },
     }),
   ]);
@@ -254,6 +261,7 @@ export async function getPaymentReport(
     where: { id: reportId, tenantId },
     include: {
       user: { select: { fullName: true, username: true, email: true } },
+      _count: { select: { attachments: true } },
     },
   });
   if (!row) throw new Error('Pagamento não encontrado');
@@ -285,6 +293,7 @@ export async function deletePaymentReport(
   const fuelIds = asStringIds(existing.fuelTransactionIds);
   const uberIds = asStringIds(existing.uberPaymentIds);
   const boltIds = asStringIds(existing.boltOrderIds);
+  const expenseIds = asStringIds(existing.driverExpenseIds);
 
   await db.$transaction(async (tx) => {
     // Repor movimentos como não pagos para poderem voltar a entrar num cálculo
@@ -318,8 +327,14 @@ export async function deletePaymentReport(
         data: { isPaid: false, paymentDate: null },
       });
     }
+    await reverseContaCorrenteOnPaymentDelete(tx, tenantId, expenseIds);
+    await tx.paymentReportAttachment.deleteMany({
+      where: { tenantId, paymentReportId: reportId },
+    });
     await tx.paymentReport.delete({ where: { id: reportId } });
   });
+
+  await cleanupPaymentReportAttachmentFiles(db, tenantId, reportId);
 
   return { id: reportId };
 }
@@ -369,7 +384,7 @@ export async function confirmDriverPayment(
         fuelTransactionIds: ids.fuelTransactionIds,
         uberPaymentIds: ids.uberPaymentIds,
         boltOrderIds: ids.boltOrderIds,
-        driverExpenseIds: [],
+        driverExpenseIds: ids.driverExpenseIds,
         detailsJson: calculation.detalhes as unknown as Prisma.InputJsonValue,
         warningsJson: calculation.warnings as unknown as Prisma.InputJsonValue,
         createdByUserId: opts?.createdByUserId ?? null,
@@ -430,6 +445,8 @@ export async function confirmDriverPayment(
         data: { isPaid: true, paymentDate: paidAt },
       });
     }
+
+    await applyContaCorrenteOnPaymentConfirm(tx, tenantId, ids.driverExpenseIds, created.id);
 
     return created;
   });

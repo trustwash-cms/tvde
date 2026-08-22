@@ -23,7 +23,7 @@ import {
   type PaymentCalculation,
   type PaymentDriverOption,
 } from '@tvde/shared';
-import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
+import { API_PATHS, apiFetch, getApiUrl, getStoredToken } from '@/lib/api';
 import { Modal } from '@/components/modal';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { MassPagamentosModal } from '@/components/pagamentos/mass-pagamentos-modal';
@@ -107,6 +107,15 @@ type PaymentReportDetail = PaymentReportRow & {
   warnings: string[];
 };
 
+type PaymentAttachment = {
+  id: string;
+  paymentReportId: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: string;
+  createdAt: string;
+};
+
 type ReportsList = {
   items: PaymentReportRow[];
   page: number;
@@ -162,6 +171,10 @@ export function PagamentosPanel() {
   const [syncOpen, setSyncOpen] = useState(false);
   const [massOpen, setMassOpen] = useState(false);
   const [syncPeriod, setSyncPeriod] = useState<{ start: string; end: string } | null>(null);
+  const [attachModal, setAttachModal] = useState<PaymentReportRow | null>(null);
+  const [attachments, setAttachments] = useState<PaymentAttachment[]>([]);
+  const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [uploadingAttachment, setUploadingAttachment] = useState(false);
 
   const loadDefaultRange = useCallback(() => {
     const range = defaultPaymentWeekRange();
@@ -360,7 +373,7 @@ export function PagamentosPanel() {
   async function removeReport(row: PaymentReportRow) {
     const ok = await confirm({
       title: 'Eliminar pagamento',
-      message: `Eliminar o pagamento de ${row.userLabel} (${formatDatePt(row.periodStart)} – ${formatDatePt(row.periodEnd)})?\n\nOs movimentos associados voltam a ficar em aberto.`,
+      message: `Eliminar o pagamento de ${row.userLabel} (${formatDatePt(row.periodStart)} – ${formatDatePt(row.periodEnd)})?\n\nOs movimentos associados voltam a ficar em aberto. Os comprovativos anexados também serão apagados.`,
       confirmLabel: 'Eliminar',
       cancelLabel: 'Cancelar',
       variant: 'danger',
@@ -377,6 +390,142 @@ export function PagamentosPanel() {
       setError(res.error ?? 'Não foi possível eliminar');
       return;
     }
+    setSuccess('Pagamento eliminado');
+    void loadReports();
+  }
+
+  async function sendReportEmail(row: PaymentReportRow) {
+    if (!row.userEmail) {
+      setError('O motorista não tem email configurado');
+      return;
+    }
+    const ok = await confirm({
+      title: row.lastSentAt ? 'Reenviar email' : 'Enviar email',
+      message: `Enviar o relatório de pagamento a ${row.userLabel} (${row.userEmail})?\nPeríodo: ${formatDatePt(row.periodStart)} – ${formatDatePt(row.periodEnd)}${
+        row.attachmentsCount > 0
+          ? `\n\nOs ${row.attachmentsCount} comprovativo(s) serão anexados (se o tamanho total o permitir).`
+          : ''
+      }`,
+      confirmLabel: 'Enviar',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+
+    setBusyId(row.id);
+    setError('');
+    const res = await apiFetch<{
+      lastSentAt: string;
+      to: string;
+      attachmentsIncluded: number;
+      attachmentsSkipped: boolean;
+    }>(API_PATHS.pagamentos.reportSendEmail(row.id), { method: 'POST' }, getStoredToken());
+    setBusyId('');
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao enviar email');
+      return;
+    }
+    setSuccess(
+      res.message ??
+        `Email enviado para ${res.data?.to ?? row.userEmail}`
+    );
+    void loadReports();
+  }
+
+  async function openAttachments(row: PaymentReportRow) {
+    setAttachModal(row);
+    setAttachments([]);
+    setLoadingAttachments(true);
+    setError('');
+    const res = await apiFetch<PaymentAttachment[]>(
+      API_PATHS.pagamentos.reportAttachments(row.id),
+      {},
+      getStoredToken()
+    );
+    setLoadingAttachments(false);
+    if (!res.success || !res.data) {
+      setError(res.error ?? 'Não foi possível listar comprovativos');
+      return;
+    }
+    setAttachments(res.data);
+  }
+
+  async function uploadAttachment(file: File) {
+    if (!attachModal) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setError('Cada ficheiro pode ter no máximo 10 MB');
+      return;
+    }
+    setUploadingAttachment(true);
+    setError('');
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = getStoredToken();
+    const res = await fetch(
+      `${getApiUrl()}${API_PATHS.pagamentos.reportAttachmentUpload(attachModal.id)}`,
+      {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      }
+    );
+    const raw = await res.text();
+    let parsed: { success?: boolean; data?: PaymentAttachment; error?: string } = {};
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch {
+      parsed = { success: false, error: raw.slice(0, 200) };
+    }
+    setUploadingAttachment(false);
+    if (!res.ok || !parsed.success || !parsed.data) {
+      setError(parsed.error ?? 'Falha ao carregar comprovativo');
+      return;
+    }
+    setAttachments((prev) => [parsed.data!, ...prev]);
+    setSuccess('Comprovativo carregado');
+    void loadReports();
+  }
+
+  async function downloadAttachment(att: PaymentAttachment) {
+    if (!attachModal) return;
+    const token = getStoredToken();
+    const res = await fetch(
+      `${getApiUrl()}${API_PATHS.pagamentos.reportAttachmentDownload(attachModal.id, att.id)}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    );
+    if (!res.ok) {
+      setError('Não foi possível descarregar o ficheiro');
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = att.fileName;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function removeAttachment(att: PaymentAttachment) {
+    if (!attachModal) return;
+    const ok = await confirm({
+      title: 'Remover comprovativo',
+      message: `Remover «${att.fileName}»?`,
+      confirmLabel: 'Remover',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+    const res = await apiFetch(
+      API_PATHS.pagamentos.reportAttachmentById(attachModal.id, att.id),
+      { method: 'DELETE' },
+      getStoredToken()
+    );
+    if (!res.success) {
+      setError(res.error ?? 'Não foi possível remover');
+      return;
+    }
+    setAttachments((prev) => prev.filter((a) => a.id !== att.id));
+    setSuccess('Comprovativo removido');
     void loadReports();
   }
 
@@ -828,17 +977,29 @@ export function PagamentosPanel() {
                         )}
                         <button
                           type="button"
-                          className="border-r border-slate-200 p-2 text-sky-600 hover:bg-sky-50"
-                          title="Email (em breve)"
-                          disabled
+                          className="border-r border-slate-200 p-2 text-sky-600 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
+                          title={
+                            row.userEmail
+                              ? row.lastSentAt
+                                ? `Reenviar email (último: ${formatDateTime(row.lastSentAt)})`
+                                : `Enviar email para ${row.userEmail}`
+                              : 'Motorista sem email'
+                          }
+                          disabled={busyId === row.id || !row.userEmail}
+                          onClick={() => void sendReportEmail(row)}
                         >
-                          <Mail className="h-4 w-4" />
+                          {busyId === row.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Mail className="h-4 w-4" />
+                          )}
                         </button>
                         <button
                           type="button"
                           className="relative border-r border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
-                          title="Comprovativos (em breve)"
-                          disabled
+                          title="Comprovativos"
+                          disabled={busyId === row.id}
+                          onClick={() => void openAttachments(row)}
                         >
                           <Paperclip className="h-4 w-4" />
                           {row.attachmentsCount > 0 ? (
@@ -1014,6 +1175,98 @@ export function PagamentosPanel() {
                 </ul>
               </div>
             ) : null}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(attachModal)}
+        onClose={() => {
+          if (uploadingAttachment) return;
+          setAttachModal(null);
+          setAttachments([]);
+        }}
+        title="Comprovativos"
+        panelClassName="max-w-lg"
+        showCloseButton={!uploadingAttachment}
+        closeOnBackdrop={!uploadingAttachment}
+        closeOnEscape={!uploadingAttachment}
+        footer={
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={uploadingAttachment}
+            onClick={() => {
+              setAttachModal(null);
+              setAttachments([]);
+            }}
+          >
+            Fechar
+          </button>
+        }
+      >
+        {!attachModal ? null : (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              {attachModal.userLabel} · {formatDatePt(attachModal.periodStart)} –{' '}
+              {formatDatePt(attachModal.periodEnd)}
+            </p>
+            <label className="block">
+              <span className="mb-1 block text-sm text-slate-600">
+                Carregar ficheiro (PDF, JPG, PNG, WEBP · máx. 10 MB)
+              </span>
+              <input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp"
+                disabled={uploadingAttachment || loadingAttachments}
+                className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-slate-700 hover:file:bg-slate-200"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) void uploadAttachment(file);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            {uploadingAttachment || loadingAttachments ? (
+              <div className="flex justify-center py-6">
+                <Loader2 className="h-5 w-5 animate-spin text-slate-400" />
+              </div>
+            ) : attachments.length === 0 ? (
+              <p className="py-4 text-center text-sm text-slate-400">Sem comprovativos</p>
+            ) : (
+              <ul className="divide-y divide-slate-100 rounded-md border border-slate-200">
+                {attachments.map((att) => (
+                  <li
+                    key={att.id}
+                    className="flex items-center justify-between gap-3 px-3 py-2.5 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium text-slate-800">{att.fileName}</p>
+                      <p className="text-xs text-slate-500">
+                        {(Number(att.sizeBytes) / 1024).toFixed(1)} KB ·{' '}
+                        {formatDateTime(att.createdAt)}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        className="rounded px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50"
+                        onClick={() => void downloadAttachment(att)}
+                      >
+                        Download
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+                        onClick={() => void removeAttachment(att)}
+                      >
+                        Remover
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </Modal>

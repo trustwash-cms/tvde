@@ -54,6 +54,7 @@ const TEMPLATE_LABELS: Record<string, string> = {
   tenant_welcome: 'Novo tenant (credenciais)',
   user_welcome: 'Novo utilizador (credenciais)',
   two_fa_email: 'Código 2FA por email',
+  payment_report: 'Pagamentos — relatório motorista',
 };
 
 const TEMPLATE_HINTS: Record<string, string> = {
@@ -66,6 +67,7 @@ const TEMPLATE_HINTS: Record<string, string> = {
   tenant_welcome: 'Credenciais de primeiro acesso enviadas ao superadmin quando um tenant é criado ou reenviadas pelo MASTER.',
   user_welcome: 'Credenciais enviadas quando um utilizador é criado com password gerada automaticamente.',
   two_fa_email: 'Código de verificação para autenticação de dois fatores por email.',
+  payment_report: 'Relatório de pagamento enviado ao motorista (receitas, despesas, resultado). Inclui secção reservada de conta corrente.',
 };
 
 const TEMPLATE_MODULE: Record<string, string | undefined> = {
@@ -73,6 +75,7 @@ const TEMPLATE_MODULE: Record<string, string | undefined> = {
   carwash_completion: 'carwash',
   carwash_pickup: 'carwash',
   stripe_payment: 'stripe',
+  payment_report: 'pagamentos',
 };
 
 export function SettingsSmtpPanel() {

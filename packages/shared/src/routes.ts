@@ -133,6 +133,9 @@ export const WEB_ROUTES = {
     pagamentos: {
       root: '/dashboard/pagamentos',
     },
+    contaCorrente: {
+      root: '/dashboard/conta-corrente',
+    },
     meusPagamentos: {
       root: '/dashboard/meus-pagamentos',
     },
@@ -594,6 +597,23 @@ export const API_PATHS = {
     reports: '/pagamentos/reports',
     reportPaid: (id: string) => `/pagamentos/reports/${id}/paid`,
     reportById: (id: string) => `/pagamentos/reports/${id}`,
+    reportSendEmail: (id: string) => `/pagamentos/reports/${id}/send-email`,
+    reportAttachments: (id: string) => `/pagamentos/reports/${id}/attachments`,
+    reportAttachmentUpload: (id: string) => `/pagamentos/reports/${id}/attachments/upload`,
+    reportAttachmentDownload: (reportId: string, attachmentId: string) =>
+      `/pagamentos/reports/${reportId}/attachments/${attachmentId}/download`,
+    reportAttachmentById: (reportId: string, attachmentId: string) =>
+      `/pagamentos/reports/${reportId}/attachments/${attachmentId}`,
+  },
+  contaCorrente: {
+    list: '/conta-corrente',
+    summary: '/conta-corrente/summary',
+    drivers: '/conta-corrente/drivers',
+    byId: (id: string) => `/conta-corrente/${id}`,
+    attachment: (id: string) => `/conta-corrente/${id}/attachment`,
+    attachmentDownload: (id: string) => `/conta-corrente/${id}/attachment/download`,
+    cancel: (id: string) => `/conta-corrente/${id}/cancel`,
+    reopen: (id: string) => `/conta-corrente/${id}/reopen`,
   },
   dashboardApi: {
     driverSummary: '/dashboard/driver-summary',

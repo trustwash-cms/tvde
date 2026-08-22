@@ -19,6 +19,7 @@ import { USER_WELCOME_EMAIL_TEMPLATE } from './user-welcome-email-template';
 import { USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE } from './user-delete-confirmation-email-template';
 import { TWO_FA_EMAIL_TEMPLATE } from './two-fa-email-template';
 import { STRIPE_PAYMENT_EMAIL_TEMPLATE } from './stripe-payment-email-template';
+import { PAYMENT_REPORT_EMAIL_TEMPLATE } from './payment-report-email-template';
 import { buildBaseEmailVariables } from './email-design-tokens';
 
 export const EMAIL_TEMPLATE_KEYS = {
@@ -37,6 +38,7 @@ export const EMAIL_TEMPLATE_KEYS = {
   twoFaEmail: 'two_fa_email',
   bookingConfirmation: 'booking_confirmation',
   ecommerceOrderConfirmation: 'ecommerce_order_confirmation',
+  paymentReport: 'payment_report',
 } as const;
 
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[keyof typeof EMAIL_TEMPLATE_KEYS];
@@ -186,6 +188,11 @@ const DEFAULT_TEMPLATES: Record<
     subject: 'Encomenda {{orderNumber}} — {{appName}}',
     htmlBody: `<!DOCTYPE html><html lang="pt"><body><p>Confirmação de encomenda {{orderNumber}}.</p></body></html>`,
     variables: ['appName', 'orderNumber'],
+  },
+  payment_report: {
+    subject: PAYMENT_REPORT_EMAIL_TEMPLATE.subject,
+    htmlBody: PAYMENT_REPORT_EMAIL_TEMPLATE.htmlBody,
+    variables: [...PAYMENT_REPORT_EMAIL_TEMPLATE.variables],
   },
 };
 

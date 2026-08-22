@@ -8,6 +8,7 @@ import {
   type PaymentDriverOption,
   type PaymentMoneyLine,
 } from '@tvde/shared';
+import { getOpenContaCorrenteForDriver } from './driver-current-account.service';
 
 function money(n: number): string {
   return (Math.round(n * 100) / 100).toFixed(2);
@@ -129,6 +130,7 @@ export async function calculateDriverPayment(
     fuelTransactionIds: [] as string[],
     uberPaymentIds: [] as string[],
     boltOrderIds: [] as string[],
+    driverExpenseIds: [] as string[],
   };
 
   // ── Receitas Uber / Bolt (UUID com melhor sobreposição; só em aberto) ────
@@ -393,9 +395,11 @@ export async function calculateDriverPayment(
   }
   const iva6Receitas = iva6Uber + iva6Bolt;
 
-  // Conta corrente — ainda não implementada
-  const contaCorrente = 0;
-  warnings.push('Conta corrente do motorista ainda não implementada (impacto = 0).');
+  // Conta corrente — lançamentos em aberto (+ parcela se parcelado)
+  const ccSlice = await getOpenContaCorrenteForDriver(db, tenantId, userId);
+  const contaCorrente = ccSlice.impact;
+  detalhes.contaCorrente.push(...ccSlice.details);
+  ids.driverExpenseIds.push(...ccSlice.entryIds);
 
   const totalDespesas =
     viaVerdeTotal + elecTotal + fuelTotal + comissaoTotal + iva6Receitas + contaCorrente;

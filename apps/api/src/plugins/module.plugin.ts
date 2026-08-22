@@ -13,9 +13,16 @@ export default fp(async (fastify: FastifyInstance) => {
     return async (request: FastifyRequest) => {
       if (request.user.role === 'master') return;
 
+      // Não ler request.body em multipart — pode bloquear o stream antes do handler.
+      const contentType = String(request.headers['content-type'] ?? '');
+      const isMultipart = contentType.includes('multipart/form-data');
+      const bodyWorkspaceId = isMultipart
+        ? undefined
+        : (request.body as { workspaceId?: string } | undefined)?.workspaceId;
+
       const workspaceId =
         (request.query as { workspaceId?: string }).workspaceId ??
-        (request.body as { workspaceId?: string } | undefined)?.workspaceId ??
+        bodyWorkspaceId ??
         request.user.workspaceId;
 
       if (!workspaceId) {

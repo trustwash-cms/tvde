@@ -86,6 +86,8 @@ export interface PaymentCalculationIds {
   fuelTransactionIds: string[];
   uberPaymentIds: string[];
   boltOrderIds: string[];
+  /** Lançamentos de conta corrente aplicados neste cálculo */
+  driverExpenseIds: string[];
 }
 
 export interface PaymentCalculation {

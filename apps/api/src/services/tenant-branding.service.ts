@@ -263,8 +263,10 @@ export async function buildCompanyLogoHtml(tenantId: string, companyName: string
       attachment: { filename: logo.filename, content: logo.content, cid: logo.cid },
     };
   }
+  // Texto simples no header escuro (#1A1A2E) — evita “caixa + nome” a duplicar a marca
+  const safe = companyName.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return {
-    html: `<div style="display:inline-block;background:rgba(255,255,255,0.15);border:2px solid rgba(255,255,255,0.35);border-radius:12px;padding:10px 18px;font-size:18px;font-weight:800;letter-spacing:0.02em;">${companyName}</div>`,
+    html: `<span style="color:#fff;font-size:20px;font-weight:500;letter-spacing:0.04em;">${safe}</span>`,
     attachment: null,
   };
 }

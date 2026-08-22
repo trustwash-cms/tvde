@@ -130,5 +130,15 @@ export function getServerConfig() {
     ),
     userDocumentsUploadDir: envOr('USER_DOCUMENTS_UPLOAD_DIR', 'uploads/user-documents'),
     userDocumentsMaxBytes: parseInt(envOr('USER_DOCUMENTS_MAX_BYTES', '5242880'), 10),
+    paymentReceiptsUploadDir: envOr('PAYMENT_RECEIPTS_UPLOAD_DIR', 'uploads/payment_receipts'),
+    paymentReceiptsMaxBytes: parseInt(envOr('PAYMENT_RECEIPTS_MAX_BYTES', '10485760'), 10),
+    driverCurrentAccountUploadDir: envOr(
+      'DRIVER_CURRENT_ACCOUNT_UPLOAD_DIR',
+      'uploads/driver-current-account'
+    ),
+    driverCurrentAccountMaxBytes: parseInt(
+      envOr('DRIVER_CURRENT_ACCOUNT_MAX_BYTES', '10485760'),
+      10
+    ),
   };
 }

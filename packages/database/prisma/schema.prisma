@@ -84,6 +84,8 @@ model Tenant {
   fuelTransactions          FuelTransaction[]
   uberPayments              UberPayment[]
   paymentReports            PaymentReport[]
+  paymentReportAttachments  PaymentReportAttachment[]
+  driverCurrentAccountEntries DriverCurrentAccountEntry[]
   portalConnections         PortalConnection[]
   portalSyncJobs            PortalSyncJob[]
   whmcsConnections          WhmcsConnection[]
@@ -276,6 +278,9 @@ model User {
   uberPaymentsImported             UberPayment[] @relation("UberPaymentImportedBy")
   paymentReports                   PaymentReport[] @relation("PaymentReportUser")
   paymentReportsCreated            PaymentReport[] @relation("PaymentReportCreatedBy")
+  paymentReportAttachmentsUploaded PaymentReportAttachment[]
+  driverCurrentAccountEntries      DriverCurrentAccountEntry[] @relation("DriverCurrentAccountDriver")
+  driverCurrentAccountEntriesCreated DriverCurrentAccountEntry[] @relation("DriverCurrentAccountCreatedBy")
   impersonatedSessions             Session[] @relation("SessionImpersonator")
 
   @@index([tenantId])
@@ -2656,14 +2661,86 @@ model PaymentReport {
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 
-  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  user      User   @relation("PaymentReportUser", fields: [userId], references: [id], onDelete: Cascade)
-  createdBy User?  @relation("PaymentReportCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  tenant      Tenant                     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user        User                       @relation("PaymentReportUser", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy   User?                      @relation("PaymentReportCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  attachments PaymentReportAttachment[]
 
   @@index([tenantId, userId, createdAt])
   @@index([tenantId, periodStart, periodEnd])
   @@index([tenantId, isPaid])
   @@map("payment_reports")
+}
+
+enum DriverCurrentAccountEntryType {
+  credit
+  debit
+}
+
+enum DriverCurrentAccountEntryStatus {
+  open
+  settled
+  cancelled
+}
+
+/**
+ * Conta corrente do motorista — créditos/débitos ocasionais (pneu, adiantamentos, multas).
+ * amount é sempre positivo; o sinal no pagamento vem do type (credit ↓ despesas, debit ↑).
+ */
+model DriverCurrentAccountEntry {
+  id                   String                           @id @default(uuid()) @db.Uuid
+  tenantId             String                           @map("tenant_id") @db.Uuid
+  workspaceId          String?                          @map("workspace_id") @db.Uuid
+  driverUserId         String                           @map("driver_user_id") @db.Uuid
+  description          String                           @db.Text
+  amount               Decimal                          @db.Decimal(12, 2)
+  type                 DriverCurrentAccountEntryType
+  category             String?                          @db.VarChar(120)
+  reference            String?                          @db.VarChar(255)
+  status               DriverCurrentAccountEntryStatus  @default(open)
+  installmentEnabled   Boolean                          @default(false) @map("installment_enabled")
+  totalInstallments    Int?                             @map("total_installments")
+  installmentAmount    Decimal?                         @map("installment_amount") @db.Decimal(12, 2)
+  installmentsPaid     Int                              @default(0) @map("installments_paid")
+  attachmentFileName   String?                          @map("attachment_file_name")
+  attachmentStorageKey String?                          @map("attachment_storage_key")
+  attachmentMimeType   String?                          @map("attachment_mime_type")
+  attachmentSizeBytes  BigInt?                          @map("attachment_size_bytes")
+  paymentReportId      String?                          @map("payment_report_id") @db.Uuid
+  createdByUserId      String?                          @map("created_by_user_id") @db.Uuid
+  createdAt            DateTime                         @default(now()) @map("created_at")
+  updatedAt            DateTime                         @updatedAt @map("updated_at")
+
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  driver    User    @relation("DriverCurrentAccountDriver", fields: [driverUserId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("DriverCurrentAccountCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, driverUserId, status])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, createdAt])
+  @@map("driver_current_account_entries")
+}
+
+/** Comprovativos de pagamento (PDF/imagens) associados a um payment_report. */
+model PaymentReportAttachment {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @map("tenant_id") @db.Uuid
+  paymentReportId  String   @map("payment_report_id") @db.Uuid
+  fileName         String   @map("file_name")
+  storageKey       String   @map("storage_key")
+  mimeType         String   @map("mime_type")
+  sizeBytes        BigInt   @map("size_bytes")
+  uploadedByUserId String   @map("uploaded_by_user_id") @db.Uuid
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  tenant         Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  paymentReport  PaymentReport @relation(fields: [paymentReportId], references: [id], onDelete: Cascade)
+  uploadedBy     User          @relation(fields: [uploadedByUserId], references: [id], onDelete: Cascade)
+
+  @@index([paymentReportId])
+  @@index([tenantId])
+  @@index([createdAt])
+  @@map("payment_report_attachments")
 }
 
 /** Credenciais WHMCS API por workspace — emissão Moloni quando fatura fica Paga. */
