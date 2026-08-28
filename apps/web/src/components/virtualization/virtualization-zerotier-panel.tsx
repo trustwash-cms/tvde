@@ -368,6 +368,20 @@ export function VirtualizationZerotierPanel() {
   };
 
   const openJoinTargetModal = () => {
+    if (networks.length === 0) {
+      setModalError('');
+      setJoinTargetModalOpen(true);
+      setJoinTargetForm({
+        ...emptyJoinTargetForm,
+        sshPort: String(workspaceSettings?.sshDefaultPort ?? 22),
+        sshUsername: workspaceSettings?.sshDefaultUsername ?? 'root',
+        sshAuthMode: workspaceSettings?.sshAuthMode ?? 'password',
+        useWorkspaceSsh: true,
+        targetKind: 'custom',
+      });
+      return;
+    }
+
     setJoinTargetForm({
       ...emptyJoinTargetForm,
       networkRowId: networks[0]?.id ?? '',
@@ -375,6 +389,7 @@ export function VirtualizationZerotierPanel() {
       sshUsername: workspaceSettings?.sshDefaultUsername ?? 'root',
       sshAuthMode: workspaceSettings?.sshAuthMode ?? 'password',
       useWorkspaceSsh: true,
+      targetKind: 'custom',
     });
     setModalError('');
     setJoinTargetModalOpen(true);
@@ -608,15 +623,16 @@ export function VirtualizationZerotierPanel() {
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Instalar ZeroTier nos servidores</h3>
           <p className="mt-1 text-xs text-slate-500">
-            SSH ao host (ex.: root + password), instalação automática e join na rede seleccionada.
+            Host manual (qualquer IP/SSH) ou PBS/PVE já configurados — não depende do dashboard PVE/PBS.
           </p>
+          {networks.length === 0 ? (
+            <p className="mt-1 text-xs text-amber-700">
+              Ainda não há redes associadas. Clique em «Associar rede» na conta ZeroTier acima (obrigatório
+              antes de instalar).
+            </p>
+          ) : null}
         </div>
-        <button
-          type="button"
-          className="btn-secondary text-sm"
-          onClick={openJoinTargetModal}
-          disabled={networks.length === 0}
-        >
+        <button type="button" className="btn-secondary text-sm" onClick={openJoinTargetModal}>
           Adicionar servidor
         </button>
       </div>
@@ -864,12 +880,39 @@ export function VirtualizationZerotierPanel() {
             <button type="button" className="btn-secondary" onClick={() => setJoinTargetModalOpen(false)} disabled={busy}>
               Cancelar
             </button>
-            <button type="submit" form="zerotier-join-target-form" className="btn-primary" disabled={busy}>
+            <button
+              type="submit"
+              form="zerotier-join-target-form"
+              className="btn-primary"
+              disabled={busy || networks.length === 0}
+            >
               {busy ? 'A guardar…' : 'Guardar'}
             </button>
           </div>
         }
       >
+        {networks.length === 0 ? (
+          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+            <p className="font-medium">É preciso associar uma rede ZeroTier primeiro.</p>
+            <p className="mt-1">
+              Esta etapa não depende de PVE/PBS — mas a instalação precisa de um Network ID. Na conta acima,
+              clique em <strong>Associar rede</strong> e escolha a rede (ex. projetox). Depois volte a
+              «Adicionar servidor» e use <strong>Host manual</strong> com o IP SSH.
+            </p>
+            {accounts[0] ? (
+              <button
+                type="button"
+                className="btn-primary mt-3 text-sm"
+                onClick={() => {
+                  setJoinTargetModalOpen(false);
+                  void openLinkModal(accounts[0]!.id);
+                }}
+              >
+                Associar rede agora
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         {modalError ? (
           <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{modalError}</div>
         ) : null}
@@ -881,8 +924,9 @@ export function VirtualizationZerotierPanel() {
               value={joinTargetForm.networkRowId}
               onChange={(e) => setJoinTargetForm((prev) => ({ ...prev, networkRowId: e.target.value }))}
               required
+              disabled={networks.length === 0}
             >
-              <option value="">Seleccionar…</option>
+              <option value="">{networks.length === 0 ? 'Nenhuma rede associada…' : 'Seleccionar…'}</option>
               {networks.map((network) => (
                 <option key={network.id} value={network.id}>
                   {network.label} ({network.networkId})
