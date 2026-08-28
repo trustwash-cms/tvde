@@ -76,8 +76,9 @@ export async function importViaVerdeCsv(
           entryPoint: row.entryPoint,
           exitPoint: row.exitPoint,
           value: row.value,
-          isPaid: row.isPaid,
-          paymentDate: row.paymentDate,
+          // Pago é só gestão interna — nunca do XLS/CSV (Is Payed do portal)
+          isPaid: false,
+          paymentDate: null,
           contractNumber: row.contractNumber,
           liquidValue: row.liquidValue,
           discountBalance: row.discountBalance,

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { prisma } from '@tvde/database';
 import { resolveWorkspaceTenantScope } from '../lib/workspace-scope';
@@ -61,6 +61,17 @@ import {
   getFaturaAnexoForDownload,
 } from '../services/admin-mgmt.service';
 import {
+  createAdminMgmtPrestacao,
+  createAdminMgmtPrestacaoPagamento,
+  deleteAdminMgmtPrestacao,
+  deleteAdminMgmtPrestacaoPagamento,
+  getAdminMgmtPrestacao,
+  getAdminMgmtPrestacaoPagamentoComprovativo,
+  listAdminMgmtPrestacoes,
+  updateAdminMgmtPrestacao,
+  type PrestacaoPagamentoFileInput,
+} from '../services/admin-mgmt-prestacoes.service';
+import {
   getAdminMgmtDashboard,
   listAdminMgmtVencimentos,
   refreshAdminMgmtVencimentoStatuses,
@@ -72,6 +83,7 @@ import {
 } from '../services/admin-mgmt-attachment-storage.service';
 import {
   getAdminMgmtNotificationStatus,
+  sendAdminMgmtFaturaClientReminder,
   sendAdminMgmtTestNotifications,
 } from '../services/admin-mgmt-notification.service';
 
@@ -83,6 +95,34 @@ async function resolveScope(
   workspaceId?: string
 ) {
   return resolveWorkspaceTenantScope(fastify, request.user as never, workspaceId);
+}
+
+async function parsePrestacaoPagamentoBody(request: FastifyRequest): Promise<{
+  fields: Record<string, unknown>;
+  file?: PrestacaoPagamentoFileInput;
+}> {
+  const contentType = request.headers['content-type'] ?? '';
+  if (!contentType.includes('multipart/form-data')) {
+    return { fields: z.record(z.unknown()).parse(request.body ?? {}) };
+  }
+
+  const fields: Record<string, unknown> = {};
+  let file: PrestacaoPagamentoFileInput | undefined;
+
+  for await (const part of request.parts()) {
+    if (part.type === 'file') {
+      if (part.fieldname !== 'comprovativo') continue;
+      file = {
+        fileName: part.filename,
+        mimeType: part.mimetype,
+        buffer: await part.toBuffer(),
+      };
+    } else if ('value' in part) {
+      fields[part.fieldname] = part.value;
+    }
+  }
+
+  return { fields, file };
 }
 
 export async function adminMgmtRoutes(fastify: FastifyInstance) {
@@ -318,6 +358,99 @@ export async function adminMgmtRoutes(fastify: FastifyInstance) {
     const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
     const ok = await deleteAdminMgmtContrato(id, workspaceId, tenantId);
     if (!ok) return reply.status(404).send({ success: false, error: 'Contrato não encontrado' });
+    return reply.send({ success: true });
+  });
+
+  // Prestações (acordos de pagamento parcelado)
+  fastify.get('/admin-mgmt/prestacoes', async (request, reply) => {
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
+    return reply.send({ success: true, data: await listAdminMgmtPrestacoes(workspaceId, tenantId) });
+  });
+
+  fastify.get('/admin-mgmt/prestacoes/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
+    const data = await getAdminMgmtPrestacao(id, workspaceId, tenantId);
+    if (!data) return reply.status(404).send({ success: false, error: 'Prestação não encontrada' });
+    return reply.send({ success: true, data });
+  });
+
+  fastify.post('/admin-mgmt/prestacoes', async (request, reply) => {
+    const body = z.record(z.unknown()).parse(request.body);
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId as string | undefined);
+    try {
+      const data = await createAdminMgmtPrestacao(workspaceId, tenantId, body);
+      return reply.status(201).send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.put('/admin-mgmt/prestacoes/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = z.record(z.unknown()).parse(request.body);
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId as string | undefined);
+    try {
+      const data = await updateAdminMgmtPrestacao(id, workspaceId, tenantId, body);
+      if (!data) return reply.status(404).send({ success: false, error: 'Prestação não encontrada' });
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.delete('/admin-mgmt/prestacoes/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
+    const ok = await deleteAdminMgmtPrestacao(id, workspaceId, tenantId);
+    if (!ok) return reply.status(404).send({ success: false, error: 'Prestação não encontrada' });
+    return reply.send({ success: true });
+  });
+
+  fastify.post('/admin-mgmt/prestacoes/:id/pagamentos', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const { fields, file } = await parsePrestacaoPagamentoBody(request);
+      const { workspaceId, tenantId } = await resolveScope(
+        fastify,
+        request,
+        fields.workspaceId as string | undefined
+      );
+      const data = await createAdminMgmtPrestacaoPagamento(id, workspaceId, tenantId, fields, file);
+      if (!data) return reply.status(404).send({ success: false, error: 'Prestação não encontrada' });
+      return reply.status(201).send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.get('/admin-mgmt/prestacoes/:id/pagamentos/:pagamentoId/comprovativo', async (request, reply) => {
+    const { id, pagamentoId } = request.params as { id: string; pagamentoId: string };
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
+    const comprovativo = await getAdminMgmtPrestacaoPagamentoComprovativo(
+      id,
+      pagamentoId,
+      workspaceId,
+      tenantId
+    );
+    if (!comprovativo) {
+      return reply.status(404).send({ success: false, error: 'Comprovativo não encontrado' });
+    }
+    reply.header('Content-Disposition', `attachment; filename="${comprovativo.fileName}"`);
+    reply.type(comprovativo.mimeType);
+    return reply.send(openAdminMgmtAttachmentStream(comprovativo.storageKey));
+  });
+
+  fastify.delete('/admin-mgmt/prestacoes/:id/pagamentos/:pagamentoId', async (request, reply) => {
+    const { id, pagamentoId } = request.params as { id: string; pagamentoId: string };
+    const query = request.query as { workspaceId?: string };
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, query.workspaceId);
+    const ok = await deleteAdminMgmtPrestacaoPagamento(id, pagamentoId, workspaceId, tenantId);
+    if (!ok) return reply.status(404).send({ success: false, error: 'Pagamento não encontrado' });
     return reply.send({ success: true });
   });
 
@@ -696,6 +829,21 @@ export async function adminMgmtRoutes(fastify: FastifyInstance) {
     const data = await updateAdminMgmtFatura(id, workspaceId, tenantId, body);
     if (!data) return reply.status(404).send({ success: false, error: 'Fatura não encontrada' });
     return reply.send({ success: true, data });
+  });
+
+  fastify.post('/admin-mgmt/faturas/:id/notify-client', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = workspaceBody.parse(request.body ?? {});
+    const { workspaceId, tenantId } = await resolveScope(fastify, request, body.workspaceId);
+    try {
+      const data = await sendAdminMgmtFaturaClientReminder(id, workspaceId, tenantId);
+      return reply.send({ success: true, data, message: 'Cliente notificado' });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Falha ao notificar cliente',
+      });
+    }
   });
 
   fastify.post('/admin-mgmt/faturas/:id/mark-paid', async (request, reply) => {

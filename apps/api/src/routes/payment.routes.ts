@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { defaultPaymentWeekRange, isDriverRole, type Role } from '@tvde/shared';
+import { defaultPaymentWeekRange, isDriverRole, WHATSAPP_BUSINESS_EVENT_KEYS, type Role } from '@tvde/shared';
 import { env } from '../config/env';
 import { createAuditLog } from '../services/audit.service';
 import { EmailNotConfiguredError } from '../services/email.service';
@@ -22,8 +22,10 @@ import {
   deletePaymentReport,
   getPaymentReport,
   listPaymentReports,
+  recordPaymentReportNotification,
   setPaymentReportPaid,
 } from '../services/payment-report.service';
+import { dispatchWhatsappBusinessEvent } from '../modules/whatsapp-business/whatsapp-business.notifications.service';
 
 function requireTenant(request: { user: { tenantId: string | null } }) {
   if (!request.user.tenantId) throw new Error('Tenant em falta na sessão');
@@ -165,6 +167,38 @@ export async function paymentRoutes(fastify: FastifyInstance) {
             createdByUserId: request.user.sub,
           }
         );
+
+        try {
+          const notify = await dispatchWhatsappBusinessEvent(
+            tenantId,
+            WHATSAPP_BUSINESS_EVENT_KEYS.driverWeeklyPayment,
+            body.userId,
+            {
+              reportId: data.reportId,
+              periodStart: data.calculation.periodStart,
+              periodEnd: data.calculation.periodEnd,
+              resultAmount: Number(data.calculation.resultado),
+            }
+          );
+          await recordPaymentReportNotification(fastify.db, tenantId, data.reportId, notify);
+          if (notify.errors.length > 0) {
+            request.log.warn(
+              { notify, reportId: data.reportId },
+              'whatsapp business notification after payment.confirm'
+            );
+          }
+        } catch (notifyErr) {
+          request.log.warn(
+            { err: notifyErr, reportId: data.reportId },
+            'whatsapp business notification failed after payment.confirm'
+          );
+          await recordPaymentReportNotification(fastify.db, tenantId, data.reportId, {
+            emailSent: false,
+            whatsappSent: false,
+            errors: [notifyErr instanceof Error ? notifyErr.message : 'Falha no envio'],
+          });
+        }
+
         return reply.send({ success: true, data });
       } catch (err) {
         return reply

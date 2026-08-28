@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { WEB_ROUTES, hasMinRole, type Role } from '@tvde/shared';
+import { WEB_ROUTES, hasMinRole, isHiddenActivationModule, type Role } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withSearchQuery } from '@/lib/list-search';
 import ListPageSearch from '@/components/list-page-search';
@@ -59,7 +59,15 @@ function WorkspacesMasterPage() {
   const allowedKeys = user?.capabilities?.allowedModules ?? allModules.filter((m) => !m.isCore).map((m) => m.key);
 
   const businessKeys = useMemo(
-    () => allModules.filter((m) => !m.isCore && allowedKeys.includes(m.key)).map((m) => m.key),
+    () =>
+      allModules
+        .filter(
+          (m) =>
+            !m.isCore &&
+            allowedKeys.includes(m.key) &&
+            !isHiddenActivationModule(m.key)
+        )
+        .map((m) => m.key),
     [allModules, allowedKeys]
   );
 

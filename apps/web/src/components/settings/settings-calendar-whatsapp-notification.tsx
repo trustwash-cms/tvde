@@ -157,7 +157,7 @@ export function SettingsCalendarWhatsappNotification({
       )}
 
       {settings.whatsapp.moduleActive && !settings.whatsapp.connected && (
-        <Link href={WEB_ROUTES.dashboard.settings.whatsapp} className="btn-secondary inline-flex text-sm">
+        <Link href={WEB_ROUTES.dashboard.settings.whatsappGeneric} className="btn-secondary inline-flex text-sm">
           Configurar WhatsApp
         </Link>
       )}

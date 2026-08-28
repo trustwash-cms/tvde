@@ -364,6 +364,7 @@ export async function sendPaymentReportEmail(
     where: { id: reportId },
     data: {
       lastSentAt,
+      emailSent: true,
       reportHtml: renderedHtml,
     },
   });

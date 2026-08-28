@@ -632,3 +632,115 @@ export async function importAdminMgmtClienteFromSource(
   });
   return mapClienteSimple(row);
 }
+
+/**
+ * Resolve email/telefone do cliente admin-mgmt.
+ * Fallback: ficha → entidade fiscal ligada → CRM ligado → match por NIF.
+ * Se encontrar contacto noutra fonte e a ficha estiver vazia, preenche (backfill).
+ */
+export async function resolveAdminMgmtClienteContact(cliente: {
+  id: string;
+  workspaceId: string;
+  tenantId: string;
+  email: string | null;
+  telefone: string | null;
+  nif: string | null;
+  cmsClientId: string | null;
+  billingEntityId: string | null;
+}): Promise<{ email: string; phone: string; source: 'ficha' | 'billing' | 'crm' }> {
+  let email = cliente.email?.trim() || '';
+  let phone = cliente.telefone?.trim() || '';
+  if (email || phone) {
+    return { email, phone, source: 'ficha' };
+  }
+
+  let source: 'billing' | 'crm' = 'billing';
+  let billingEntityId: string | null = null;
+  let cmsClientId: string | null = null;
+
+  if (cliente.billingEntityId) {
+    const be = await prisma.billingEntity.findFirst({
+      where: {
+        id: cliente.billingEntityId,
+        workspaceId: cliente.workspaceId,
+        tenantId: cliente.tenantId,
+      },
+      select: { id: true, email: true, phone: true },
+    });
+    if (be) {
+      email = be.email?.trim() || '';
+      phone = be.phone?.trim() || '';
+      billingEntityId = be.id;
+      source = 'billing';
+    }
+  }
+
+  if (!email && !phone && cliente.cmsClientId) {
+    const crm = await prisma.client.findFirst({
+      where: {
+        id: cliente.cmsClientId,
+        workspaceId: cliente.workspaceId,
+        tenantId: cliente.tenantId,
+      },
+      select: { id: true, email: true, phone: true },
+    });
+    if (crm) {
+      email = crm.email?.trim() || '';
+      phone = crm.phone?.trim() || '';
+      cmsClientId = crm.id;
+      source = 'crm';
+    }
+  }
+
+  const nif = normalizeNif(cliente.nif);
+  if (!email && !phone && nif) {
+    const be = await prisma.billingEntity.findFirst({
+      where: {
+        workspaceId: cliente.workspaceId,
+        tenantId: cliente.tenantId,
+        entityType: 'customer',
+        vat: nif,
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, email: true, phone: true, cmsClientId: true },
+    });
+    if (be && (be.email?.trim() || be.phone?.trim())) {
+      email = be.email?.trim() || '';
+      phone = be.phone?.trim() || '';
+      billingEntityId = be.id;
+      cmsClientId = be.cmsClientId ?? null;
+      source = 'billing';
+    } else {
+      const crm = await prisma.client.findFirst({
+        where: {
+          workspaceId: cliente.workspaceId,
+          tenantId: cliente.tenantId,
+          nif,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, email: true, phone: true },
+      });
+      if (crm && (crm.email?.trim() || crm.phone?.trim())) {
+        email = crm.email?.trim() || '';
+        phone = crm.phone?.trim() || '';
+        cmsClientId = crm.id;
+        source = 'crm';
+      }
+    }
+  }
+
+  if (email || phone) {
+    await prisma.adminMgmtCliente.update({
+      where: { id: cliente.id },
+      data: {
+        ...(!cliente.email && email ? { email } : {}),
+        ...(!cliente.telefone && phone ? { telefone: phone } : {}),
+        ...(!cliente.billingEntityId && billingEntityId ? { billingEntityId } : {}),
+        ...(!cliente.cmsClientId && cmsClientId ? { cmsClientId } : {}),
+      },
+    });
+    return { email, phone, source };
+  }
+
+  return { email: '', phone: '', source: 'ficha' };
+}

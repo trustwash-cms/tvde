@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'CMS Multi-tenant',
-  description: 'Sistema de gestão de conteúdo multi-tenant',
+  title: process.env.NEXT_PUBLIC_APP_NAME?.trim() || 'Fleet CRM',
+  description: 'Gestão de frota TVDE',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

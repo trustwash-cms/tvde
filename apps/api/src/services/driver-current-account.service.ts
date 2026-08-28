@@ -412,6 +412,110 @@ export async function createContaCorrenteEntry(
   return mapEntry(created);
 }
 
+export async function updateContaCorrenteEntry(
+  db: PrismaClient,
+  tenantId: string,
+  entryId: string,
+  input: {
+    description: string;
+    amount?: number;
+    type?: ContaCorrenteType;
+    category?: string | null;
+    reference?: string | null;
+    installmentEnabled?: boolean;
+    totalInstallments?: number | null;
+    installmentAmount?: number | null;
+    attachment?: { fileName: string; mimeType: string; buffer: Buffer } | null;
+    removeAttachment?: boolean;
+  }
+): Promise<ContaCorrenteEntryDto> {
+  const existing = await db.driverCurrentAccountEntry.findFirst({
+    where: { id: entryId, tenantId },
+  });
+  if (!existing) throw new Error('Lançamento não encontrado');
+  if (existing.status !== 'open') {
+    throw new Error('Só é possível editar lançamentos em aberto');
+  }
+
+  const description = input.description.trim();
+  if (!description) throw new Error('Descrição é obrigatória');
+
+  const partialInstallments = existing.installmentsPaid > 0;
+  const data: Prisma.DriverCurrentAccountEntryUpdateInput = {
+    description,
+    category: input.category?.trim() || null,
+    reference: input.reference?.trim() || null,
+  };
+
+  if (!partialInstallments) {
+    if (input.amount == null || !(input.amount > 0)) {
+      throw new Error('Valor deve ser maior que zero');
+    }
+    const type = input.type ?? existing.type;
+    const amount = Math.abs(input.amount);
+
+    const installmentEnabled = Boolean(input.installmentEnabled) && type === 'debit';
+    let totalInstallments: number | null = null;
+    let installmentAmount: number | null = null;
+
+    if (installmentEnabled) {
+      const n = Number(input.totalInstallments);
+      if (!Number.isInteger(n) || n < 2) {
+        throw new Error('Número de parcelas inválido (mínimo 2)');
+      }
+      totalInstallments = n;
+      const slice =
+        input.installmentAmount != null && input.installmentAmount > 0
+          ? Math.abs(input.installmentAmount)
+          : Math.round((amount / n) * 100) / 100;
+      installmentAmount = slice;
+    }
+
+    data.amount = amount;
+    data.type = type;
+    data.installmentEnabled = installmentEnabled;
+    data.totalInstallments = totalInstallments;
+    data.installmentAmount = installmentAmount;
+    if (!installmentEnabled) {
+      data.totalInstallments = null;
+      data.installmentAmount = null;
+    }
+  }
+
+  if (input.removeAttachment && existing.attachmentStorageKey) {
+    await deleteDriverCurrentAccountFile(existing.attachmentStorageKey);
+    data.attachmentFileName = null;
+    data.attachmentStorageKey = null;
+    data.attachmentMimeType = null;
+    data.attachmentSizeBytes = null;
+  }
+
+  if (input.attachment) {
+    if (existing.attachmentStorageKey) {
+      await deleteDriverCurrentAccountFile(existing.attachmentStorageKey);
+    }
+    const storageKey = buildDriverCurrentAccountStorageKey(
+      tenantId,
+      entryId,
+      input.attachment.fileName
+    );
+    await saveDriverCurrentAccountFile(storageKey, input.attachment.buffer);
+    data.attachmentFileName = input.attachment.fileName;
+    data.attachmentStorageKey = storageKey;
+    data.attachmentMimeType = input.attachment.mimeType;
+    data.attachmentSizeBytes = BigInt(input.attachment.buffer.length);
+  }
+
+  const updated = await db.driverCurrentAccountEntry.update({
+    where: { id: entryId },
+    data,
+    include: {
+      driver: { select: { fullName: true, username: true, email: true } },
+    },
+  });
+  return mapEntry(updated);
+}
+
 export async function cancelContaCorrenteEntry(
   db: PrismaClient,
   tenantId: string,

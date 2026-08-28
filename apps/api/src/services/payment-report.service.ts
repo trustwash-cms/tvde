@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
-import type { PaymentCalculation } from '@tvde/shared';
+import { getMonthUtcRange, type PaymentCalculation } from '@tvde/shared';
 import { calculateDriverPayment } from './payment-calculator.service';
 import { cleanupPaymentReportAttachmentFiles } from './payment-report-attachment.service';
 import {
@@ -14,6 +14,27 @@ function parseDateOnly(ymd: string): Date {
 
 function money(n: number | string): string {
   return Number(n).toFixed(2);
+}
+
+/** Soma `resultadoFinal` dos pagamentos gravados cujo período sobrepõe o mês. */
+export async function sumDriverPaymentReportsInMonth(
+  db: PrismaClient,
+  tenantId: string,
+  userId: string,
+  monthKey?: string
+): Promise<string> {
+  const { start, endExclusive } = getMonthUtcRange(monthKey);
+  const monthEnd = new Date(endExclusive.getTime() - 1);
+  const agg = await db.paymentReport.aggregate({
+    where: {
+      tenantId,
+      userId,
+      periodStart: { lte: monthEnd },
+      periodEnd: { gte: start },
+    },
+    _sum: { resultadoFinal: true },
+  });
+  return money(agg._sum.resultadoFinal?.toString() ?? 0);
 }
 
 function ymd(d: Date): string {
@@ -247,9 +268,17 @@ export async function setPaymentReportPaid(
   });
 }
 
+export type PaymentNotificationDebug = {
+  skipped: string[];
+  errors: string[];
+};
+
 export type PaymentReportDetail = PaymentReportRow & {
   details: PaymentCalculation['detalhes'] | null;
   warnings: string[];
+  emailSent: boolean;
+  whatsappSent: boolean;
+  notificationDebug: PaymentNotificationDebug | null;
 };
 
 export async function getPaymentReport(
@@ -274,8 +303,49 @@ export async function getPaymentReport(
   const warnings = Array.isArray(row.warningsJson)
     ? (row.warningsJson as string[])
     : [];
+  const notificationDebug = parseNotificationDebug(row.notificationDebug);
 
-  return { ...base, details, warnings };
+  return {
+    ...base,
+    details,
+    warnings,
+    emailSent: row.emailSent,
+    whatsappSent: row.whatsappSent,
+    notificationDebug,
+  };
+}
+
+function parseNotificationDebug(value: unknown): PaymentNotificationDebug | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as { skipped?: unknown; errors?: unknown };
+  return {
+    skipped: Array.isArray(row.skipped) ? row.skipped.filter((x): x is string => typeof x === 'string') : [],
+    errors: Array.isArray(row.errors) ? row.errors.filter((x): x is string => typeof x === 'string') : [],
+  };
+}
+
+export async function recordPaymentReportNotification(
+  db: PrismaClient,
+  tenantId: string,
+  reportId: string,
+  result: {
+    emailSent: boolean;
+    whatsappSent: boolean;
+    skipped?: string[];
+    errors?: string[];
+  }
+): Promise<void> {
+  await db.paymentReport.updateMany({
+    where: { id: reportId, tenantId },
+    data: {
+      emailSent: result.emailSent,
+      whatsappSent: result.whatsappSent,
+      notificationDebug: {
+        skipped: result.skipped ?? [],
+        errors: result.errors ?? [],
+      } satisfies PaymentNotificationDebug,
+    },
+  });
 }
 
 export async function deletePaymentReport(

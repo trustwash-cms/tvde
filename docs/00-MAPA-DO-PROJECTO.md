@@ -37,11 +37,13 @@ Documento de referência para humanos e agentes de IA. Ao ler este ficheiro deve
 | `calendar` | Calendário partilhado | `/dashboard/calendar` |
 | `admin_mgmt` | Gestão administrativa | `/dashboard/admin-mgmt/*` |
 | `sms` | SMS / 2FA | Config → SMS |
+| `whatsapp` | WhatsApp Oficial (Meta) + Genérica | Config → WhatsApp — [`10-WHATSAPP_BUSINESS_API.MD`](./10-WHATSAPP_BUSINESS_API.MD) |
 | `media`, `webhooks`, `api-keys`, `reports` | Registados no seed; UI limitada | — |
 
 ### Módulos **removidos** do código (tabelas na BD podem existir vazias — legado CMS)
 
-`ecommerce`, `woocommerce`, `shopify`, `stripe`, `carwash`, `bookings`, `correos-express`, `whatsapp` (bridge), loja pública.
+`ecommerce`, `woocommerce`, `shopify`, `stripe`, `carwash`, `bookings`, `correos-express`, loja pública.  
+O módulo `whatsapp` **está activo**: API Oficial (Meta Cloud) + API Genérica (bridge). Doc: [`10-WHATSAPP_BUSINESS_API.MD`](./10-WHATSAPP_BUSINESS_API.MD).
 
 ---
 
@@ -144,7 +146,9 @@ npm run db:rls           # aplicar RLS no container
 | `SmtpConfig` | `smtp_configs` | SMTP por tenant ou plataforma |
 | `EmailTemplate` | `email_templates` | Templates email editáveis |
 | `SmsConfig` / `SmsLog` | `sms_configs` / `sms_logs` | SMS Twilio/Sinch |
-| `WhatsappTemplate` | `whatsapp_templates` | Templates WA (legado; bridge não incluído) |
+| `WhatsappTemplate` | `whatsapp_templates` | Templates da API Genérica (bridge) |
+| `WhatsappBusinessConfig` | `whatsapp_business_configs` | Credenciais Cloud API (por tenant) |
+| `WhatsappBusinessNotificationEvent` | `whatsapp_business_notification_events` | Flags email/WhatsApp por evento |
 
 ### 3.5 Tabelas — CRM interno
 

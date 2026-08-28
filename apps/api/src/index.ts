@@ -6,8 +6,10 @@ import { env } from './config/env';
 import { disconnectRedis, getRedis } from './lib/redis';
 import { startCalendarScheduledInvoiceWorker } from './workers/calendar-scheduled-invoice.worker';
 import { startBoltDailySyncWorker } from './workers/bolt-daily-sync.worker';
+import { startPortalDailySyncWorker } from './workers/portal-daily-sync.worker';
 import { startPortalSessionRefreshWorker } from './workers/portal-session-refresh.worker';
 import { startWhmcsPaidInvoiceWorker } from './workers/whmcs-paid-invoice.worker';
+import { startVirtualizationAlertWorker } from './workers/virtualization-alert.worker';
 import { clearStaleInfraPortalErrors } from './services/portal-rpa/portal-connection.service';
 import {
   disposeAllLiveOtpSessions,
@@ -80,7 +82,9 @@ async function main() {
   startCalendarScheduledInvoiceWorker();
   startBoltDailySyncWorker();
   startPortalSessionRefreshWorker();
+  startPortalDailySyncWorker();
   startWhmcsPaidInvoiceWorker();
+  startVirtualizationAlertWorker();
   void bootstrapPlaywright();
 
   const stop = (signal: string) => {

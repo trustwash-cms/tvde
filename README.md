@@ -39,7 +39,7 @@ npm run dev
 - Redis: porta **6380**
 
 Documentação Portal RPA: [`docs/03-PORTAL_RPA.md`](docs/03-PORTAL_RPA.md)  
-Pagamentos: [`docs/08-PAGAMENTOS.md`](docs/08-PAGAMENTOS.md) · Roadmap: [`docs/01-ROADMAP_TVDE.md`](docs/01-ROADMAP_TVDE.md)
+Pagamentos: [`docs/08-PAGAMENTOS.md`](docs/08-PAGAMENTOS.md) · WhatsApp Business API: [`docs/10-WHATSAPP_BUSINESS_API.MD`](docs/10-WHATSAPP_BUSINESS_API.MD) · Roadmap: [`docs/01-ROADMAP_TVDE.md`](docs/01-ROADMAP_TVDE.md)
 ## Credenciais seed (`.env.example`)
 
 | Utilizador | Email | Password |

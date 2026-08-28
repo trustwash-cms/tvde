@@ -11,11 +11,13 @@ import {
   RefreshCw,
   Zap,
   AlertCircle,
+  Calculator,
 } from 'lucide-react';
 import {
   defaultPaymentWeekRange,
   lisbonDatetimeLocalToIso,
-  pickLatestUberReportForPeriod,
+  listUberPaymentReports,
+  uberReportMatchesPeriod,
   type PortalKind,
   type UberReportListItem,
   type UberSyncOptions,
@@ -25,13 +27,9 @@ import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { PortalQuickLoginModal } from '@/components/pagamentos/portal-quick-login-modal';
 
-type SyncStatus = 'pending' | 'syncing' | 'done' | 'error' | 'awaiting_uber_choice';
+type SyncStatus = 'pending' | 'syncing' | 'done' | 'error';
 
-type UberExistingChoice = {
-  report: UberReportListItem;
-  periodStart: string;
-  periodEnd: string;
-};
+type UberReadyMode = 'existing' | 'generate';
 
 type ProviderId = 'uber' | 'bolt' | 'viaverde' | 'prio';
 
@@ -63,9 +61,13 @@ const PROVIDERS_BASE: Omit<
  * Timeout Playwright ou poll ≠ precisa de Login (pode ser portal lento).
  */
 function isSessionError(message: string): boolean {
-  return /sess[aã]o|session|expired|expirad|volte a ligar|faça login|fazer login|autentic|desligad|disconnected|não ligad|nao ligad|sem sessão|sem sessao|awaiting_otp|\botp\b|credentials|credencia|espera de OTP|já existe um job|conta não ligada|conta nao ligada/i.test(
+  return /sess[aã]o|session|expired|expirad|volte a ligar|faça login|fazer login|autentic|desligad|disconnected|não ligad|nao ligad|sem sessão|sem sessao|awaiting_otp|\botp\b|credentials|credencia|espera de OTP|conta não ligada|conta nao ligada/i.test(
     message
   );
+}
+
+function isJobConflictError(message: string): boolean {
+  return /sincroniza(ç|c)ão.*em curso|job.*em curso|opera(ç|c)ão em curso/i.test(message);
 }
 
 const ORG_STORAGE_KEY = 'tvde.uber.organizationName';
@@ -178,15 +180,32 @@ async function pollPortalUntilDone(portal: PortalKind, timeoutMs: number) {
 }
 
 async function startPortalSync(portal: PortalKind, body: Record<string, unknown>) {
-  const res = await apiFetch(
-    API_PATHS.portalConnections.sync(portal),
-    { method: 'POST', body: JSON.stringify(body) },
-    getStoredToken()
-  );
-  if (!res.success) {
-    throw new Error(res.error || `Não foi possível iniciar sync ${portal}`);
+  const attempt = async () => {
+    const res = await apiFetch(
+      API_PATHS.portalConnections.sync(portal),
+      { method: 'POST', body: JSON.stringify(body) },
+      getStoredToken()
+    );
+    if (!res.success) {
+      throw new Error(res.error || `Não foi possível iniciar sync ${portal}`);
+    }
+  };
+
+  try {
+    await attempt();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (isJobConflictError(message)) {
+      await sleep(3500);
+      await attempt();
+      return;
+    }
+    throw err;
   }
 }
+
+/** Pausa entre plataformas — libertar Chromium antes do próximo portal. */
+const STEP_COOLDOWN_MS = 2500;
 
 type Props = {
   open: boolean;
@@ -195,35 +214,47 @@ type Props = {
   periodStart?: string;
   periodEnd?: string;
   onFinished?: () => void;
+  /** Abrir calculadora de pagamento (resumo do sincronismo). */
+  onCalculatePayment?: () => void;
 };
 
 export function SyncPagamentosModal({
   open,
   onClose,
-  periodStart,
-  periodEnd,
+  periodStart: periodStartProp,
+  periodEnd: periodEndProp,
   onFinished,
+  onCalculatePayment,
 }: Props) {
   const { workspaceId } = useWorkspaceContext();
-  const [phase, setPhase] = useState<'idle' | 'syncing' | 'summary'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'ready' | 'syncing' | 'summary'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
   const [rows, setRows] = useState<ProviderRow[]>([]);
   const [blockingClose, setBlockingClose] = useState(false);
   const [loginPortal, setLoginPortal] = useState<PortalKind | null>(null);
   const [retryingId, setRetryingId] = useState<ProviderId | null>(null);
-  const [uberChoice, setUberChoice] = useState<UberExistingChoice | null>(null);
-  const uberChoiceResolverRef = useRef<((choice: 'existing' | 'generate') => void) | null>(
-    null
-  );
+  const [uberReports, setUberReports] = useState<UberReportListItem[]>([]);
+  const [uberListLoading, setUberListLoading] = useState(false);
+  const [uberListError, setUberListError] = useState('');
+  const [uberListNeedsLogin, setUberListNeedsLogin] = useState(false);
+  const [uberSelectedReport, setUberSelectedReport] = useState<string | null>(null);
+  const [uberReadyMode, setUberReadyMode] = useState<UberReadyMode>('existing');
+  const [uberPeriodStart, setUberPeriodStart] = useState('');
+  const [uberPeriodEnd, setUberPeriodEnd] = useState('');
+  const uberPeriodRef = useRef({ start: '', end: '' });
+  const uberSyncRef = useRef<UberSyncOptions | null>(null);
   const rafRef = useRef<number | null>(null);
   const runTokenRef = useRef(0);
 
   const reset = useCallback(() => {
     runTokenRef.current += 1;
-    if (uberChoiceResolverRef.current) {
-      uberChoiceResolverRef.current = null;
-    }
-    setUberChoice(null);
+    setUberReports([]);
+    setUberListLoading(false);
+    setUberListError('');
+    setUberListNeedsLogin(false);
+    setUberSelectedReport(null);
+    setUberReadyMode('existing');
+    uberSyncRef.current = null;
     setPhase('idle');
     setActiveIndex(0);
     setBlockingClose(false);
@@ -238,14 +269,87 @@ export function SyncPagamentosModal({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   }, []);
 
+  const loadUberReports = useCallback(async (periodStart: string, periodEnd: string) => {
+    setUberListLoading(true);
+    setUberListError('');
+    setUberListNeedsLogin(false);
+    setUberSelectedReport(null);
+    const res = await apiFetch<UberReportListItem[]>(
+      API_PATHS.portalConnections.reports('uber'),
+      { method: 'POST', body: JSON.stringify({}) },
+      getStoredToken()
+    );
+    setUberListLoading(false);
+    if (!res.success || !res.data) {
+      const msg = res.error || 'Não foi possível listar relatórios Uber';
+      setUberReports([]);
+      setUberListError(msg);
+      setUberListNeedsLogin(isSessionError(msg));
+      setUberReadyMode('generate');
+      return;
+    }
+    // Lista completa do Supplier (como no modal Uber antigo)
+    setUberReports(res.data);
+    const paymentReports = listUberPaymentReports(res.data);
+    const matching = paymentReports.find((r) =>
+      uberReportMatchesPeriod(r, periodStart, periodEnd)
+    );
+    const preselect =
+      matching?.name ??
+      paymentReports.find((r) => r.hasDownload)?.name ??
+      res.data.find((r) => r.hasDownload)?.name ??
+      null;
+    if (preselect) {
+      setUberSelectedReport(preselect);
+      setUberReadyMode('existing');
+    } else {
+      setUberReadyMode('generate');
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) {
       reset();
       return;
     }
     reset();
+    const week = defaultPaymentWeekRange();
+    const start = periodStartProp || week.periodStart;
+    const end = periodEndProp || week.periodEnd;
+    setUberPeriodStart(start);
+    setUberPeriodEnd(end);
+    uberPeriodRef.current = { start, end };
+    setPhase('ready');
+    void loadUberReports(start, end);
+  }, [open, reset, periodStartProp, periodEndProp, loadUberReports]);
+
+  function buildUberSyncOptions(): UberSyncOptions | null {
+    if (uberReadyMode === 'existing') {
+      if (!uberSelectedReport) return null;
+      return { mode: 'existing', reportName: uberSelectedReport };
+    }
+    if (!uberPeriodStart || !uberPeriodEnd || uberPeriodEnd < uberPeriodStart) return null;
+    return {
+      mode: 'generate',
+      rangeStart: lisbonDatetimeLocalToIso(`${uberPeriodStart}T01:00`),
+      rangeEnd: lisbonDatetimeLocalToIso(`${uberPeriodEnd}T23:30`),
+      organizationName: readUberOrg(),
+    };
+  }
+
+  function startSync() {
+    const uberSync = buildUberSyncOptions();
+    if (!uberSync) return;
+    uberPeriodRef.current = { start: uberPeriodStart, end: uberPeriodEnd };
+    uberSyncRef.current = uberSync;
+    setActiveIndex(0);
     setPhase('syncing');
-  }, [open, reset]);
+  }
+
+  const canStartSync =
+    !uberListLoading &&
+    Boolean(buildUberSyncOptions()) &&
+    (uberReadyMode === 'generate' || Boolean(uberSelectedReport));
 
   const animateProgress = useCallback((index: number, durationMs: number) => {
     const start = performance.now();
@@ -274,89 +378,24 @@ export function SyncPagamentosModal({
     []
   );
 
-  const waitUberChoice = useCallback(
-    (index: number, payload: UberExistingChoice) => {
-      return new Promise<'existing' | 'generate'>((resolve) => {
-        uberChoiceResolverRef.current = resolve;
-        setUberChoice(payload);
-        markRow(index, {
-          status: 'awaiting_uber_choice',
-          progress: 40,
-          message: 'já existe relatório neste intervalo — escolha',
-        });
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      });
-    },
-    [markRow]
-  );
-
-  const resolveUberChoice = useCallback((choice: 'existing' | 'generate') => {
-    const resolve = uberChoiceResolverRef.current;
-    uberChoiceResolverRef.current = null;
-    setUberChoice(null);
-    resolve?.(choice);
-  }, []);
-
   const runUber = useCallback(
     async (index: number) => {
-      const week = defaultPaymentWeekRange();
-      const start = periodStart || week.periodStart;
-      const end = periodEnd || week.periodEnd;
       const org = readUberOrg();
-      const rangeStart = lisbonDatetimeLocalToIso(`${start}T01:00`);
-      const rangeEnd = lisbonDatetimeLocalToIso(`${end}T23:30`);
-
-      markRow(index, {
-        status: 'syncing',
-        progress: 8,
-        message: 'a listar relatórios Uber…',
-      });
-      animateProgress(index, 60_000);
-
-      const listRes = await apiFetch<UberReportListItem[]>(
-        API_PATHS.portalConnections.reports('uber'),
-        { method: 'POST', body: JSON.stringify({}) },
-        getStoredToken()
-      );
-      if (!listRes.success || !listRes.data) {
-        const err = new Error(
-          listRes.error || 'Não foi possível listar relatórios Uber'
-        ) as Error & { needsLogin?: boolean };
-        err.needsLogin = isSessionError(err.message);
-        throw err;
-      }
-
-      const latest = pickLatestUberReportForPeriod(listRes.data, start, end);
-      let uberSync: UberSyncOptions;
-
-      if (latest) {
-        const choice = await waitUberChoice(index, {
-          report: latest,
-          periodStart: start,
-          periodEnd: end,
-        });
-        if (choice === 'existing') {
-          uberSync = { mode: 'existing', reportName: latest.name };
-        } else {
-          uberSync = {
-            mode: 'generate',
-            rangeStart,
-            rangeEnd,
-            organizationName: org,
-          };
-        }
-      } else {
+      let uberSync = uberSyncRef.current;
+      if (!uberSync) {
+        // Fallback (ex. Repetir): gerar com o período actual
+        const { start, end } = uberPeriodRef.current;
         uberSync = {
           mode: 'generate',
-          rangeStart,
-          rangeEnd,
+          rangeStart: lisbonDatetimeLocalToIso(`${start}T01:00`),
+          rangeEnd: lisbonDatetimeLocalToIso(`${end}T23:30`),
           organizationName: org,
         };
       }
 
       markRow(index, {
         status: 'syncing',
-        progress: 45,
+        progress: 12,
         message:
           uberSync.mode === 'existing'
             ? `a descarregar «${uberSync.reportName?.slice(0, 42) ?? 'relatório'}»…`
@@ -367,7 +406,7 @@ export function SyncPagamentosModal({
       await startPortalSync('uber', { uberSync });
       return pollPortalUntilDone('uber', 15 * 60_000);
     },
-    [animateProgress, markRow, periodEnd, periodStart, waitUberChoice]
+    [animateProgress, markRow]
   );
 
   const runBolt = useCallback(
@@ -401,14 +440,11 @@ export function SyncPagamentosModal({
 
   const runPrio = useCallback(
     async (index: number) => {
-      animateProgress(index, 90_000);
-      await startPortalSync('myprio', { syncScope: 'fleet' });
-      await pollPortalUntilDone('myprio', 2 * 60_000);
-      markRow(index, { progress: 55, message: 'Frota OK · a sincronizar electricidade…' });
-      await startPortalSync('myprio', { syncScope: 'electric' });
-      return pollPortalUntilDone('myprio', 2 * 60_000);
+      animateProgress(index, 180_000);
+      await startPortalSync('myprio', { syncScope: 'both' });
+      return pollPortalUntilDone('myprio', 4.5 * 60_000);
     },
-    [animateProgress, markRow]
+    [animateProgress]
   );
 
   useEffect(() => {
@@ -444,12 +480,14 @@ export function SyncPagamentosModal({
           progress: 100,
           message: message || 'concluído',
         });
+        await sleep(STEP_COOLDOWN_MS);
       } catch (err) {
         if (cancelled || token !== runTokenRef.current) return;
         if (rafRef.current) cancelAnimationFrame(rafRef.current);
         const message = err instanceof Error ? err.message : 'Erro';
         const needsLogin =
           Boolean(provider.portal) &&
+          !isJobConflictError(message) &&
           (Boolean((err as { needsLogin?: boolean })?.needsLogin) || isSessionError(message));
         markRow(index, {
           status: 'error',
@@ -460,6 +498,7 @@ export function SyncPagamentosModal({
         });
       }
       if (cancelled || token !== runTokenRef.current) return;
+      await sleep(STEP_COOLDOWN_MS);
       setActiveIndex((i) => i + 1);
     })();
 
@@ -518,6 +557,7 @@ export function SyncPagamentosModal({
         const message = err instanceof Error ? err.message : 'Erro';
         const needsLogin =
           Boolean(provider.portal) &&
+          !isJobConflictError(message) &&
           (Boolean((err as { needsLogin?: boolean })?.needsLogin) || isSessionError(message));
         markRow(index, {
           status: 'error',
@@ -546,21 +586,51 @@ export function SyncPagamentosModal({
         onClose();
       }}
       title={
-        phase === 'summary' ? 'Resumo do sincronismo' : 'A sincronizar plataformas'
+        phase === 'summary'
+          ? 'Resumo do sincronismo'
+          : phase === 'ready'
+            ? 'Sincronizar plataformas'
+            : 'A sincronizar plataformas'
       }
       showCloseButton={!(blockingClose && phase === 'syncing')}
       closeOnBackdrop={!(blockingClose && phase === 'syncing')}
       closeOnEscape={!(blockingClose && phase === 'syncing')}
-      panelClassName="max-w-xl"
+      panelClassName="max-w-2xl"
+      scrollBody
       footer={
         phase === 'summary' ? (
-          <button type="button" className="btn-primary" onClick={onClose}>
-            Fechar
-          </button>
-        ) : uberChoice ? (
-          <p className="text-xs text-amber-800">
-            Escolha se reutiliza o relatório Uber existente ou gera um novo para continuar.
-          </p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Fechar
+            </button>
+            {onCalculatePayment ? (
+              <button
+                type="button"
+                className="btn-primary inline-flex items-center gap-2"
+                onClick={() => {
+                  onCalculatePayment();
+                  onClose();
+                }}
+              >
+                <Calculator className="h-4 w-4" />
+                Calcular pagamento
+              </button>
+            ) : null}
+          </div>
+        ) : phase === 'ready' ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" className="btn-secondary" onClick={onClose}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!canStartSync}
+              onClick={startSync}
+            >
+              Iniciar sincronismo
+            </button>
+          </div>
         ) : (
           <p className="text-xs text-slate-500">
             Não feche esta janela enquanto o sincronismo corre.
@@ -571,14 +641,196 @@ export function SyncPagamentosModal({
       <div className="space-y-4">
         <p className="text-sm text-slate-500">
           Sequência: Uber → Bolt → Via Verde → Prio (frota + electricidade).
-          {periodStart && periodEnd ? (
-            <>
-              {' '}
-              Período Uber: <span className="font-medium text-slate-700">{periodStart}</span> →{' '}
-              <span className="font-medium text-slate-700">{periodEnd}</span>.
-            </>
-          ) : null}
         </p>
+
+        {phase === 'ready' ? (
+          <div className="space-y-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+            <div>
+              <p className="text-xs font-medium text-slate-700">Uber — relatórios existentes</p>
+              <p className="mt-1 text-xs text-slate-500">
+                Lista do Supplier. Preferir «Pagamentos do motorista» (rendimentos líquidos =
+                totais + reembolsos). Ou gere um novo com o período abaixo.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3 text-sm">
+              <label className="inline-flex items-center gap-2 text-slate-800">
+                <input
+                  type="radio"
+                  name="uber-ready-mode"
+                  checked={uberReadyMode === 'existing'}
+                  disabled={uberListLoading || uberReports.every((r) => !r.hasDownload)}
+                  onChange={() => setUberReadyMode('existing')}
+                />
+                Usar relatório da lista
+              </label>
+              <label className="inline-flex items-center gap-2 text-slate-800">
+                <input
+                  type="radio"
+                  name="uber-ready-mode"
+                  checked={uberReadyMode === 'generate'}
+                  disabled={uberListLoading}
+                  onChange={() => setUberReadyMode('generate')}
+                />
+                Gerar novo com período
+              </label>
+            </div>
+
+            {uberListLoading ? (
+              <div className="flex items-center gap-2 rounded-md border border-sky-100 bg-sky-50 px-3 py-3 text-sm text-sky-900">
+                <Loader2 className="h-4 w-4 animate-spin text-sky-600" />
+                A listar relatórios no portal Uber… (pode demorar ~45–60s)
+              </div>
+            ) : uberListError ? (
+              <div className="space-y-2">
+                <p className="text-sm text-amber-800">{uberListError}</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs"
+                    onClick={() => void loadUberReports(uberPeriodStart, uberPeriodEnd)}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Tentar outra vez
+                  </button>
+                  {uberListNeedsLogin ? (
+                    <button
+                      type="button"
+                      className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs"
+                      onClick={() => setLoginPortal('uber')}
+                    >
+                      <LogIn className="h-3.5 w-3.5" />
+                      Login Uber
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : uberReports.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Nenhum relatório na lista — use «Gerar novo com período».
+              </p>
+            ) : (
+              <div
+                className={`max-h-56 overflow-auto rounded-md border border-slate-200 bg-white ${
+                  uberReadyMode !== 'existing' ? 'opacity-60' : ''
+                }`}
+              >
+                <table className="w-full text-left text-xs">
+                  <thead className="sticky top-0 bg-slate-50 text-slate-600">
+                    <tr>
+                      <th className="w-8 px-2 py-2" />
+                      <th className="px-2 py-2 font-medium">Nome</th>
+                      <th className="px-2 py-2 font-medium">Intervalo</th>
+                      <th className="px-2 py-2 font-medium">Criado</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {uberReports.map((r) => {
+                      const disabled = !r.hasDownload || uberReadyMode !== 'existing';
+                      const matches =
+                        Boolean(uberPeriodStart) &&
+                        Boolean(uberPeriodEnd) &&
+                        uberReportMatchesPeriod(r, uberPeriodStart, uberPeriodEnd);
+                      return (
+                        <tr
+                          key={r.name + (r.createdAt ?? '')}
+                          className={`border-t border-slate-100 ${
+                            !r.hasDownload
+                              ? 'opacity-50'
+                              : matches
+                                ? 'bg-emerald-50/70'
+                                : 'hover:bg-slate-50'
+                          }`}
+                        >
+                          <td className="px-2 py-1.5">
+                            <input
+                              type="radio"
+                              name="uber-report-ready"
+                              disabled={disabled}
+                              checked={uberSelectedReport === r.name}
+                              onChange={() => {
+                                setUberSelectedReport(r.name);
+                                setUberReadyMode('existing');
+                              }}
+                            />
+                          </td>
+                          <td
+                            className="max-w-[14rem] truncate px-2 py-1.5 font-medium text-slate-800"
+                            title={r.name}
+                          >
+                            {r.name}
+                            {matches ? (
+                              <span className="ml-1 text-[10px] font-normal text-emerald-700">
+                                (período)
+                              </span>
+                            ) : null}
+                          </td>
+                          <td
+                            className="max-w-[10rem] truncate px-2 py-1.5 text-slate-600"
+                            title={r.interval ?? ''}
+                          >
+                            {r.interval ?? '—'}
+                          </td>
+                          <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
+                            {r.createdAt ?? '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div
+              className={`space-y-2 border-t border-slate-200 pt-3 ${
+                uberReadyMode !== 'generate' ? 'opacity-70' : ''
+              }`}
+            >
+              <p className="text-xs font-medium text-slate-700">
+                Período para gerar novo (se não usar a lista)
+              </p>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block text-sm">
+                  <span className="mb-1 block text-slate-600">De</span>
+                  <input
+                    type="date"
+                    className="input w-full"
+                    value={uberPeriodStart}
+                    onChange={(e) => setUberPeriodStart(e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  <span className="mb-1 block text-slate-600">Até</span>
+                  <input
+                    type="date"
+                    className="input w-full"
+                    value={uberPeriodEnd}
+                    onChange={(e) => setUberPeriodEnd(e.target.value)}
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-slate-500">
+                Por defeito: última semana completa (segunda→domingo). Só é usado em «Gerar novo».
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-600">
+            Uber:{' '}
+            {uberSyncRef.current?.mode === 'existing'
+              ? `relatório «${uberSyncRef.current.reportName?.slice(0, 48) ?? ''}»`
+              : `gerar ${uberPeriodStart} → ${uberPeriodEnd}`}
+          </div>
+        )}
+
+        {phase === 'ready' ? (
+          <p className="text-sm text-slate-600">
+            Escolha o relatório Uber (ou gere um novo) e clique em{' '}
+            <span className="font-medium">Iniciar sincronismo</span>. Via Verde / Prio renovam a
+            sessão automaticamente quando possível.
+          </p>
+        ) : null}
 
         <ul className="space-y-3">
           {rows.map((row) => {
@@ -609,9 +861,6 @@ export function SyncPagamentosModal({
                         a sincronizar…
                       </span>
                     )}
-                    {row.status === 'awaiting_uber_choice' && (
-                      <span className="text-amber-700">à espera</span>
-                    )}
                     {row.status === 'done' && (
                       <span className="inline-flex items-center gap-1 text-emerald-700">
                         <CheckCircle2 className="h-3.5 w-3.5" />
@@ -626,10 +875,7 @@ export function SyncPagamentosModal({
                     )}
                   </span>
                 </div>
-                {row.status === 'syncing' ||
-                row.status === 'awaiting_uber_choice' ||
-                row.status === 'done' ||
-                row.status === 'error' ? (
+                {row.status === 'syncing' || row.status === 'done' || row.status === 'error' ? (
                   <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
                     <div
                       className={`h-full rounded-full transition-[width] duration-150 ${
@@ -637,69 +883,10 @@ export function SyncPagamentosModal({
                           ? 'bg-red-500'
                           : row.status === 'done'
                             ? 'bg-emerald-500'
-                            : row.status === 'awaiting_uber_choice'
-                              ? 'bg-amber-400'
-                              : 'bg-[var(--color-primary)]'
+                            : 'bg-[var(--color-primary)]'
                       }`}
                       style={{ width: `${row.progress}%` }}
                     />
-                  </div>
-                ) : null}
-                {row.id === 'uber' && uberChoice && row.status === 'awaiting_uber_choice' ? (
-                  <div className="mt-3 space-y-2 rounded-md border border-amber-200 bg-amber-50/80 px-3 py-2.5">
-                    <p className="text-xs text-amber-950">
-                      Já existe um relatório de pagamentos para{' '}
-                      <span className="font-medium">
-                        {uberChoice.periodStart} → {uberChoice.periodEnd}
-                      </span>
-                      . Pode reutilizar o último ou gerar um novo.
-                    </p>
-                    <div className="overflow-hidden rounded border border-amber-100 bg-white">
-                      <table className="w-full text-left text-[11px]">
-                        <thead className="bg-slate-50 text-slate-600">
-                          <tr>
-                            <th className="px-2 py-1.5 font-medium">Nome</th>
-                            <th className="px-2 py-1.5 font-medium">Intervalo</th>
-                            <th className="px-2 py-1.5 font-medium">Criado</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr className="border-t border-slate-100">
-                            <td
-                              className="max-w-[11rem] truncate px-2 py-1.5 font-medium text-slate-800"
-                              title={uberChoice.report.name}
-                            >
-                              {uberChoice.report.name}
-                            </td>
-                            <td
-                              className="max-w-[8rem] truncate px-2 py-1.5 text-slate-600"
-                              title={uberChoice.report.interval ?? ''}
-                            >
-                              {uberChoice.report.interval ?? '—'}
-                            </td>
-                            <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
-                              {uberChoice.report.createdAt ?? '—'}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <div className="flex flex-wrap gap-2 pt-0.5">
-                      <button
-                        type="button"
-                        className="btn-primary px-2.5 py-1 text-xs"
-                        onClick={() => resolveUberChoice('existing')}
-                      >
-                        Usar este relatório
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary px-2.5 py-1 text-xs"
-                        onClick={() => resolveUberChoice('generate')}
-                      >
-                        Gerar novo
-                      </button>
-                    </div>
                   </div>
                 ) : null}
                 {row.error ? (
@@ -746,8 +933,8 @@ export function SyncPagamentosModal({
             </p>
             <p className="mt-1 text-slate-500">
               {doneCount} OK
-              {errorCount ? ` · ${errorCount} com erro` : ''} — se a sessão
-              expirou use Login e depois Repetir; em timeout do portal use só Repetir.
+              {errorCount ? ` · ${errorCount} com erro` : ''} — conflito ou portal lento:
+              use Repetir; Login só se a sessão estiver expirada.
             </p>
           </div>
         ) : null}

@@ -37,6 +37,7 @@ export async function getBoltPublicStatus(workspaceId: string, tenantId: string)
     lastSyncAtOrders: row?.lastSyncAtOrders?.toISOString() ?? null,
     lastSyncAtDrivers: row?.lastSyncAtDrivers?.toISOString() ?? null,
     lastSyncAtVehicles: row?.lastSyncAtVehicles?.toISOString() ?? null,
+    autoSyncEnabled: row?.autoSyncEnabled ?? true,
   };
 }
 
@@ -83,4 +84,15 @@ export async function testBoltConnection(input: {
     companyId: result.companyId,
     companies: result.companies,
   };
+}
+
+export async function setBoltAutoSync(workspaceId: string, enabled: boolean) {
+  const existing = await getBoltConnection(workspaceId);
+  if (!existing) {
+    throw new Error('Configure a API Bolt antes de activar a sincronização automática');
+  }
+  return prisma.boltConnection.update({
+    where: { workspaceId },
+    data: { autoSyncEnabled: enabled },
+  });
 }

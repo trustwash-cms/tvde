@@ -1,6 +1,6 @@
 import { prisma } from '@tvde/database';
 import type { Role } from '@tvde/shared';
-import { filterTvdeModules } from '@tvde/shared';
+import { filterActivatableModules } from '@tvde/shared';
 import { getMoloniPublicStatus } from './billing.service';
 import { getSmsPublicInfo } from './sms.service';
 import { getBoltPublicStatus } from './bolt.service';
@@ -123,7 +123,7 @@ export async function getModulesHealth(
   workspaceId: string | null
 ): Promise<ModuleHealthItem[]> {
   const [modules, caps] = await Promise.all([
-    filterTvdeModules(
+    filterActivatableModules(
       await prisma.moduleRegistry.findMany({
         orderBy: [{ isCore: 'desc' }, { name: 'asc' }],
       })

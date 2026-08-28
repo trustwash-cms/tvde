@@ -24,6 +24,7 @@ import {
   FileText,
   Eye,
   BookOpen,
+  Server,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
@@ -32,13 +33,16 @@ import {
   canAccessDashboardArea,
   canAccessClientsDashboard,
   isDriverRole,
+  isHiddenActivationModule,
   type Role,
   ADMIN_MGMT_MODULE_NAME,
+  VIRTUALIZATION_MODULE_NAME,
   getRoleLabel,
 } from '@tvde/shared';
 import { apiFetch, clearTokens, getStoredToken, getStoredRefreshToken, storeTokens, API_PATHS, appName, getApiUrl } from '@/lib/api';
 import { useSessionKeepAlive } from '@/hooks/use-session-keep-alive';
 import { hasActiveModule, type ModuleCapabilities } from '@/lib/module-access';
+import { CalendarReminderToasts } from '@/components/calendar/calendar-reminder-toasts';
 
 const navItems = [
   { href: WEB_ROUTES.dashboard.root, label: 'Dashboard', icon: LayoutDashboard, area: 'dashboard' as const },
@@ -93,6 +97,7 @@ const navItems = [
   },
   { href: WEB_ROUTES.dashboard.calendar, label: 'Calendário', icon: CalendarDays, area: 'calendar' as const, moduleKey: 'calendar' },
   { href: WEB_ROUTES.dashboard.adminMgmt.root, label: ADMIN_MGMT_MODULE_NAME, icon: Briefcase, area: 'admin_mgmt' as const, moduleKey: 'admin_mgmt' },
+  { href: WEB_ROUTES.dashboard.virtualization.root, label: VIRTUALIZATION_MODULE_NAME, icon: Server, area: 'virtualization' as const, moduleKey: 'virtualization' },
   { href: WEB_ROUTES.dashboard.users, label: 'Utilizadores', icon: Users, area: 'users' as const },
   { href: WEB_ROUTES.dashboard.settings.root, label: 'Configurações', icon: Mail, area: 'settings' as const },
 ];
@@ -152,6 +157,7 @@ function isNavActive(pathname: string, href: string, area: string) {
   if (area === 'documentos' && pathname.startsWith('/dashboard/documentos')) return true;
   if (area === 'calendar' && pathname.startsWith('/dashboard/calendar')) return true;
   if (area === 'admin_mgmt' && pathname.startsWith('/dashboard/admin-mgmt')) return true;
+  if (area === 'virtualization' && pathname.startsWith('/dashboard/virtualization')) return true;
   return false;
 }
 
@@ -332,6 +338,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
     if (item.area === 'documentos' && !isDriverRole(user.role)) return false;
     if (item.area === 'pagamentos' && isDriverRole(user.role)) return false;
     if (!canAccessDashboardArea(user.role, item.area)) return false;
+    if (item.moduleKey && isHiddenActivationModule(item.moduleKey)) return false;
     if (item.moduleKey && !hasActiveModule(user.role, user.capabilities, item.moduleKey)) return false;
     return true;
   });
@@ -561,6 +568,7 @@ export default function DashboardShell({ children }: { children: React.ReactNode
         <main className="flex-1">
           <div className="p-4 sm:p-6 lg:p-8">{children}</div>
         </main>
+        <CalendarReminderToasts role={user?.role} capabilities={user?.capabilities} />
       </div>
     </div>
   );

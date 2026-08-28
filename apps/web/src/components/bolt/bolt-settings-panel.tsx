@@ -17,6 +17,7 @@ interface BoltStatus {
   lastSyncAtOrders: string | null;
   lastSyncAtDrivers: string | null;
   lastSyncAtVehicles: string | null;
+  autoSyncEnabled?: boolean;
 }
 
 type SyncType = 'orders' | 'drivers' | 'vehicles' | 'all';
@@ -31,6 +32,7 @@ export function BoltSettingsPanel({
   const { workspaces, workspaceId, setWorkspaceId, loading: wsLoading } = useWorkspaceContext();
   const [status, setStatus] = useState<BoltStatus | null>(null);
   const [loading, setLoading] = useState(false);
+  const [autoSyncLoading, setAutoSyncLoading] = useState(false);
   const [syncLoading, setSyncLoading] = useState<SyncType | null>(null);
   const [form, setForm] = useState({ clientId: '', clientSecret: '', boltCompanyId: '' });
 
@@ -138,13 +140,37 @@ export function BoltSettingsPanel({
     }
   }
 
+  async function toggleAutoSync(nextEnabled: boolean) {
+    if (!workspaceId) return;
+    setAutoSyncLoading(true);
+    const res = await apiFetch<{ autoSyncEnabled: boolean }>(
+      API_PATHS.bolt.autoSync,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ workspaceId, autoSyncEnabled: nextEnabled }),
+      },
+      getStoredToken()
+    );
+    setAutoSyncLoading(false);
+    if (res.success) {
+      setStatus((s) => (s ? { ...s, autoSyncEnabled: nextEnabled } : s));
+      onSuccess?.(
+        nextEnabled
+          ? 'Sincronização automática diária activada'
+          : 'Sincronização automática diária desactivada'
+      );
+    } else {
+      onError?.(getApiErrorMessage(res));
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Configurações da API Bolt</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Credenciais OAuth por workspace. A sincronização automática corre 1x por dia.
+            Credenciais OAuth por workspace. O sync manual mantém-se; o automático é opcional.
           </p>
         </div>
         <WorkspaceSelector workspaces={workspaces} workspaceId={workspaceId} onChange={setWorkspaceId} />
@@ -172,6 +198,25 @@ export function BoltSettingsPanel({
           )}
         </div>
       )}
+
+      {status?.configured ? (
+        <label className="card flex items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={status.autoSyncEnabled !== false}
+            disabled={autoSyncLoading || !workspaceId}
+            onChange={(e) => void toggleAutoSync(e.target.checked)}
+          />
+          <span className="text-sm text-slate-700">
+            <span className="font-medium text-slate-900">Sincronização automática diária</span>
+            <span className="mt-1 block text-xs text-slate-500">
+              Pedidos, motoristas e viaturas. Já activada por defeito — desmarque para parar o job
+              diário. O botão «Sincronizar» abaixo continua disponível.
+            </span>
+          </span>
+        </label>
+      ) : null}
 
       <form onSubmit={saveConfig} className="card relative grid gap-4 md:grid-cols-2" autoComplete="off">
         <AutofillDecoys />

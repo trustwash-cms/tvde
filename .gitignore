@@ -5,3 +5,4 @@ dist/
 uploads/
 .playwright-libs/
 .tmp-*/
+.via-verde-tz-repaired

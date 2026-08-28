@@ -4,13 +4,20 @@ export function renderInvoiceDownloadPage(input: {
   apiPrefix: string;
   remainingDownloads: number;
   maxDownloads: number;
+  /** Se definido, usa este path em vez de /invoices/public/download */
+  downloadPathOverride?: string;
+  /** Esconde o contador de downloads (ex. links admin-mgmt sem limite). */
+  hideDownloadLimits?: boolean;
 }): string {
   const safeToken = input.token.replace(/[^a-f0-9]/gi, '');
   const prefix = input.apiPrefix.replace(/\/$/, '');
-  const downloadPath = `${prefix}/invoices/public/download?token=${encodeURIComponent(safeToken)}`;
+  const downloadPath =
+    input.downloadPathOverride ??
+    `${prefix}/invoices/public/download?token=${encodeURIComponent(safeToken)}`;
   const remaining = Math.max(0, input.remainingDownloads);
   const max = Math.max(1, input.maxDownloads);
   const canDownload = remaining > 0;
+  const hideLimits = Boolean(input.hideDownloadLimits);
 
   return `<!DOCTYPE html>
 <html lang="pt">
@@ -37,7 +44,7 @@ export function renderInvoiceDownloadPage(input: {
     <div id="ready" ${canDownload ? '' : 'hidden'}>
       <h1>Descarregar fatura</h1>
       <p class="muted" style="margin-top:0">Clique no botão para obter o PDF. Recarregar esta página <strong>não</strong> inicia o download.</p>
-      <p class="muted">Downloads restantes: <strong id="remaining">${remaining}</strong> de ${max}</p>
+      ${hideLimits ? '' : `<p class="muted">Downloads restantes: <strong id="remaining">${remaining}</strong> de ${max}</p>`}
       <button type="button" class="btn" id="download-btn">↓ Descarregar fatura</button>
     </div>
     <div id="loading" hidden>
@@ -46,7 +53,11 @@ export function renderInvoiceDownloadPage(input: {
     </div>
     <div id="done" hidden>
       <p>Download iniciado.</p>
-      <p class="muted">Pode fechar esta página. Downloads restantes: <strong id="remaining-after">—</strong> de ${max}</p>
+      <p class="muted">${
+        hideLimits
+          ? 'Pode fechar esta página.'
+          : `Pode fechar esta página. Downloads restantes: <strong id="remaining-after">—</strong> de ${max}`
+      }</p>
       <button type="button" class="btn btn-secondary" id="download-again" hidden>Descarregar novamente</button>
     </div>
     <div id="limit" ${canDownload ? 'hidden' : ''}>
@@ -141,7 +152,7 @@ export function renderInvoiceDownloadPage(input: {
               URL.revokeObjectURL(url);
               loading.hidden = true;
               done.hidden = false;
-              remainingAfter.textContent = String(remaining);
+              if (remainingAfter) remainingAfter.textContent = String(remaining);
               if (remainingEl) remainingEl.textContent = String(remaining);
               if (remaining > 0) {
                 downloadAgain.hidden = false;

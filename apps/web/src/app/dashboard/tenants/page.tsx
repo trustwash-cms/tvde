@@ -1,7 +1,8 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import { filterActivatableModules } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withSearchQuery } from '@/lib/list-search';
 import ListPageSearch from '@/components/list-page-search';
@@ -74,7 +75,10 @@ export default function TenantsPage() {
   const [deleteCodeSent, setDeleteCodeSent] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
-  const businessModules = allModules.filter((m) => !m.isCore);
+  const businessModules = useMemo(
+    () => filterActivatableModules(allModules.filter((m) => !m.isCore)),
+    [allModules]
+  );
 
   function load() {
     const token = getStoredToken();

@@ -8,6 +8,7 @@ Regra de negócio herdada de [`ficheiros de exemplo/PAYMENT_CALCULATOR.md`](./fi
 | Roadmap | [`01-ROADMAP_TVDE.md`](./01-ROADMAP_TVDE.md) |
 | Uber / Bolt / VV / PRIO | [`06-UBER.md`](./06-UBER.md), Bolt, [`04-VIAVERDE.md`](./04-VIAVERDE.md), [`05-PRIO.md`](./05-PRIO.md) |
 | Viaturas / comissão | Users → Matrículas (`UserVehicle`) |
+| WhatsApp no confirm | [`10-WHATSAPP_BUSINESS_API.MD`](./10-WHATSAPP_BUSINESS_API.MD) |
 
 ---
 

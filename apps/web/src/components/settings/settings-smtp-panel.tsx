@@ -7,7 +7,7 @@ import { hasActiveModule, type ModuleCapabilities } from '@/lib/module-access';
 import { SettingsAlerts } from '@/components/settings/settings-alerts';
 import { SettingsBrandingSection } from '@/components/settings/settings-branding-section';
 
-const DEFAULT_FROM_NAME = process.env.NEXT_PUBLIC_APP_NAME?.trim() || 'CMS';
+const DEFAULT_FROM_NAME = process.env.NEXT_PUBLIC_APP_NAME?.trim() || 'Fleet CRM';
 
 function formatFromPreview(displayName: string, email: string) {
   const name = displayName.trim() || DEFAULT_FROM_NAME;

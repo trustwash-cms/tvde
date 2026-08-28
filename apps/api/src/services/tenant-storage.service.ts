@@ -119,7 +119,7 @@ export async function getTenantStorageSummary(
 ): Promise<TenantStorageSummary> {
   const tenant = await db.tenant.findUnique({
     where: { id: tenantId },
-    select: { limitsJson: true, plan: true, siteId: true, name: true },
+    select: { id: true, limitsJson: true, plan: true, siteId: true, name: true },
   });
 
   if (!tenant) {
@@ -132,6 +132,7 @@ export async function getTenantStorageSummary(
   const usedBytes = Object.values(breakdown).reduce((sum, value) => sum + value, 0);
 
   return {
+    tenantId: tenant.id,
     limitBytes,
     limitGb,
     usedBytes,
@@ -142,6 +143,18 @@ export async function getTenantStorageSummary(
     siteId: tenant.siteId,
     tenantName: tenant.name,
   };
+}
+
+/** Listagem MASTER: quota de storage de todos os tenants. */
+export async function listAllTenantStorageSummaries(
+  db: PrismaClient
+): Promise<TenantStorageSummary[]> {
+  const tenants = await db.tenant.findMany({
+    select: { id: true },
+    orderBy: { name: 'asc' },
+  });
+  const rows = await Promise.all(tenants.map((t) => getTenantStorageSummary(db, t.id)));
+  return rows;
 }
 
 export async function assertTenantStorageQuota(

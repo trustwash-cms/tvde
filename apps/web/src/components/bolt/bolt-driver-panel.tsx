@@ -12,6 +12,7 @@ interface Dashboard {
   ordersCount: number;
   monthTotal: string;
   totalRevenue: string;
+  paidToDriver?: string | null;
   weekNumber?: number;
   weekYear?: number;
   weekTotal?: string;
@@ -104,8 +105,18 @@ export function BoltDriverPanel() {
           onNextWeek={() => setSelectedWeek((w) => shiftWeek(w.year, w.week, 1))}
         />
         <MonthTotalCard
-          selectId="bolt-month"
+          selectId="bolt-paid-month"
           label="Valor do mês (Pago a si)"
+          value={formatMoney(dashboard?.paidToDriver ?? 0)}
+          monthKey={selectedMonth}
+          onMonthChange={(m) => {
+            setSelectedMonth(m);
+            setPage(0);
+          }}
+        />
+        <MonthTotalCard
+          selectId="bolt-revenue-month"
+          label="Receita do mês"
           value={formatMoney(dashboard?.monthTotal ?? 0)}
           monthKey={selectedMonth}
           onMonthChange={(m) => {
@@ -113,10 +124,6 @@ export function BoltDriverPanel() {
             setPage(0);
           }}
         />
-        <div className="card">
-          <p className="text-sm text-slate-500">Receita total</p>
-          <p className="text-2xl font-bold">{formatMoney(dashboard?.totalRevenue ?? 0)}</p>
-        </div>
       </div>
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}

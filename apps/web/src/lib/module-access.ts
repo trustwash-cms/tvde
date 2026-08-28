@@ -9,6 +9,7 @@ const MODULE_LABELS: Record<string, string> = {
   billing: 'Facturação',
   clients: 'Clientes',
   sms: 'SMS',
+  whatsapp: 'WhatsApp',
   calendar: 'Calendário',
   bolt: 'Bolt',
   uber: 'Uber',
@@ -17,6 +18,7 @@ const MODULE_LABELS: Record<string, string> = {
   combustivel: 'Combustível',
   pagamentos: 'Pagamentos',
   admin_mgmt: 'Gestão Administrativa',
+  virtualization: 'Virtualização',
 };
 
 export function getModuleLabel(moduleKey: string): string {

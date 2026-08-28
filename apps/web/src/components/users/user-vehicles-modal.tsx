@@ -5,9 +5,12 @@ import {
   API_PATHS,
   VEHICLE_COMMISSION_TYPES,
   VEHICLE_COMMISSION_TYPE_LABELS,
+  buildVehicleLimitWhatsappMessage,
+  buildVehicleLimitWhatsappUrl,
   formatDateOnlyInput,
   formatUserVehicleMatricula,
   isUserVehicleActive,
+  type TenantVehicleLimits,
   type UserVehicleRecord,
   type VehicleCommissionType,
 } from '@tvde/shared';
@@ -163,6 +166,7 @@ export function UserVehiclesModal({
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [limitError, setLimitError] = useState<TenantVehicleLimits | null>(null);
   const [vehicles, setVehicles] = useState<UserVehicleRecord[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -178,6 +182,7 @@ export function UserVehiclesModal({
     if (!user) return;
     setLoading(true);
     setError('');
+    setLimitError(null);
     apiFetch<UserVehicleRecord[]>(API_PATHS.users.vehicles(user.id)).then((res) => {
       setLoading(false);
       if (res.success && res.data) {
@@ -230,13 +235,14 @@ export function UserVehiclesModal({
 
     setSubmitting(true);
     setError('');
+    setLimitError(null);
 
     const payload = buildPayload(form);
     const path = editingId
       ? API_PATHS.users.vehicleById(user.id, editingId)
       : API_PATHS.users.vehicles(user.id);
 
-    const res = await apiFetch<UserVehicleRecord>(path, {
+    const res = await apiFetch<UserVehicleRecord | TenantVehicleLimits>(path, {
       method: editingId ? 'PATCH' : 'POST',
       body: JSON.stringify(payload),
     });
@@ -252,6 +258,15 @@ export function UserVehiclesModal({
     }
 
     setError(getApiErrorMessage(res));
+    if (
+      res.statusCode === 409 &&
+      res.data &&
+      typeof res.data === 'object' &&
+      'maxVehicles' in res.data &&
+      'activeCount' in res.data
+    ) {
+      setLimitError(res.data as TenantVehicleLimits);
+    }
   }
 
   async function handleDelete(vehicle: UserVehicleRecord) {
@@ -519,7 +534,30 @@ export function UserVehiclesModal({
             ) : null}
           </section>
 
-          {error ? <p className="text-sm text-red-600">{error}</p> : null}
+          {error ? (
+            <div className="space-y-2">
+              <p className="text-sm text-red-600">{error}</p>
+              {limitError ? (
+                <a
+                  href={buildVehicleLimitWhatsappUrl(
+                    buildVehicleLimitWhatsappMessage({
+                      siteId: limitError.siteId,
+                      username: user?.username ?? user?.email,
+                      fullName: user?.fullName,
+                      plan: limitError.plan,
+                      activeCount: limitError.activeCount,
+                      maxVehicles: limitError.maxVehicles,
+                    })
+                  )}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex text-sm font-medium text-[var(--color-primary)] underline"
+                >
+                  Pedir aumento de limite via WhatsApp
+                </a>
+              ) : null}
+            </div>
+          ) : null}
         </form>
       ) : (
         <div className="space-y-3">

@@ -7,6 +7,7 @@ import {
   type UberReportListItem,
   type UberSyncOptions,
   PORTAL_KINDS,
+  PORTAL_KIND_LABELS,
 } from '@tvde/shared';
 import { env } from '../../config/env';
 import { canDecrypt, decrypt, encrypt, isCryptoAuthFailure } from '../../lib/crypto';
@@ -179,7 +180,7 @@ function readJobMeta(resultJson: unknown): JobMeta {
   if (!resultJson || typeof resultJson !== 'object' || Array.isArray(resultJson)) return {};
   const raw = resultJson as { syncScope?: unknown; uberSync?: unknown };
   const meta: JobMeta = {};
-  if (raw.syncScope === 'electric' || raw.syncScope === 'fleet') {
+  if (raw.syncScope === 'electric' || raw.syncScope === 'fleet' || raw.syncScope === 'both') {
     meta.syncScope = raw.syncScope;
   }
   if (raw.uberSync && typeof raw.uberSync === 'object' && !Array.isArray(raw.uberSync)) {
@@ -254,6 +255,7 @@ async function mapPublic(
     lastSyncAt: Date | null;
     lastError: string | null;
     isEnabled: boolean;
+    autoSyncEnabled: boolean;
     activeJobId: string | null;
   } | null,
   portal: PortalKind
@@ -308,6 +310,7 @@ async function mapPublic(
     lastSyncAt: row?.lastSyncAt?.toISOString() ?? null,
     lastError,
     isEnabled: row?.isEnabled ?? true,
+    autoSyncEnabled: row?.autoSyncEnabled ?? false,
     activeJobId: row?.activeJobId ?? null,
     activeJobStatus: null,
     otpHint: null,
@@ -502,6 +505,8 @@ export async function startPortalConnect(
       usernameEncrypted: encrypt(resolvedUsername),
       ...(resolvedPassword ? { passwordEncrypted: encrypt(resolvedPassword) } : {}),
       lastError: null,
+      // Ao religar, sair do estado «expired» para o poll do login rápido não falhar já
+      status: 'disconnected',
     },
   });
 
@@ -517,7 +522,7 @@ export async function startPortalConnect(
 
   await db.portalConnection.update({
     where: { id: connection.id },
-    data: { activeJobId: job.id },
+    data: { activeJobId: job.id, lastError: null },
   });
 
   void runPortalJob(db, job.id, actorUserId);
@@ -642,7 +647,7 @@ export async function startPortalSync(
 
   if (portal === 'myprio' && !options?.syncScope) {
     throw new Error(
-      'MyPRIO exige sync separado: syncScope=electric (Eletricidade) ou syncScope=fleet (Combustível)'
+      'MyPRIO exige syncScope=electric, syncScope=fleet ou syncScope=both (frota + electricidade)'
     );
   }
 
@@ -659,8 +664,9 @@ export async function startPortalSync(
     }
   }
 
-  // Jobs Playwright presos em `running` bloqueiam tsx e a UI — limpar stale
-  await clearStalePortalJobs(db, connection.id);
+  // Jobs Playwright presos bloqueiam sync — limpar stale (limiar por portal)
+  await clearStalePortalJobs(db, connection.id, portal);
+  await releaseStuckActiveJob(db, connection.id, portal);
 
   const fresh = await db.portalConnection.findUnique({
     where: { id: connection.id },
@@ -675,7 +681,7 @@ export async function startPortalSync(
     }
     if (active && (active.status === 'running' || active.status === 'pending')) {
       throw new Error(
-        'Já existe um job MyPRIO em curso. Aguarde ou Desligar/Ligar se ficou preso.'
+        `Já existe uma sincronização ${PORTAL_KIND_LABELS[portal]} em curso. Aguarde alguns segundos ou use Repetir.`
       );
     }
   }
@@ -750,12 +756,28 @@ export async function listUberPortalReports(
   );
 }
 
-/** Deve cobrir o sync Uber mais longo (15 min) + margem — não matar jobs Playwright válidos. */
-const STALE_JOB_MS = 20 * 60_000;
+/** Timeout Playwright por portal (ms) — alinhar com limpeza de jobs presos. */
+function portalSyncTimeoutMs(portal: PortalKind, syncScope?: MyPrioSyncScope): number {
+  if (portal === 'uber') return 900_000;
+  if (portal === 'via_verde') return 180_000;
+  if (portal === 'myprio') return syncScope === 'both' ? 240_000 : 120_000;
+  return 90_000;
+}
+
+/** Limiar stale por portal (timeout + margem). */
+function portalStaleJobMs(portal: PortalKind, syncScope?: MyPrioSyncScope): number {
+  return portalSyncTimeoutMs(portal, syncScope) + 60_000;
+}
 
 /** Marca jobs `running`/`pending` antigos como falhados (Playwright hung). */
-export async function clearStalePortalJobs(db: PrismaClient, connectionId?: string) {
-  const cutoff = new Date(Date.now() - STALE_JOB_MS);
+export async function clearStalePortalJobs(
+  db: PrismaClient,
+  connectionId?: string,
+  portal?: PortalKind,
+  syncScope?: MyPrioSyncScope
+) {
+  const staleMs = portal ? portalStaleJobMs(portal, syncScope) : 20 * 60_000;
+  const cutoff = new Date(Date.now() - staleMs);
   const where = {
     status: { in: ['running', 'pending'] as Array<'running' | 'pending'> },
     OR: [{ startedAt: { lt: cutoff } }, { startedAt: null, createdAt: { lt: cutoff } }],
@@ -785,6 +807,41 @@ export async function clearStalePortalJobs(db: PrismaClient, connectionId?: stri
   }
   console.log(`[portal-rpa] limpos ${stale.length} job(s) stale`);
   return stale.length;
+}
+
+/** Liberta activeJobId se o job activo excedeu o timeout esperado do portal. */
+async function releaseStuckActiveJob(
+  db: PrismaClient,
+  connectionId: string,
+  portal: PortalKind
+) {
+  const conn = await db.portalConnection.findUnique({
+    where: { id: connectionId },
+    select: { activeJobId: true },
+  });
+  if (!conn?.activeJobId) return;
+
+  const job = await db.portalSyncJob.findUnique({ where: { id: conn.activeJobId } });
+  if (!job || (job.status !== 'running' && job.status !== 'pending')) return;
+
+  const meta = readJobMeta(job.resultJson);
+  const maxMs = portalSyncTimeoutMs(portal, meta.syncScope) + 45_000;
+  const started = job.startedAt ?? job.createdAt;
+  if (Date.now() - started.getTime() <= maxMs) return;
+
+  await db.portalSyncJob.update({
+    where: { id: job.id },
+    data: {
+      status: 'failed',
+      completedAt: new Date(),
+      message: 'Job abortado (timeout). Tente Sincronizar outra vez.',
+    },
+  });
+  await db.portalConnection.update({
+    where: { id: connectionId },
+    data: { activeJobId: null },
+  });
+  console.log(`[portal-rpa] libertado job preso ${job.id} (${portal})`);
 }
 
 export async function disconnectPortal(
@@ -1177,7 +1234,7 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
       }
 
       if (!connection.sessionStateEncrypted) throw new Error('Sem sessão');
-      const storageState = decryptPortalField(connection.sessionStateEncrypted, 'session');
+      let storageState = decryptPortalField(connection.sessionStateEncrypted, 'session');
 
       if (job.type === 'refresh') {
         try {
@@ -1258,19 +1315,19 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
 
       const jobMeta = readJobMeta(job.resultJson);
       const uberInteractive = portal === 'uber' && env.portalRpaUberInteractive;
-      const syncTimeoutMs =
-        portal === 'uber' ? 900_000 : portal === 'myprio' ? 55_000 : portal === 'via_verde' ? 180_000 : 90_000;
+      const syncTimeoutMs = portalSyncTimeoutMs(portal, jobMeta.syncScope);
       console.log(
         `[portal-rpa] sync start portal=${portal} scope=${jobMeta.syncScope ?? '-'} uber=${jobMeta.uberSync?.mode ?? '-'} interactive=${uberInteractive} headless=${uberInteractive ? false : env.portalRpaHeadless} timeout=${syncTimeoutMs}ms`
       );
-      const syncResult = await withPlaywrightPage(
+      let refreshedStorage: string | undefined;
+      let syncResult = await withPlaywrightPage(
         {
           headless: uberInteractive ? false : env.portalRpaHeadless,
           storageStateJson: storageState,
           timeoutMs: syncTimeoutMs,
         },
-        async (_b, context, page) =>
-          adapter.sync(context, page, {
+        async (_b, context, page) => {
+          const result = await adapter.sync(context, page, {
             syncScope: jobMeta.syncScope,
             uberSync: jobMeta.uberSync,
             onProgress: async (message) => {
@@ -1281,20 +1338,123 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
                 })
                 .catch(() => undefined);
             },
-          })
+          });
+          if (result.status === 'ok') {
+            try {
+              refreshedStorage = await captureStorageState(context);
+            } catch {
+              /* manter sessão anterior */
+            }
+          }
+          return result;
+        }
       );
       console.log(`[portal-rpa] sync end portal=${portal} status=${syncResult.status}`);
 
       if (syncResult.status === 'expired') {
-        await db.portalConnection.update({
-          where: { id: connection.id },
-          data: { status: 'expired', lastError: syncResult.message, activeJobId: null },
-        });
-        await db.portalSyncJob.update({
-          where: { id: jobId },
-          data: { status: 'failed', completedAt: new Date(), message: syncResult.message },
-        });
-        return;
+        // Via Verde (sem OTP): re-login silencioso com password guardada e repetir sync 1×
+        if (SILENT_RELOGIN_PORTALS.has(portal) && connection.passwordEncrypted) {
+          console.log(`[portal-rpa] sync expired → silent relogin portal=${portal}`);
+          await db.portalSyncJob
+            .update({
+              where: { id: jobId },
+              data: { message: 'Sessão expirada — a renovar login automaticamente…' },
+            })
+            .catch(() => undefined);
+
+          const relogin = await attemptSilentPortalRelogin(db, connection, adapter);
+          if (relogin.ok) {
+            storageState = relogin.storageState;
+            refreshedStorage = undefined;
+            const retryResult = await withPlaywrightPage(
+              {
+                headless: uberInteractive ? false : env.portalRpaHeadless,
+                storageStateJson: storageState,
+                timeoutMs: syncTimeoutMs,
+              },
+              async (_b, context, page) => {
+                const result = await adapter.sync(context, page, {
+                  syncScope: jobMeta.syncScope,
+                  uberSync: jobMeta.uberSync,
+                  onProgress: async (message) => {
+                    await db.portalSyncJob
+                      .update({
+                        where: { id: jobId },
+                        data: { message },
+                      })
+                      .catch(() => undefined);
+                  },
+                });
+                if (result.status === 'ok') {
+                  try {
+                    refreshedStorage = await captureStorageState(context);
+                  } catch {
+                    /* manter */
+                  }
+                }
+                return result;
+              }
+            );
+            console.log(
+              `[portal-rpa] sync retry after relogin portal=${portal} status=${retryResult.status}`
+            );
+            if (retryResult.status === 'ok') {
+              syncResult = retryResult;
+            } else if (retryResult.status === 'expired' || retryResult.status === 'failed') {
+              await db.portalConnection.update({
+                where: { id: connection.id },
+                data: {
+                  status: retryResult.status === 'expired' ? 'expired' : 'connected',
+                  lastError: retryResult.message,
+                  activeJobId: null,
+                },
+              });
+              await db.portalSyncJob.update({
+                where: { id: jobId },
+                data: {
+                  status: 'failed',
+                  completedAt: new Date(),
+                  message: retryResult.message,
+                },
+              });
+              return;
+            }
+          } else {
+            await db.portalConnection.update({
+              where: { id: connection.id },
+              data: {
+                status: 'expired',
+                lastError:
+                  relogin.message ||
+                  syncResult.message ||
+                  'Sessão expirada — volte a ligar a conta',
+                activeJobId: null,
+              },
+            });
+            await db.portalSyncJob.update({
+              where: { id: jobId },
+              data: {
+                status: 'failed',
+                completedAt: new Date(),
+                message:
+                  relogin.message ||
+                  syncResult.message ||
+                  'Sessão expirada — volte a ligar a conta',
+              },
+            });
+            return;
+          }
+        } else {
+          await db.portalConnection.update({
+            where: { id: connection.id },
+            data: { status: 'expired', lastError: syncResult.message, activeJobId: null },
+          });
+          await db.portalSyncJob.update({
+            where: { id: jobId },
+            data: { status: 'failed', completedAt: new Date(), message: syncResult.message },
+          });
+          return;
+        }
       }
 
       if (syncResult.status === 'failed') {
@@ -1303,7 +1463,27 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
           data: {
             status: 'connected',
             lastError: syncResult.message,
-            activeJobId: jobId,
+            activeJobId: null,
+          },
+        });
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'failed',
+            completedAt: new Date(),
+            message: syncResult.message,
+          },
+        });
+        return;
+      }
+
+      if (syncResult.status !== 'ok') {
+        await db.portalConnection.update({
+          where: { id: connection.id },
+          data: {
+            status: 'expired',
+            lastError: syncResult.message,
+            activeJobId: null,
           },
         });
         await db.portalSyncJob.update({
@@ -1354,7 +1534,7 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
           data: {
             status: 'connected',
             lastError: emptyMsg,
-            activeJobId: jobId,
+            activeJobId: null,
           },
         });
         await db.portalSyncJob.update({
@@ -1375,7 +1555,8 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
           status: 'connected',
           lastSyncAt: new Date(),
           lastError: null,
-          activeJobId: jobId,
+          activeJobId: null,
+          ...(refreshedStorage ? { sessionStateEncrypted: encrypt(refreshedStorage) } : {}),
         },
       });
       await db.portalSyncJob.update({
@@ -2252,6 +2433,19 @@ export async function refreshAllPortalSessions(db: PrismaClient) {
   const results: Array<{ portal: string; tenantId: string; ok: boolean }> = [];
 
   for (const connection of connections) {
+    const portal = connection.portal as PortalKind;
+    await clearStalePortalJobs(db, connection.id, portal);
+    const busy = await db.portalConnection.findUnique({
+      where: { id: connection.id },
+      select: { activeJobId: true },
+    });
+    if (busy?.activeJobId) {
+      const active = await db.portalSyncJob.findUnique({ where: { id: busy.activeJobId } });
+      if (active && (active.status === 'running' || active.status === 'pending' || active.status === 'awaiting_otp')) {
+        continue;
+      }
+    }
+
     const job = await db.portalSyncJob.create({
       data: {
         tenantId: connection.tenantId,
@@ -2261,6 +2455,10 @@ export async function refreshAllPortalSessions(db: PrismaClient) {
         status: 'pending',
       },
     });
+    await db.portalConnection.update({
+      where: { id: connection.id },
+      data: { activeJobId: job.id },
+    });
     await runPortalJob(db, job.id, '00000000-0000-0000-0000-000000000000');
     const updated = await db.portalConnection.findUnique({ where: { id: connection.id } });
     results.push({
@@ -2268,6 +2466,193 @@ export async function refreshAllPortalSessions(db: PrismaClient) {
       tenantId: connection.tenantId,
       ok: updated?.status === 'connected',
     });
+  }
+
+  return results;
+}
+
+const AUTO_SYNC_PORTALS: PortalKind[] = ['via_verde', 'myprio'];
+const AUTO_SYNC_SKIP_RECENT_MS = 20 * 60 * 60 * 1000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function setPortalAutoSync(
+  db: PrismaClient,
+  tenantId: string,
+  portal: PortalKind,
+  enabled: boolean
+): Promise<PortalConnectionPublic> {
+  if (!AUTO_SYNC_PORTALS.includes(portal)) {
+    throw new Error('Sincronização automática não está disponível para este portal');
+  }
+  const row = await db.portalConnection.findUnique({
+    where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
+  });
+  if (!row) {
+    throw new Error('Ligue a conta antes de activar a sincronização automática');
+  }
+  await db.portalConnection.update({
+    where: { id: row.id },
+    data: { autoSyncEnabled: enabled },
+  });
+  return getPortalConnectionDetail(db, tenantId, portal);
+}
+
+async function resolvePortalActorUserId(
+  db: PrismaClient,
+  tenantId: string
+): Promise<string | null> {
+  const superadmin = await db.user.findFirst({
+    where: { tenantId, role: 'superadmin', status: 'active' },
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (superadmin) return superadmin.id;
+  const any = await db.user.findFirst({
+    where: { tenantId, status: 'active' },
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  return any?.id ?? null;
+}
+
+async function tenantHasEnabledModule(
+  db: PrismaClient,
+  tenantId: string,
+  moduleKeys: string[]
+): Promise<boolean> {
+  const row = await db.workspaceModule.findFirst({
+    where: {
+      enabled: true,
+      moduleKey: { in: moduleKeys },
+      workspace: { tenantId },
+    },
+    select: { id: true },
+  });
+  return Boolean(row);
+}
+
+async function waitForPortalJobDone(
+  db: PrismaClient,
+  jobId: string,
+  timeoutMs: number
+): Promise<{ status: string; message: string | null }> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const job = await db.portalSyncJob.findUnique({
+      where: { id: jobId },
+      select: { status: true, message: true },
+    });
+    if (!job) return { status: 'missing', message: null };
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'awaiting_otp') {
+      return { status: job.status, message: job.message };
+    }
+    await sleep(4000);
+  }
+  return { status: 'timeout', message: null };
+}
+
+/**
+ * Sync diário opt-in (Via Verde / MyPRIO). Manual sync não muda.
+ * Sequencial — um browser Playwright de cada vez.
+ */
+export async function runDailyPortalAutoSyncs(db: PrismaClient) {
+  if (!env.portalRpaEnabled || env.portalRpaMock) return [];
+
+  const connections = await db.portalConnection.findMany({
+    where: {
+      autoSyncEnabled: true,
+      isEnabled: true,
+      portal: { in: AUTO_SYNC_PORTALS.map(toDbPortal) },
+      sessionStateEncrypted: { not: null },
+      status: { in: ['connected', 'error', 'expired'] },
+    },
+    orderBy: { updatedAt: 'asc' },
+  });
+
+  const results: Array<{
+    portal: string;
+    tenantId: string;
+    ok: boolean;
+    skipped?: string;
+    error?: string;
+  }> = [];
+
+  for (const connection of connections) {
+    const portal = connection.portal as PortalKind;
+
+    if (
+      connection.lastSyncAt &&
+      Date.now() - connection.lastSyncAt.getTime() < AUTO_SYNC_SKIP_RECENT_MS
+    ) {
+      results.push({
+        portal,
+        tenantId: connection.tenantId,
+        ok: true,
+        skipped: 'sync recente',
+      });
+      continue;
+    }
+
+    const moduleKeys =
+      portal === 'via_verde'
+        ? ['via_verde']
+        : ['eletricidade', 'combustivel'];
+    const moduleOn = await tenantHasEnabledModule(db, connection.tenantId, moduleKeys);
+    if (!moduleOn) {
+      results.push({ portal, tenantId: connection.tenantId, ok: true, skipped: 'módulo inactivo' });
+      continue;
+    }
+
+    const actorUserId = await resolvePortalActorUserId(db, connection.tenantId);
+    if (!actorUserId) {
+      results.push({
+        portal,
+        tenantId: connection.tenantId,
+        ok: false,
+        error: 'sem utilizador activo no tenant',
+      });
+      continue;
+    }
+
+    let syncScope: MyPrioSyncScope | undefined;
+    if (portal === 'myprio') {
+      const electric = await tenantHasEnabledModule(db, connection.tenantId, ['eletricidade']);
+      const fleet = await tenantHasEnabledModule(db, connection.tenantId, ['combustivel']);
+      if (electric && fleet) syncScope = 'both';
+      else if (electric) syncScope = 'electric';
+      else if (fleet) syncScope = 'fleet';
+      else {
+        results.push({ portal, tenantId: connection.tenantId, ok: true, skipped: 'módulo inactivo' });
+        continue;
+      }
+    }
+
+    try {
+      const started = await startPortalSync(db, connection.tenantId, portal, actorUserId, {
+        syncScope,
+      });
+      const waitMs = portal === 'myprio' ? 300_000 : 240_000;
+      const done = await waitForPortalJobDone(db, started.jobId, waitMs);
+      results.push({
+        portal,
+        tenantId: connection.tenantId,
+        ok: done.status === 'completed',
+        error:
+          done.status === 'completed'
+            ? undefined
+            : done.message || done.status,
+      });
+    } catch (err) {
+      results.push({
+        portal,
+        tenantId: connection.tenantId,
+        ok: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
   }
 
   return results;

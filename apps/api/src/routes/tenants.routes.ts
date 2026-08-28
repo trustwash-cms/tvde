@@ -16,7 +16,9 @@ import {
 } from '../services/action-confirmation.service';
 import {
   getTenantVehicleLimits,
+  listAllTenantVehicleLimits,
 } from '../services/tenant-vehicle-limits.service';
+import { listAllTenantStorageSummaries } from '../services/tenant-storage.service';
 
 export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
@@ -94,6 +96,22 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     }
 
     const data = await getTenantVehicleLimits(fastify.db, request.user.tenantId);
+    return reply.send({ success: true, data });
+  });
+
+  /** MASTER: limites de viaturas de todos os tenants. */
+  fastify.get('/tenants/vehicle-limits', {
+    preHandler: [fastify.requireRole('master')],
+  }, async (_request, reply) => {
+    const data = await listAllTenantVehicleLimits(fastify.db);
+    return reply.send({ success: true, data });
+  });
+
+  /** MASTER: quotas de storage de todos os tenants. */
+  fastify.get('/tenants/storage', {
+    preHandler: [fastify.requireRole('master')],
+  }, async (_request, reply) => {
+    const data = await listAllTenantStorageSummaries(fastify.db);
     return reply.send({ success: true, data });
   });
 

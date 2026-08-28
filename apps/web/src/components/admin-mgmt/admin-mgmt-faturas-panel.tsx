@@ -115,6 +115,8 @@ export function AdminMgmtFaturasPanel() {
   const [anexosModal, setAnexosModal] = useState<FaturaRow | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notifyBusy, setNotifyBusy] = useState(false);
+  const [notifyOk, setNotifyOk] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const anexoInputRef = useRef<HTMLInputElement>(null);
@@ -575,6 +577,46 @@ export function AdminMgmtFaturasPanel() {
     } else setError(getApiErrorMessage(res));
   }
 
+  async function notifyCliente(fatura: FaturaRow) {
+    if (!workspaceId) return;
+    if (!fatura.dataVencimento) {
+      setError('Defina uma data de vencimento antes de notificar o cliente.');
+      return;
+    }
+    setError('');
+    setNotifyOk('');
+    setNotifyBusy(true);
+    const res = await apiFetch<{
+      email?: { sent?: boolean; to?: string };
+      whatsapp?: { sent?: boolean };
+      downloadIncluded?: boolean;
+    }>(
+      API_PATHS.adminMgmt.faturaNotifyClient(fatura.id),
+      {
+        method: 'POST',
+        body: JSON.stringify({ workspaceId }),
+      },
+      getStoredToken()
+    );
+    setNotifyBusy(false);
+    if (!res.success) {
+      setError(getApiErrorMessage(res));
+      return;
+    }
+    const parts: string[] = [];
+    if (res.data?.email?.sent) parts.push(`email${res.data.email.to ? ` (${res.data.email.to})` : ''}`);
+    if (res.data?.whatsapp?.sent) parts.push('WhatsApp');
+    const via = parts.length ? ` via ${parts.join(' e ')}` : '';
+    const pdfNote = res.data?.downloadIncluded
+      ? ' Inclui botão para descarregar o PDF (mesmo link das faturas).'
+      : '';
+    setNotifyOk(`Lembrete enviado${via}.${pdfNote}`);
+    load();
+    if (viewFatura?.id === fatura.id) {
+      setViewFatura({ ...fatura, notificarCliente: true });
+    }
+  }
+
   async function remove(id: string, numero: string) {
     if (!workspaceId) return;
     const ok = await confirm(`Eliminar fatura ${numero}?`);
@@ -804,7 +846,7 @@ export function AdminMgmtFaturasPanel() {
                   <th className="px-3 py-2">Vencimento</th>
                   <th className="px-3 py-2">Total</th>
                   <th className="px-3 py-2">Estado</th>
-                  <th className="px-3 py-2" title="Notificar cliente no vencimento">Alerta</th>
+                  <th className="px-3 py-2" title="Alerta de vencimento no painel interno">Alerta</th>
                   <th className="px-3 py-2">PDF</th>
                   <th className="px-3 py-2 text-right">Acções</th>
                 </tr>
@@ -986,9 +1028,9 @@ export function AdminMgmtFaturasPanel() {
               onChange={(e) => setForm({ ...form, notificarCliente: e.target.checked })}
             />
             <span>
-              <span className="font-medium text-slate-800">Notificar cliente no vencimento</span>
+              <span className="font-medium text-slate-800">Alerta de vencimento</span>
               <span className="mt-0.5 block text-xs text-slate-500">
-                Envia lembrete por email ou WhatsApp ao cliente (requer data de vencimento e contacto no cliente).
+                Cria o vencimento no painel de alertas. No detalhe da fatura, «Notificar cliente» envia o lembrete por email (e WhatsApp, se o cliente tiver contacto).
               </span>
             </span>
           </label>
@@ -1067,7 +1109,16 @@ export function AdminMgmtFaturasPanel() {
         </form>
       </Modal>
 
-      <Modal open={Boolean(viewFatura)} onClose={() => setViewFatura(null)} title="Detalhe da fatura" panelClassName="max-w-lg" scrollBody>
+      <Modal
+        open={Boolean(viewFatura)}
+        onClose={() => {
+          setViewFatura(null);
+          setNotifyOk('');
+        }}
+        title="Detalhe da fatura"
+        panelClassName="max-w-lg"
+        scrollBody
+      >
         {viewFatura && (
           <div className="space-y-4">
             <dl className="grid grid-cols-[minmax(0,9rem)_1fr] gap-x-4 gap-y-2 text-sm">
@@ -1117,16 +1168,35 @@ export function AdminMgmtFaturasPanel() {
                 </>
               )}
             </dl>
+            {notifyOk && viewFatura.estadoPagamento !== 'pago' && (
+              <p className="text-sm text-emerald-700">{notifyOk}</p>
+            )}
+            {error && viewFatura.estadoPagamento !== 'pago' && (
+              <p className="text-sm text-red-600">{error}</p>
+            )}
             <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-3">
               {viewFatura.estadoPagamento !== 'pago' && viewFatura.dataVencimento && (
-                <button
-                  type="button"
-                  className="btn-secondary inline-flex items-center gap-1.5 text-sm"
-                  onClick={() => void toggleNotificarCliente(viewFatura)}
-                >
-                  {viewFatura.notificarCliente ? <BellOff size={14} /> : <Bell size={14} />}
-                  {viewFatura.notificarCliente ? 'Desactivar alerta' : 'Notificar cliente'}
-                </button>
+                <>
+                  <button
+                    type="button"
+                    className="btn-secondary inline-flex items-center gap-1.5 text-sm"
+                    disabled={notifyBusy}
+                    onClick={() => void notifyCliente(viewFatura)}
+                  >
+                    <Bell size={14} />
+                    {notifyBusy ? 'A enviar…' : 'Notificar cliente'}
+                  </button>
+                  {viewFatura.notificarCliente && (
+                    <button
+                      type="button"
+                      className="btn-secondary inline-flex items-center gap-1.5 text-sm"
+                      onClick={() => void toggleNotificarCliente(viewFatura)}
+                    >
+                      <BellOff size={14} />
+                      Desactivar alerta
+                    </button>
+                  )}
+                </>
               )}
               {viewFatura.estadoPagamento !== 'pago' ? (
                 <button

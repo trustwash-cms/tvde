@@ -10,7 +10,7 @@ import { env } from '../../config/env';
  * - Auth: auth.uber.com/v2 (Breeze)
  * - OTP SMS: 4 dígitos (#PHONE_SMS_OTP-0..3) via modal TVDE
  * - Pós-OTP: «Iniciar sessão com a palavra-passe» (não passkey)
- * - Sync: lista/escolha relatório ou Gerar «Transação de pagamentos» com intervalo → poll Criado em
+ * - Sync: lista/escolha relatório ou Gerar «Pagamentos do motorista» (líquidos) com intervalo → poll
  */
 
 const SUPPLIER_HOME = 'https://supplier.uber.com/';
@@ -1178,7 +1178,9 @@ async function downloadExistingPaymentReport(
   const match = reportName
     ? rows.find((r) => r.name === reportName || r.name.startsWith(reportName.slice(0, 24))) ||
       rows.find((r) => reportName.startsWith(r.name.slice(0, 20)))
-    : rows.find((r) => r.hasDownload && /payments/i.test(r.name)) ||
+    : rows.find((r) => r.hasDownload && /payments_driver/i.test(r.name)) ||
+      rows.find((r) => r.hasDownload && /pagamentos? do?s? motoristas?/i.test(r.type || '')) ||
+      rows.find((r) => r.hasDownload && /payments/i.test(r.name)) ||
       rows.find((r) => r.hasDownload && /pagament|transação|transacao/i.test(r.name)) ||
       rows.find((r) => r.hasDownload);
 
@@ -1401,17 +1403,21 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   await scrollGenerateDrawerToTop(page);
 
   const panel = reportGeneratePanel(page);
-  // Já REPORT_TYPE_PAYMENTS_ORDER?
-  const already = panel.locator('[value="REPORT_TYPE_PAYMENTS_ORDER"]').first();
+  // Já REPORT_TYPE_PAYMENTS_DRIVER? (rendimentos líquidos)
+  const already = panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first();
   if (await already.isVisible().catch(() => false)) {
-    console.log('[uber-sync] tipo já REPORT_TYPE_PAYMENTS_ORDER');
+    console.log('[uber-sync] tipo já REPORT_TYPE_PAYMENTS_DRIVER');
     return;
   }
   if (
-    (await panel.getByText(/^transação de pagamentos$/i).first().isVisible().catch(() => false)) &&
+    (await panel
+      .getByText(/^pagamentos? do?s? motoristas?$/i)
+      .first()
+      .isVisible()
+      .catch(() => false)) &&
     !(await panel.getByText(/^atividade do motorista$/i).first().isVisible().catch(() => false))
   ) {
-    console.log('[uber-sync] tipo já «Transação de pagamentos»');
+    console.log('[uber-sync] tipo já «Pagamentos do motorista»');
     return;
   }
 
@@ -1425,7 +1431,7 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   await typeSelect.first().click({ timeout: 8000 });
   await page.waitForTimeout(400);
 
-  // Lista longa — descer até «Transação de pagamentos»
+  // Lista longa — descer até «Pagamentos do motorista»
   for (let i = 0; i < 22; i += 1) {
     await page.keyboard.press('ArrowDown').catch(() => undefined);
     await page.waitForTimeout(40);
@@ -1436,7 +1442,11 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
     for (const n of nodes) {
       const val = n.getAttribute('value') || '';
       const t = (n.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (val === 'REPORT_TYPE_PAYMENTS_ORDER' || /^transação de pagamentos$/i.test(t)) {
+      if (
+        val === 'REPORT_TYPE_PAYMENTS_DRIVER' ||
+        /^pagamentos? do?s? motoristas?$/i.test(t) ||
+        /^driver payments?$/i.test(t)
+      ) {
         const target = n.closest('[role="option"]') || n;
         target.scrollIntoView({ block: 'center' });
         target.click();
@@ -1448,7 +1458,7 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
 
   if (!opted) {
     await page
-      .getByRole('option', { name: /transação de pagamentos/i })
+      .getByRole('option', { name: /pagamentos? do?s? motoristas?|driver payments?/i })
       .first()
       .click({ force: true, timeout: 8_000 })
       .catch(() => undefined);
@@ -1458,12 +1468,18 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   await page.waitForTimeout(500);
 
   const ok =
-    (await panel.locator('[value="REPORT_TYPE_PAYMENTS_ORDER"]').first().isVisible().catch(() => false)) ||
-    (await panel.getByText(/^transação de pagamentos$/i).first().isVisible().catch(() => false));
+    (await panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first().isVisible().catch(() => false)) ||
+    (await panel
+      .getByText(/^pagamentos? do?s? motoristas?$/i)
+      .first()
+      .isVisible()
+      .catch(() => false));
   if (!ok) {
-    throw new Error('Sync Uber: não seleccionei «Transação de pagamentos» (REPORT_TYPE_PAYMENTS_ORDER).');
+    throw new Error(
+      'Sync Uber: não seleccionei «Pagamentos do motorista» (REPORT_TYPE_PAYMENTS_DRIVER).'
+    );
   }
-  console.log('[uber-sync] tipo = Transação de pagamentos');
+  console.log('[uber-sync] tipo = Pagamentos do motorista (rendimentos líquidos)');
 }
 
 /** Snap minutos ao slot de 15 min do dropdown Uber (ex.: 1:00 AM, 11:30 PM). */
@@ -1812,9 +1828,11 @@ async function closeGenerateDrawerIfOpen(page: Page): Promise<void> {
 
 function isPaymentsReportRow(r: ReportRowSnapshot): boolean {
   return (
-    /payments/i.test(r.name) ||
+    /payments_driver|payments_orde|payments/i.test(r.name) ||
     /pagament/i.test(r.name) ||
-    /transação de pag|transacao de pag|payment.?transaction/i.test(r.type || '')
+    /pagamentos? do?s? motoristas?|transação de pag|transacao de pag|payment.?transaction|driver payments?/i.test(
+      r.type || ''
+    )
   );
 }
 
@@ -2452,7 +2470,7 @@ export const uberAdapter: PortalAdapter = {
             warnings: [
               uberSync?.reportName
                 ? `Sync: download «${uberSync.reportName.slice(0, 48)}»`
-                : 'Sync: download de relatório existente (Transação de pagamentos)',
+                : 'Sync: download de relatório existente (Pagamentos do motorista)',
             ],
           };
         }
@@ -2496,7 +2514,7 @@ export const uberAdapter: PortalAdapter = {
         files: [file],
         warnings: [
           `ficheiro=${file.filename}`,
-          `Sync Relatórios: Transação de pagamentos (${range.rangeStart.slice(0, 16)} → ${range.rangeEnd.slice(0, 16)})`,
+          `Sync Relatórios: Pagamentos do motorista / líquidos (${range.rangeStart.slice(0, 16)} → ${range.rangeEnd.slice(0, 16)})`,
         ],
       };
     } catch (err) {

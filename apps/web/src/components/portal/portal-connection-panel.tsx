@@ -636,6 +636,30 @@ export function PortalConnectionPanel({
     await load();
   }
 
+  async function handleAutoSync(nextEnabled: boolean) {
+    if (!connection) return;
+    setError('');
+    const previous = connection.autoSyncEnabled;
+    setConnection({ ...connection, autoSyncEnabled: nextEnabled });
+    const res = await apiFetch<PortalConnectionPublic>(
+      API_PATHS.portalConnections.autoSync(portal),
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ autoSyncEnabled: nextEnabled }),
+      },
+      getStoredToken()
+    );
+    if (!res.success) {
+      setConnection({ ...connection, autoSyncEnabled: previous });
+      setError(humanizePortalError(res.error) || 'Não foi possível actualizar a sincronização automática');
+      return;
+    }
+    if (res.data) {
+      setConnection(res.data);
+      onStatusChange?.(res.data);
+    }
+  }
+
   const status = connection?.status ?? 'disconnected';
   const statusLabel = PORTAL_CONNECTION_STATUS_LABELS[status];
   const rpaOff = connection && !connection.rpaEnabled;
@@ -681,6 +705,29 @@ export function PortalConnectionPanel({
             <p className="mt-0.5 text-xs text-slate-400">
               Último sync: {new Date(connection.lastSyncAt).toLocaleString('pt-PT')}
             </p>
+          ) : null}
+          {portal !== 'uber' &&
+          (connection?.usernameMasked ||
+            connection?.hasPassword ||
+            connection?.hasSession ||
+            status !== 'disconnected') ? (
+            <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={Boolean(connection?.autoSyncEnabled)}
+                disabled={busy || !!rpaOff}
+                onChange={(e) => void handleAutoSync(e.target.checked)}
+              />
+              <span>
+                <span className="font-medium">Sincronização automática diária</span>
+                <span className="mt-0.5 block text-xs text-slate-500">
+                  {portal === 'myprio'
+                    ? 'Corre 1× por dia com a conta ligada. O sync manual mantém-se. Se a sessão expirar, o MyPRIO pede OTP — volte a Ligar conta.'
+                    : 'Corre 1× por dia com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
+                </span>
+              </span>
+            </label>
           ) : null}
           {connection?.browserReady === false && !connection.mockMode ? (
             <p className="mt-1 text-xs text-amber-700">

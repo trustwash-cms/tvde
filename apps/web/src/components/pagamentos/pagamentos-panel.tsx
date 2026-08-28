@@ -105,6 +105,9 @@ type PaymentReportRow = {
 type PaymentReportDetail = PaymentReportRow & {
   details: PaymentCalculation['detalhes'] | null;
   warnings: string[];
+  emailSent: boolean;
+  whatsappSent: boolean;
+  notificationDebug: { skipped: string[]; errors: string[] } | null;
 };
 
 type PaymentAttachment = {
@@ -1175,6 +1178,20 @@ export function PagamentosPanel() {
                 </ul>
               </div>
             ) : null}
+            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">
+              <p>emailSent: {String(detail.emailSent)}</p>
+              <p>whatsappSent: {String(detail.whatsappSent)}</p>
+              {detail.notificationDebug?.errors?.map((msg) => (
+                <p key={msg} className="mt-1 text-red-700">
+                  {msg}
+                </p>
+              ))}
+              {detail.notificationDebug?.skipped?.map((msg) => (
+                <p key={msg} className="mt-1 text-slate-500">
+                  {msg}
+                </p>
+              ))}
+            </div>
           </div>
         )}
       </Modal>
@@ -1276,6 +1293,15 @@ export function PagamentosPanel() {
         onClose={() => setSyncOpen(false)}
         periodStart={syncPeriod?.start}
         periodEnd={syncPeriod?.end}
+        onCalculatePayment={() => {
+          if (syncPeriod) {
+            setCalcStart(syncPeriod.start);
+            setCalcEnd(syncPeriod.end);
+          } else if (!calcStart || !calcEnd) {
+            loadDefaultRange();
+          }
+          setShowCalc(true);
+        }}
       />
       <MassPagamentosModal
         open={massOpen}

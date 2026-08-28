@@ -149,7 +149,15 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
       if (res.data.status === 'connected') {
         return 'ok';
       }
-      if (res.data.status === 'error' || res.data.status === 'expired' || res.data.activeJobStatus === 'failed') {
+      // Não falhar por status «expired» — é o estado inicial ao reabrir sessão após sync.
+      // Só falhar quando o job de login actual falhou.
+      if (
+        res.data.activeJobStatus === 'failed' ||
+        (res.data.status === 'error' &&
+          res.data.activeJobStatus !== 'running' &&
+          res.data.activeJobStatus !== 'pending' &&
+          res.data.activeJobStatus !== 'awaiting_otp')
+      ) {
         throw new Error(
           humanizeQuickPortalError(res.data.lastError || res.data.lastJobMessage) || 'Login falhou'
         );

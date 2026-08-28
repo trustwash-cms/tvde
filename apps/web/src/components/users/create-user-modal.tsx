@@ -41,7 +41,7 @@ const EMPTY_FORM: CreateUserFormValues = {
   password: '',
   confirmPassword: '',
   role: 'staff',
-  status: 'active',
+  status: 'pending',
   phoneCountryCode: '+351',
   phoneNumber: '',
   fullName: '',
@@ -139,7 +139,8 @@ export function CreateUserModal({
       username,
       email,
       role: form.role,
-      status: form.status,
+      // Password auto → PENDING no servidor; com password manual usa o status escolhido.
+      status: usingManualPassword ? form.status : 'pending',
     };
     if (usingManualPassword) payload.password = form.password;
 
@@ -265,7 +266,8 @@ export function CreateUserModal({
             <label className="mb-1.5 block text-sm font-medium text-slate-700">Status</label>
             <select
               className="input"
-              value={form.status}
+              value={usingManualPassword ? form.status : 'pending'}
+              disabled={!usingManualPassword}
               onChange={(e) => setForm({ ...form, status: e.target.value })}
             >
               {USER_STATUS_OPTIONS.map((opt) => (
@@ -274,6 +276,11 @@ export function CreateUserModal({
                 </option>
               ))}
             </select>
+            {!usingManualPassword ? (
+              <p className="mt-1 text-xs text-slate-500">
+                Password automática → conta fica Pending até ao 1º login do utilizador.
+              </p>
+            ) : null}
           </div>
         </div>
 

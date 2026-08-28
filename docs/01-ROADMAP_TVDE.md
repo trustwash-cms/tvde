@@ -266,6 +266,7 @@ Padrão de implementação: **copiar Bolt** (package → API routes → sync →
 | **Eletricidade** | shell | — | `AREA_ELETRICIDADE.md` | PRIO + `numCartaoPrio` |
 | **Combustível** | shell | — | (PRIO partilhado) | `numCartaoPrio` |
 | **Pagamentos** | calc + gravar | [`08-PAGAMENTOS.md`](./08-PAGAMENTOS.md) | `PAYMENT_CALCULATOR.md`, `RELATORIOS_MOTORISTAS.md` | Todos acima |
+| **WhatsApp Oficial** | Config + eventos | [`10-WHATSAPP_BUSINESS_API.MD`](./10-WHATSAPP_BUSINESS_API.MD) | `Whatsapp Business API.md` | Meta Cloud API |
 | **Viaturas** | (futuro) | — | `viaturas.md` | FleetVehicle |
 
 ### 6.1 Via Verde — resumo funcional
@@ -322,7 +323,7 @@ Ref: `PAYMENT_CALCULATOR.md`, `AREA_PAGAMENTOS_EMAIL.md`
 | Manutenção | `MAINTENANCE_MODE_SYSTEM.md` | Flag global |
 | Notificações admin | `ADMIN_NOTIFICATIONS_SYSTEM.md` | In-app + email |
 | OCR documentos | `ocr.md` | Opcional |
-| WhatsApp | `AREA_WHATSAPP.md` | Já parcial na plataforma |
+| WhatsApp | [`10-WHATSAPP_BUSINESS_API.MD`](./10-WHATSAPP_BUSINESS_API.MD) | API Oficial activa; genérica = bridge |
 | Permissões granulares | `USER_SUPERADMIN_GRANULAR_PERMISSIONS.md` | Ícone chave |
 | Reset password manual | `RESET_PASS.md` | Admin gera nova password |
 

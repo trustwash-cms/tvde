@@ -18,6 +18,8 @@ export interface TenantStorageSummary {
   plan: string;
   siteId: string | null;
   tenantName: string | null;
+  /** Presente na listagem MASTER */
+  tenantId?: string;
 }
 
 export function gbToStorageBytes(gb: number): number {

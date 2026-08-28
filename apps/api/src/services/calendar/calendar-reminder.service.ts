@@ -54,19 +54,21 @@ export async function listUpcomingReminders(
   userId: string,
   tenantId: string,
   workspaceId: string,
-  options: { limit?: number; horizonDays?: number } = {}
+  options: { limit?: number; horizonDays?: number; dueOnly?: boolean; channel?: CalendarReminderChannel } = {}
 ) {
   const limit = Math.min(options.limit ?? 20, 100);
-  const horizonMs = (options.horizonDays ?? 7) * 24 * 60 * 60_000;
   const now = new Date();
-  const horizon = new Date(now.getTime() + horizonMs);
+  const fireAtFilter = options.dueOnly
+    ? { lte: now }
+    : { lte: new Date(now.getTime() + (options.horizonDays ?? 7) * 24 * 60 * 60_000) };
 
   return prisma.calendarEventReminder.findMany({
     where: {
       userId,
       tenantId,
       status: 'pending',
-      fireAt: { lte: horizon },
+      fireAt: fireAtFilter,
+      ...(options.channel ? { channel: options.channel } : {}),
       event: {
         workspaceId,
         status: { not: 'cancelled' },
@@ -90,12 +92,29 @@ export async function listUpcomingReminders(
   });
 }
 
+/** Marca lembrete in-app como enviado (toast mostrado). */
+export async function acknowledgeReminder(reminderId: string, userId: string) {
+  const reminder = await prisma.calendarEventReminder.findFirst({
+    where: { id: reminderId, userId },
+  });
+  if (!reminder) throw new Error('Lembrete não encontrado');
+  if (reminder.status !== 'pending') return reminder;
+
+  return prisma.calendarEventReminder.update({
+    where: { id: reminderId },
+    data: { status: 'sent', sentAt: new Date() },
+  });
+}
+
 export async function dismissReminder(reminderId: string, userId: string) {
   const reminder = await prisma.calendarEventReminder.findFirst({
     where: { id: reminderId, userId },
   });
   if (!reminder) throw new Error('Lembrete não encontrado');
-  if (reminder.status !== 'pending') throw new Error('Lembrete já processado');
+  if (reminder.status === 'dismissed') return reminder;
+  if (reminder.status !== 'pending' && reminder.status !== 'sent') {
+    throw new Error('Lembrete já processado');
+  }
 
   return prisma.calendarEventReminder.update({
     where: { id: reminderId },

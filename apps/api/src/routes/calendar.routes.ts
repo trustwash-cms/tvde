@@ -26,6 +26,7 @@ import {
   uploadEventAttachment,
 } from '../services/calendar/calendar.service';
 import {
+  acknowledgeReminder,
   dismissReminder,
   listUpcomingReminders,
 } from '../services/calendar/calendar-reminder.service';
@@ -738,6 +739,11 @@ export async function calendarRoutes(fastify: FastifyInstance) {
         workspaceId: z.string().uuid().optional(),
         limit: z.coerce.number().int().min(1).max(100).optional(),
         horizonDays: z.coerce.number().int().min(1).max(30).optional(),
+        dueOnly: z
+          .union([z.literal('1'), z.literal('true'), z.literal('0'), z.literal('false'), z.boolean()])
+          .optional()
+          .transform((v) => v === true || v === '1' || v === 'true'),
+        channel: z.enum(['in_app', 'email', 'push']).optional(),
       })
       .parse(request.query);
 
@@ -750,6 +756,8 @@ export async function calendarRoutes(fastify: FastifyInstance) {
     const data = await listUpcomingReminders(request.user.sub, tenantId, workspaceId, {
       limit: query.limit,
       horizonDays: query.horizonDays,
+      dueOnly: query.dueOnly,
+      channel: query.channel,
     });
 
     return reply.send({ success: true, data });
@@ -911,6 +919,17 @@ export async function calendarRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data, message: 'Autofaturação no calendário actualizada' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao guardar definições';
+      return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.patch('/calendar/reminders/:id/ack', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      const data = await acknowledgeReminder(id, request.user.sub);
+      return reply.send({ success: true, data, message: 'Lembrete reconhecido' });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao reconhecer lembrete';
       return reply.status(400).send({ success: false, error: message });
     }
   });

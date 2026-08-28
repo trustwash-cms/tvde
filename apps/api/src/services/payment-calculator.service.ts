@@ -4,6 +4,7 @@ import {
   isUserVehicleActive,
   overlapDays,
   toDateOnlyUtc,
+  UBER_DRIVER_NET_EARNINGS_DESCRIPTION,
   type PaymentCalculation,
   type PaymentDriverOption,
   type PaymentMoneyLine,
@@ -139,22 +140,40 @@ export async function calculateDriverPayment(
 
   let uberTotal = 0;
   for (const [, vehicle] of uberByUuid) {
-    const rows = await db.uberPayment.findMany({
+    const baseWhere = {
+      tenantId,
+      isPaid: false as const,
+      driverUuid: { equals: vehicle.uuidUber!, mode: 'insensitive' as const },
+      reportDate: { gte: periodStart, lte: endOfDayUtc(periodEnd) },
+    };
+    // Preferir «Pagamentos do motorista» = rendimentos líquidos (totais + reembolsos)
+    const netRows = await db.uberPayment.findMany({
       where: {
-        tenantId,
-        isPaid: false,
-        driverUuid: { equals: vehicle.uuidUber!, mode: 'insensitive' },
-        reportDate: { gte: periodStart, lte: endOfDayUtc(periodEnd) },
+        ...baseWhere,
+        description: UBER_DRIVER_NET_EARNINGS_DESCRIPTION,
       },
-      select: { id: true, amount: true, reportDate: true },
+      select: { id: true, amount: true, reportDate: true, description: true },
     });
+    const rows =
+      netRows.length > 0
+        ? netRows
+        : await db.uberPayment.findMany({
+            where: {
+              ...baseWhere,
+              NOT: { description: UBER_DRIVER_NET_EARNINGS_DESCRIPTION },
+            },
+            select: { id: true, amount: true, reportDate: true, description: true },
+          });
     const sum = rows.reduce((acc, r) => acc + dec(r.amount), 0);
     uberTotal += sum;
     ids.uberPaymentIds.push(...rows.map((r) => r.id));
     detalhes.uber.push({
       label: `Uber · ${vehicle.matricula} · ${vehicle.uuidUber}`,
       amount: money(sum),
-      meta: `${rows.length} linhas em aberto`,
+      meta:
+        netRows.length > 0
+          ? `rendimentos líquidos (${rows.length} linha${rows.length === 1 ? '' : 's'})`
+          : `${rows.length} linhas «Pago a si» em aberto`,
     });
   }
 

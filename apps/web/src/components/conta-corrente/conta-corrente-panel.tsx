@@ -12,7 +12,7 @@ import {
 } from '@/lib/api';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import clsx from 'clsx';
-import { Download, Plus, RotateCcw, Trash2, XCircle } from 'lucide-react';
+import { Download, Pencil, Plus, RotateCcw, Trash2, XCircle } from 'lucide-react';
 
 type EntryType = 'credit' | 'debit';
 type EntryStatus = 'open' | 'settled' | 'cancelled';
@@ -80,6 +80,21 @@ const STATUS_LABEL: Record<EntryStatus, string> = {
   cancelled: 'Cancelado',
 };
 
+function installmentProgressLabel(entry: {
+  status: EntryStatus;
+  installmentEnabled: boolean;
+  totalInstallments: number | null;
+  installmentsPaid: number;
+}): string | null {
+  if (!entry.installmentEnabled || !entry.totalInstallments) return null;
+  const total = entry.totalInstallments;
+  const paid = entry.installmentsPaid;
+  if (entry.status === 'settled' || paid >= total) {
+    return `Parcelas ${total}/${total} liquidadas`;
+  }
+  return `Parcela ${paid + 1} de ${total}`;
+}
+
 export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: string }) {
   const { confirm, confirmDialog } = useConfirmDialog();
   const [drivers, setDrivers] = useState<DriverOption[]>([]);
@@ -89,9 +104,12 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
   const [saving, setSaving] = useState(false);
+  const [removeAttachment, setRemoveAttachment] = useState(false);
 
   const [form, setForm] = useState({
+    createDriverId: '',
     description: '',
     amount: '',
     type: 'credit' as EntryType,
@@ -114,14 +132,10 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
   }, []);
 
   function load() {
-    if (!driverId) {
-      setData(null);
-      return;
-    }
     setLoading(true);
     setError('');
     const params = new URLSearchParams();
-    params.set('driverUserId', driverId);
+    if (driverId) params.set('driverUserId', driverId);
     if (status !== 'all') params.set('status', status);
     apiFetch<ListData>(`${API_PATHS.contaCorrente.list}?${params}`, {}, getStoredToken()).then(
       (res) => {
@@ -147,6 +161,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
 
   function resetForm() {
     setForm({
+      createDriverId: driverId,
       description: '',
       amount: '',
       type: 'credit',
@@ -157,11 +172,57 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
       installmentAmount: '',
     });
     setFile(null);
+    setRemoveAttachment(false);
   }
 
-  async function handleCreate(e: FormEvent) {
+  function closeModal() {
+    if (saving) return;
+    setModalOpen(false);
+    setEditingEntry(null);
+    resetForm();
+  }
+
+  function openCreateModal() {
+    setEditingEntry(null);
+    resetForm();
+    setError('');
+    setModalOpen(true);
+  }
+
+  function openEditModal(entry: Entry) {
+    setEditingEntry(entry);
+    setForm({
+      createDriverId: entry.driverUserId,
+      description: entry.description,
+      amount: entry.amount,
+      type: entry.type,
+      category: entry.category ?? '',
+      reference: entry.reference ?? '',
+      installmentEnabled: entry.installmentEnabled,
+      totalInstallments: String(entry.totalInstallments ?? 2),
+      installmentAmount: entry.installmentAmount ?? '',
+    });
+    setFile(null);
+    setRemoveAttachment(false);
+    setError('');
+    setModalOpen(true);
+  }
+
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!driverId) return;
+    if (editingEntry) {
+      await handleUpdate(editingEntry);
+      return;
+    }
+    await handleCreate();
+  }
+
+  async function handleCreate() {
+    const targetDriverId = driverId || form.createDriverId;
+    if (!targetDriverId) {
+      setError('Seleccione o motorista');
+      return;
+    }
 
     const description = form.description.trim();
     if (!description) {
@@ -199,7 +260,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
       // Sem ficheiro: JSON (evita hang/multipart). Com ficheiro: FormData.
       if (!file) {
         const body: Record<string, unknown> = {
-          driverUserId: driverId,
+          driverUserId: targetDriverId,
           description,
           amount,
           type: form.type,
@@ -224,7 +285,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
       } else {
         let token = getStoredToken();
         const formData = new FormData();
-        formData.append('driverUserId', driverId);
+        formData.append('driverUserId', targetDriverId);
         formData.append('description', description);
         formData.append('amount', String(amount));
         formData.append('type', form.type);
@@ -274,6 +335,134 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'Não foi possível guardar o lançamento'
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUpdate(entry: Entry) {
+    const description = form.description.trim();
+    if (!description) {
+      setError('Descrição é obrigatória');
+      return;
+    }
+
+    const financialLocked = entry.installmentsPaid > 0;
+    let amount: number | undefined;
+    let totalInstallments: number | undefined;
+    let installmentAmount: number | undefined;
+    const installmentOn = form.type === 'debit' && form.installmentEnabled;
+
+    if (!financialLocked) {
+      amount = Number(form.amount.replace(',', '.'));
+      if (!(amount > 0)) {
+        setError('Valor deve ser maior que zero');
+        return;
+      }
+      if (installmentOn) {
+        totalInstallments = Number(form.totalInstallments);
+        if (!Number.isInteger(totalInstallments) || totalInstallments < 2) {
+          setError('Número de parcelas inválido (mínimo 2)');
+          return;
+        }
+        const sliceRaw = (form.installmentAmount.trim() || installmentPreview).replace(',', '.');
+        installmentAmount = Number(sliceRaw);
+        if (!(installmentAmount > 0)) {
+          setError('Valor por parcela inválido');
+          return;
+        }
+      }
+    }
+
+    setSaving(true);
+    setError('');
+
+    try {
+      const url = `${getApiUrl()}${API_PATHS.contaCorrente.byId(entry.id)}`;
+
+      if (file) {
+        let token = getStoredToken();
+        const formData = new FormData();
+        formData.append('description', description);
+        formData.append('category', form.category.trim());
+        formData.append('reference', form.reference.trim());
+        if (removeAttachment) formData.append('removeAttachment', 'true');
+        if (!financialLocked && amount != null) {
+          formData.append('amount', String(amount));
+          formData.append('type', form.type);
+          if (installmentOn && totalInstallments != null && installmentAmount != null) {
+            formData.append('installmentEnabled', 'true');
+            formData.append('totalInstallments', String(totalInstallments));
+            formData.append('installmentAmount', String(installmentAmount));
+          } else {
+            formData.append('installmentEnabled', 'false');
+          }
+        }
+        formData.append('attachment', file);
+
+        const patchMultipart = async (accessToken: string | null) =>
+          fetch(url, {
+            method: 'PATCH',
+            headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
+            body: formData,
+          });
+
+        let res = await patchMultipart(token);
+        if (res.status === 401) {
+          const refreshed = await refreshStoredAccessToken();
+          if (refreshed) {
+            token = refreshed;
+            res = await patchMultipart(token);
+          }
+        }
+
+        const raw = await res.text();
+        let parsed: { success?: boolean; error?: string; message?: string } = {};
+        try {
+          parsed = raw ? JSON.parse(raw) : {};
+        } catch {
+          parsed = { success: false, error: raw.slice(0, 200) || `HTTP ${res.status}` };
+        }
+        if (!res.ok || !parsed.success) {
+          setError(parsed.error || parsed.message || 'Não foi possível actualizar o lançamento');
+          return;
+        }
+      } else {
+        const body: Record<string, unknown> = {
+          description,
+          category: form.category.trim() || null,
+          reference: form.reference.trim() || null,
+        };
+        if (removeAttachment) body.removeAttachment = true;
+        if (!financialLocked && amount != null) {
+          body.amount = amount;
+          body.type = form.type;
+          if (installmentOn) {
+            body.installmentEnabled = true;
+            body.totalInstallments = totalInstallments;
+            body.installmentAmount = installmentAmount;
+          } else {
+            body.installmentEnabled = false;
+          }
+        }
+
+        const res = await apiFetch(API_PATHS.contaCorrente.byId(entry.id), {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        }, getStoredToken());
+
+        if (!res.success) {
+          setError(getApiErrorMessage(res) || 'Não foi possível actualizar o lançamento');
+          return;
+        }
+      }
+
+      closeModal();
+      load();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Não foi possível actualizar o lançamento'
       );
     } finally {
       setSaving(false);
@@ -355,6 +544,9 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
   }
 
   const summary = data?.summary;
+  const showAllDrivers = !driverId;
+  const tableCols = showAllDrivers ? 8 : 7;
+  const financialLocked = Boolean(editingEntry && editingEntry.installmentsPaid > 0);
 
   return (
     <>
@@ -368,12 +560,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
             <button
               type="button"
               className="btn-primary inline-flex items-center gap-2"
-              disabled={!driverId}
-              onClick={() => {
-                resetForm();
-                setError('');
-                setModalOpen(true);
-              }}
+              onClick={() => openCreateModal()}
             >
             <Plus size={16} />
             Adicionar lançamento
@@ -388,7 +575,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
               value={driverId}
               onChange={(e) => setDriverId(e.target.value)}
             >
-              <option value="">Seleccionar motorista…</option>
+              <option value="">Todos os motoristas</option>
               {drivers.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.label}
@@ -417,57 +604,57 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
           </div>
         ) : null}
 
-        {!driverId ? (
-          <div className="card py-14 text-center text-sm text-slate-500">
-            Seleccione um motorista para ver a conta corrente.
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div className="card">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Saldo em aberto
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {formatMoney(summary?.openBalance ?? '0')}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {summary?.openCount ?? 0} registo{(summary?.openCount ?? 0) === 1 ? '' : 's'} em aberto
+              {showAllDrivers ? ' (todos)' : ''}
+            </p>
           </div>
-        ) : (
-          <>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="card">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Saldo em aberto
-                </p>
-                <p className="mt-2 text-2xl font-semibold text-slate-900">
-                  {formatMoney(summary?.openBalance ?? '0')}
+          <div className="card">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Saldo acumulado
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-slate-900">
+              {formatMoney(summary?.accumulatedBalance ?? '0')}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {showAllDrivers ? 'Todos os motoristas' : 'Inclui liquidados e cancelados'}
+            </p>
+          </div>
+          <div className="card">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+              Última actualização
+            </p>
+            {summary?.lastUpdate ? (
+              <>
+                <p className="mt-2 text-base font-semibold text-slate-900">
+                  {summary.lastUpdate.driverLabel}
                 </p>
                 <p className="mt-1 text-xs text-slate-500">
-                  {summary?.openCount ?? 0} registo{(summary?.openCount ?? 0) === 1 ? '' : 's'} em aberto
+                  {formatDateTime(summary.lastUpdate.at)}
                 </p>
-              </div>
-              <div className="card">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Saldo acumulado
-                </p>
-                <p className="mt-2 text-2xl font-semibold text-slate-900">
-                  {formatMoney(summary?.accumulatedBalance ?? '0')}
-                </p>
-                <p className="mt-1 text-xs text-slate-500">Inclui liquidados e cancelados</p>
-              </div>
-              <div className="card">
-                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
-                  Última actualização
-                </p>
-                {summary?.lastUpdate ? (
-                  <>
-                    <p className="mt-2 text-base font-semibold text-slate-900">
-                      {summary.lastUpdate.driverLabel}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {formatDateTime(summary.lastUpdate.at)}
-                    </p>
-                  </>
-                ) : (
-                  <p className="mt-2 text-sm text-slate-500">Sem movimentos</p>
-                )}
-              </div>
-            </div>
+              </>
+            ) : (
+              <p className="mt-2 text-sm text-slate-500">Sem movimentos</p>
+            )}
+          </div>
+        </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-              <table className="min-w-full text-left text-sm">
-                <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">Descrição</th>
+        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+              <tr>
+                {showAllDrivers ? (
+                  <th className="px-4 py-3 font-medium">Motorista</th>
+                ) : null}
+                <th className="px-4 py-3 font-medium">Descrição</th>
                     <th className="px-4 py-3 font-medium">Valor</th>
                     <th className="px-4 py-3 font-medium">Tipo</th>
                     <th className="px-4 py-3 font-medium">Estado</th>
@@ -479,19 +666,22 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
                 <tbody>
                   {loading ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                      <td colSpan={tableCols} className="px-4 py-10 text-center text-slate-500">
                         A carregar…
                       </td>
                     </tr>
                   ) : !data?.entries.length ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
+                      <td colSpan={tableCols} className="px-4 py-10 text-center text-slate-500">
                         Sem lançamentos para os filtros seleccionados.
                       </td>
                     </tr>
                   ) : (
                     data.entries.map((entry) => (
                       <tr key={entry.id} className="border-b border-slate-100 last:border-0">
+                        {showAllDrivers ? (
+                          <td className="px-4 py-3 font-medium text-slate-900">{entry.driverLabel}</td>
+                        ) : null}
                         <td className="max-w-xs px-4 py-3">
                           <p className="font-medium text-slate-900">{entry.description}</p>
                           {entry.category ? (
@@ -499,7 +689,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
                           ) : null}
                           {entry.installmentEnabled ? (
                             <p className="text-xs text-slate-500">
-                              Parcelas {entry.installmentsPaid}/{entry.totalInstallments} ·{' '}
+                              {installmentProgressLabel(entry)} ·{' '}
                               {formatMoney(entry.installmentAmount ?? '0')}/parcela
                               {entry.status === 'open' && Number(entry.remainingBalance) > 0 ? (
                                 <> · Restante {formatMoney(entry.remainingBalance)}</>
@@ -551,6 +741,16 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
                                 onClick={() => void downloadAttachment(entry)}
                               >
                                 <Download size={16} />
+                              </button>
+                            ) : null}
+                            {entry.status === 'open' ? (
+                              <button
+                                type="button"
+                                title="Editar"
+                                className="rounded-md p-1.5 text-slate-600 hover:bg-slate-100"
+                                onClick={() => openEditModal(entry)}
+                              >
+                                <Pencil size={16} />
                               </button>
                             ) : null}
                             {entry.status === 'open' && entry.installmentsPaid === 0 ? (
@@ -621,14 +821,12 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
                 </tbody>
               </table>
             </div>
-          </>
-        )}
       </div>
 
       <Modal
         open={modalOpen}
-        onClose={() => !saving && setModalOpen(false)}
-        title="Novo lançamento"
+        onClose={closeModal}
+        title={editingEntry ? 'Editar lançamento' : 'Novo lançamento'}
         scrollBody
         showCloseButton
         footer={
@@ -637,7 +835,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
               type="button"
               className="btn-secondary"
               disabled={saving}
-              onClick={() => setModalOpen(false)}
+              onClick={closeModal}
             >
               Cancelar
             </button>
@@ -647,11 +845,35 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
           </div>
         }
       >
-        <form id="conta-corrente-form" className="space-y-4" onSubmit={handleCreate}>
+        <form id="conta-corrente-form" className="space-y-4" onSubmit={handleSubmit}>
           {error ? (
             <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
               {error}
             </div>
+          ) : null}
+          {financialLocked ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Este lançamento já tem parcelas deduzidas — só pode editar descrição, categoria,
+              referência e anexo.
+            </div>
+          ) : null}
+          {!driverId && !editingEntry ? (
+            <label className="block text-sm">
+              <span className="mb-1.5 block font-medium text-slate-700">Motorista</span>
+              <select
+                className="input"
+                required
+                value={form.createDriverId}
+                onChange={(e) => setForm((f) => ({ ...f, createDriverId: e.target.value }))}
+              >
+                <option value="">Seleccionar motorista…</option>
+                {drivers.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           ) : null}
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-slate-700">Descrição</span>
@@ -669,7 +891,8 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
               <span className="mb-1.5 block font-medium text-slate-700">Valor (€)</span>
               <input
                 className="input"
-                required
+                required={!financialLocked}
+                disabled={financialLocked}
                 inputMode="decimal"
                 value={form.amount}
                 onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
@@ -683,6 +906,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
               <span className="mb-1.5 block font-medium text-slate-700">Tipo</span>
               <select
                 className="input"
+                disabled={financialLocked}
                 value={form.type}
                 onChange={(e) =>
                   setForm((f) => ({
@@ -721,6 +945,21 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
 
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-slate-700">Anexar ficheiro (opcional)</span>
+            {editingEntry?.hasAttachment && editingEntry.attachmentFileName ? (
+              <p className="mb-2 text-xs text-slate-600">
+                Anexo actual: {editingEntry.attachmentFileName}
+              </p>
+            ) : null}
+            {editingEntry?.hasAttachment ? (
+              <label className="mb-2 flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={removeAttachment}
+                  onChange={(e) => setRemoveAttachment(e.target.checked)}
+                />
+                Remover anexo actual
+              </label>
+            ) : null}
             <input
               type="file"
               className="input"
@@ -730,7 +969,7 @@ export function ContaCorrentePanel({ initialDriverId }: { initialDriverId?: stri
             <span className="mt-1 block text-xs text-slate-500">PDF, imagens ou documentos · máx. 10 MB</span>
           </label>
 
-          {form.type === 'debit' ? (
+          {form.type === 'debit' && !financialLocked ? (
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
               <label className="flex items-center gap-2 text-sm font-medium text-slate-800">
                 <input

@@ -14,13 +14,16 @@ import {
   Plug,
   Fuel,
   Wallet,
+  Server,
 } from 'lucide-react';
 import {
   ADMIN_MGMT_MODULE_NAME,
+  VIRTUALIZATION_MODULE_NAME,
   DASHBOARD_ACCESS,
   WEB_ROUTES,
   canAccessClientsDashboard,
   canAccessDashboardArea,
+  isHiddenActivationModule,
   type Role,
 } from '@tvde/shared';
 import { hasActiveModule, type ModuleCapabilities } from '@/lib/module-access';
@@ -148,6 +151,17 @@ const MODULE_CARDS: ModuleCardConfig[] = [
     canShow: (role) => canAccessDashboardArea(role, 'admin_mgmt'),
   },
   {
+    moduleKey: 'virtualization',
+    area: 'virtualization',
+    href: WEB_ROUTES.dashboard.virtualization.root,
+    label: VIRTUALIZATION_MODULE_NAME,
+    description: 'Monitorização Proxmox VE e PBS, backups e alertas.',
+    icon: Server,
+    iconClass: 'text-indigo-700',
+    iconBgClass: 'bg-indigo-50',
+    canShow: (role) => canAccessDashboardArea(role, 'virtualization'),
+  },
+  {
     moduleKey: 'clients',
     area: 'clients',
     href: WEB_ROUTES.dashboard.clients,
@@ -170,7 +184,10 @@ export function DashboardModuleCards({
   statCards?: DashboardStatCard[];
 }) {
   const modules = MODULE_CARDS.filter(
-    (card) => card.canShow(role) && hasActiveModule(role, capabilities, card.moduleKey)
+    (card) =>
+      !isHiddenActivationModule(card.moduleKey) &&
+      card.canShow(role) &&
+      hasActiveModule(role, capabilities, card.moduleKey)
   );
 
   if (modules.length === 0 && statCards.length === 0) {

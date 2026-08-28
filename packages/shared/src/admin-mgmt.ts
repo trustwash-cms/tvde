@@ -124,6 +124,41 @@ export const ADMIN_MGMT_IRS_TIPOS = [
   'pagamento_por_conta',
 ] as const;
 
+export const ADMIN_MGMT_PRESTACAO_STATUSES = ['ativo', 'concluido', 'cancelado'] as const;
+export type AdminMgmtPrestacaoStatus = (typeof ADMIN_MGMT_PRESTACAO_STATUSES)[number];
+
+export function getAdminMgmtPrestacaoStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    ativo: 'Em curso',
+    concluido: 'Concluído',
+    cancelado: 'Cancelado',
+  };
+  return labels[status] ?? status;
+}
+
+export function computeAdminMgmtPrestacaoSummary(
+  valorTotal: number,
+  valorPrestacao: number,
+  totalPago: number
+) {
+  const saldo = Math.max(0, roundMoney(valorTotal - totalPago));
+  const percent =
+    valorTotal > 0 ? Math.min(100, Math.round((totalPago / valorTotal) * 100)) : 0;
+  const prestacoesRestantes =
+    valorPrestacao > 0 && saldo > 0 ? Math.ceil(saldo / valorPrestacao) : saldo <= 0 ? 0 : null;
+  return {
+    totalPago: roundMoney(totalPago),
+    saldo,
+    percent,
+    prestacoesRestantes,
+    concluido: saldo <= 0.005,
+  };
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export const DEFAULT_ADMIN_MGMT_ALERT_DAYS = 15;
 
 export function getAdminMgmtVencimentoOrigemLabel(origem: string): string {

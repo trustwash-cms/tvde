@@ -360,8 +360,7 @@ async function scrapeMovimentosTable(page: Page): Promise<{ filename: string; bu
     const { entryPoint, exitPoint, entryDate, exitDate } = parseDescricaoRoute(desc);
     const valorKey = valor.replace(/[€\s]/g, '').replace(/\./g, '').replace(',', '.');
     const obu = `${identifier}_${entryDate.replace(/\D/g, '') || 'nodate'}_${valorKey}_${i}`;
-    // O portal não mostra «Data cobrança» nesta lista — usamos a data do movimento
-    const cobranca = entryDate ? entryDate.slice(0, 10) : '';
+    // Sem «Data cobrança» fiável no HTML — deixar vazio (não inventar com a data de entrada)
     lines.push([
       obu,
       plate,
@@ -369,7 +368,7 @@ async function scrapeMovimentosTable(page: Page): Promise<{ filename: string; bu
       exitPoint,
       entryDate,
       exitDate,
-      cobranca,
+      '',
       valor,
       paymentMethod,
     ]);
@@ -391,7 +390,7 @@ export const viaVerdeAdapter: PortalAdapter = {
   portal: 'via_verde',
 
   async login(page, username, password): Promise<PortalLoginPhase> {
-    try {
+    const attempt = async (): Promise<PortalLoginPhase> => {
       let ready = false;
       for (const url of LOGIN_URLS) {
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -408,7 +407,9 @@ export const viaVerdeAdapter: PortalAdapter = {
         };
       }
 
+      await page.locator('#txtUsername').fill('', { force: true });
       await page.locator('#txtUsername').fill(username, { force: true });
+      await page.locator('#txtPassword').fill('', { force: true });
       await page.locator('#txtPassword').fill(password, { force: true });
       await submitLogin(page);
 
@@ -416,30 +417,29 @@ export const viaVerdeAdapter: PortalAdapter = {
         page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => null),
         page.waitForTimeout(5000),
       ]);
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(1500);
 
-      await page
-        .goto(AREA_URLS[0]!, { waitUntil: 'domcontentloaded', timeout: 45_000 })
-        .catch(() => undefined);
-      await page.waitForTimeout(1200);
-      if (await usernameFieldReady(page)) {
-        await page
-          .goto('https://www.viaverde.pt/particulares/minha-via-verde/movimentos-extratos', {
-            waitUntil: 'domcontentloaded',
-            timeout: 45_000,
-          })
-          .catch(() => undefined);
-        await page.waitForTimeout(1200);
-      }
-      if (await usernameFieldReady(page)) {
-        return {
-          status: 'failed',
-          message: 'Login Via Verde rejeitado — verifique email/password',
-        };
+      for (const area of AREA_URLS) {
+        await page.goto(area, { waitUntil: 'domcontentloaded', timeout: 45_000 }).catch(() => undefined);
+        await page.waitForTimeout(1000);
+        if (!(await usernameFieldReady(page))) {
+          const storageState = await captureStorageState(page.context());
+          return { status: 'connected', storageState };
+        }
       }
 
-      const storageState = await captureStorageState(page.context());
-      return { status: 'connected', storageState };
+      return {
+        status: 'failed',
+        message: 'Login Via Verde rejeitado — verifique email/password',
+      };
+    };
+
+    try {
+      const first = await attempt();
+      if (first.status === 'connected') return first;
+      // Uma segunda tentativa (cookies / modal lento)
+      await page.waitForTimeout(800);
+      return await attempt();
     } catch (err) {
       const raw = err instanceof Error ? err.message : 'Falha no login Via Verde';
       if (/Timeout .* exceeded|intercepts pointer/i.test(raw)) {

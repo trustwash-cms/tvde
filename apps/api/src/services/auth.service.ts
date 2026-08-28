@@ -50,7 +50,13 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     include: { tenant: true },
   });
 
-  if (!user || user.status !== 'active') {
+  // PENDING: permitido só para activar conta (password temporária / 1º login).
+  // SUSPENDED: bloqueado.
+  const canLogin =
+    user &&
+    (user.status === 'active' ||
+      (user.status === 'pending' && user.mustChangePassword));
+  if (!canLogin) {
     await recordFailedLogin(input.ipAddress);
     await prisma.loginAttempt.create({
       data: {
@@ -180,7 +186,11 @@ export async function buildJwtPayload(
       select: { impersonatorId: true, isActive: true },
     }),
   ]);
-  if (!user || user.status !== 'active') return null;
+  const canUseSession =
+    user &&
+    (user.status === 'active' ||
+      (user.status === 'pending' && user.mustChangePassword));
+  if (!canUseSession) return null;
   if (!session || !session.isActive) return null;
 
   try {
@@ -649,7 +659,11 @@ export async function changePassword(
   ipAddress?: string
 ) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user || user.status !== 'active') {
+  const canChange =
+    user &&
+    (user.status === 'active' ||
+      (user.status === 'pending' && user.mustChangePassword));
+  if (!canChange) {
     throw new Error('Utilizador inválido');
   }
 
@@ -678,11 +692,17 @@ export async function changePassword(
   }
 
   const newHash = await hashPassword(newPassword);
+  const activatePending = user.status === 'pending';
 
   await prisma.$transaction([
     prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: newHash, mustChangePassword: false, tempPasswordExpiresAt: null },
+      data: {
+        passwordHash: newHash,
+        mustChangePassword: false,
+        tempPasswordExpiresAt: null,
+        ...(activatePending ? { status: 'active' as const } : {}),
+      },
     }),
     prisma.passwordHistory.create({
       data: { userId, passwordHash: user.passwordHash },

@@ -117,9 +117,10 @@ async function importUberFromCsv(
   db: PrismaClient,
   tenantId: string,
   importedByUserId: string,
-  csvText: string
+  csvText: string,
+  filename?: string
 ) {
-  const { rows, errors } = parseUberCsv(csvText);
+  const { rows, errors, kind } = parseUberCsv(csvText, { filename });
   let inserted = 0;
   let skipped = 0;
 
@@ -144,11 +145,13 @@ async function importUberFromCsv(
     }
   }
 
+  const kindLabel =
+    kind === 'payments_driver' ? 'rendimentos líquidos (Pagamentos do motorista)' : 'transações';
   return {
     inserted,
     skipped,
     failed: errors.length,
-    message: `Uber: ${inserted} inseridos, ${skipped} ignorados`,
+    message: `Uber (${kindLabel}): ${inserted} inseridos, ${skipped} ignorados`,
   };
 }
 
@@ -172,7 +175,13 @@ export async function ingestPortalDownloadedFiles(
 
     if (portal === 'uber') {
       summaries.push(
-        await importUberFromCsv(db, tenantId, importedByUserId, file.buffer.toString('utf-8'))
+        await importUberFromCsv(
+          db,
+          tenantId,
+          importedByUserId,
+          file.buffer.toString('utf-8'),
+          file.filename
+        )
       );
       continue;
     }

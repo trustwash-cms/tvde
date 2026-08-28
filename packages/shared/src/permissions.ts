@@ -78,6 +78,7 @@ export const DASHBOARD_ACCESS: Record<string, Role> = {
   documentos: 'admin',
   calendar: 'staff',
   admin_mgmt: 'superadmin',
+  virtualization: 'superadmin',
   users: 'superadmin',
   modules: 'superadmin',
   audit: 'superadmin',

@@ -1433,25 +1433,74 @@ export const myprioAdapter: PortalAdapter = {
 
   async sync(_context, page, options?: PortalSyncOptions): Promise<PortalSyncPhase> {
     const scope: MyPrioSyncScope = options?.syncScope ?? 'fleet';
-    const scopeLabel = scope === 'electric' ? 'Electric' : 'Combustível (Frota)';
+    const scopeLabel =
+      scope === 'electric'
+        ? 'Electric'
+        : scope === 'both'
+          ? 'Frota + Electric'
+          : 'Combustível (Frota)';
     const t0 = Date.now();
 
+    const runFleet = async () =>
+      downloadExportFromTransactionsPage(
+        page,
+        TRANSACTIONS_FLEET_URLS,
+        'Transacoes_Frota.xlsx',
+        'fleet'
+      );
+
+    const runElectric = async () =>
+      downloadExportFromTransactionsPage(
+        page,
+        TRANSACTIONS_ELECTRIC_URLS,
+        'Transacoes_Eletrico.xlsx',
+        'electric'
+      );
+
     try {
+      if (scope === 'both') {
+        await options?.onProgress?.('A sincronizar combustível (frota)…');
+        const fleetResult = await runFleet();
+        syncLog('fleet', `sync-done:${fleetResult.status}`, t0);
+        if (fleetResult.status === 'expired') {
+          return {
+            status: 'expired',
+            message:
+              `Sessão MyPRIO inválida (frota). Desligar → Ligar conta (SMS). ` +
+              (await pageDebug(page)),
+          };
+        }
+        if (fleetResult.status === 'failed') {
+          return {
+            status: 'failed',
+            message: `Sync Combustível: falhou. ${await pageDebug(page)}`,
+          };
+        }
+
+        await options?.onProgress?.('Frota OK · a sincronizar electricidade…');
+        const electricResult = await runElectric();
+        syncLog('electric', `sync-done:${electricResult.status}`, t0);
+        if (electricResult.status === 'expired') {
+          return {
+            status: 'expired',
+            message:
+              `Sessão MyPRIO inválida (electricidade). Desligar → Ligar conta (SMS). ` +
+              (await pageDebug(page)),
+          };
+        }
+        if (electricResult.status === 'failed') {
+          return {
+            status: 'failed',
+            message: `Sync Electric: falhou após frota OK. ${await pageDebug(page)}`,
+          };
+        }
+
+        return { status: 'ok', files: [fleetResult.file, electricResult.file] };
+      }
+
       // Ir directo às Transações (sem Home / sem waitUntilAuthenticated — isso engolia 30–90s)
       const result =
-        scope === 'electric'
-          ? await downloadExportFromTransactionsPage(
-              page,
-              TRANSACTIONS_ELECTRIC_URLS,
-              'Transacoes_Eletrico.xlsx',
-              'electric'
-            )
-          : await downloadExportFromTransactionsPage(
-              page,
-              TRANSACTIONS_FLEET_URLS,
-              'Transacoes_Frota.xlsx',
-              'fleet'
-            );
+        scope === 'electric' ? await runElectric() : await runFleet();
 
       syncLog(scope, `sync-done:${result.status}`, t0);
 

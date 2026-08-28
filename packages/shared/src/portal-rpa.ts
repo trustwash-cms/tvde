@@ -7,13 +7,14 @@ export const PORTAL_KIND_LABELS: Record<PortalKind, string> = {
   uber: 'Uber',
 };
 
-/** Sync MyPRIO: Electric e Frota são jobs separados (páginas Eletricidade / Combustível). */
-export const MYPRIO_SYNC_SCOPES = ['electric', 'fleet'] as const;
+/** Sync MyPRIO: Electric, Frota ou ambos num único browser (pagamentos). */
+export const MYPRIO_SYNC_SCOPES = ['electric', 'fleet', 'both'] as const;
 export type MyPrioSyncScope = (typeof MYPRIO_SYNC_SCOPES)[number];
 
 export const MYPRIO_SYNC_SCOPE_LABELS: Record<MyPrioSyncScope, string> = {
   electric: 'Electric',
   fleet: 'Combustível',
+  both: 'Frota + Electric',
 };
 
 export const PORTAL_CONNECTION_STATUSES = [
@@ -49,6 +50,8 @@ export interface PortalConnectionPublic {
   lastSyncAt: string | null;
   lastError: string | null;
   isEnabled: boolean;
+  /** Sync automático diário (Via Verde / MyPRIO). Default false — o sync manual não muda. */
+  autoSyncEnabled: boolean;
   activeJobId: string | null;
   activeJobStatus: string | null;
   otpHint: string | null;
@@ -134,9 +137,14 @@ export function ymdToUberCompact(ymd: string): string {
 
 function isPaymentsUberReport(report: UberReportListItem): boolean {
   const blob = `${report.name} ${report.type ?? ''}`;
-  return /payments_orde|transação de pagamentos|transacao de pagamentos|payment.?transaction/i.test(
+  return /payments_driver|payments_orde|pagamentos? do?s? motoristas?|transação de pagamentos|transacao de pagamentos|payment.?transaction|driver payments?/i.test(
     blob
   );
+}
+
+/** Relatórios de pagamentos descarregáveis (lista Supplier). */
+export function listUberPaymentReports(reports: UberReportListItem[]): UberReportListItem[] {
+  return reports.filter((r) => r.hasDownload && isPaymentsUberReport(r));
 }
 
 /**
@@ -194,8 +202,14 @@ export function pickLatestUberReportForPeriod(
     r,
     index,
     t: r.createdAt ? Date.parse(r.createdAt) : Number.NaN,
+    preferDriver: /payments_driver|pagamentos? do?s? motoristas?|driver payments?/i.test(
+      `${r.name} ${r.type ?? ''}`
+    )
+      ? 1
+      : 0,
   }));
   scored.sort((a, b) => {
+    if (a.preferDriver !== b.preferDriver) return b.preferDriver - a.preferDriver;
     const aOk = !Number.isNaN(a.t);
     const bOk = !Number.isNaN(b.t);
     if (aOk && bOk && a.t !== b.t) return b.t - a.t;

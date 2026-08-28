@@ -26,6 +26,7 @@ import {
 } from './routes/business.routes';
 import { calendarPublicRoutes, calendarRoutes } from './routes/calendar.routes';
 import { adminMgmtRoutes } from './routes/admin-mgmt.routes';
+import { virtualizationRoutes } from './routes/virtualization.routes';
 import { boltRoutes } from './routes/bolt.routes';
 import { boltSyncCronRoutes } from './routes/bolt-sync-cron.routes';
 import { userProfileRoutes } from './routes/user-profile.routes';
@@ -39,6 +40,7 @@ import { paymentRoutes } from './routes/payment.routes';
 import { driverCurrentAccountRoutes } from './routes/driver-current-account.routes';
 import { portalConnectionRoutes } from './routes/portal-connection.routes';
 import { driverDashboardRoutes } from './routes/driver-dashboard.routes';
+import { whatsappBusinessRoutes } from './modules/whatsapp-business';
 import Fastify, { type FastifyError } from 'fastify';
 import { ZodError } from 'zod';
 import { formatFastifyValidation, formatZodError } from './lib/validation-errors';
@@ -141,6 +143,8 @@ export async function buildApp() {
     await api.register(portalConnectionRoutes);
     await api.register(driverDashboardRoutes);
     await api.register(adminMgmtRoutes);
+    await api.register(virtualizationRoutes);
+    await api.register(whatsappBusinessRoutes);
   }, { prefix: getApiPrefix() });
 
   fastify.setErrorHandler((error: FastifyError, _request, reply) => {

@@ -1,4 +1,4 @@
-import { CATALOG_IMPORT_IGNORE, parseImportBoolean, parseImportMoney } from './csv-import';
+import { CATALOG_IMPORT_IGNORE, parseImportMoney } from './csv-import';
 import {
   findSpreadsheetHeaderRowIndex,
   normalizeImportHeader,
@@ -243,19 +243,21 @@ function parseViaVerdeMappedRow(
       serviceDescription: mapped.serviceDescription?.trim() || null,
       marketCode: mapped.marketCode?.trim() || null,
       marketDescription: mapped.marketDescription?.trim() || null,
-      entryDate: parseSpreadsheetDateValue(mapped.entryDate),
-      exitDate: parseSpreadsheetDateValue(mapped.exitDate),
+      entryDate: parseSpreadsheetDateValue(mapped.entryDate, { timeZone: 'Europe/Lisbon' }),
+      exitDate: parseSpreadsheetDateValue(mapped.exitDate, { timeZone: 'Europe/Lisbon' }),
       entryPoint: mapped.entryPoint?.trim() || null,
       exitPoint: mapped.exitPoint?.trim() || null,
       value,
-      isPaid: parseImportBoolean(mapped.isPaid, false),
-      paymentDate: parseSpreadsheetDateValue(mapped.paymentDate),
+      isPaid: false,
+      paymentDate: null,
       contractNumber: mapped.contractNumber?.trim() || null,
       liquidValue: parseImportMoney(mapped.liquidValue),
       discountBalance: parseImportMoney(mapped.discountBalance),
       mobilityAccount: mapped.mobilityAccount?.trim() || null,
       paymentMethod: mapped.paymentMethod?.trim() || null,
-      systemEntryDate: parseSpreadsheetDateValue(mapped.systemEntryDate),
+      systemEntryDate: parseSpreadsheetDateValue(mapped.systemEntryDate, {
+        timeZone: 'Europe/Lisbon',
+      }),
     },
   };
 }

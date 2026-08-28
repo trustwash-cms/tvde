@@ -39,6 +39,10 @@ import {
   updateCommunicationFeaturesForActor,
 } from '../services/tenant-features.service';
 import { resolveWhatsappTenantId, whatsappTenantAccess } from '../lib/whatsapp-tenant';
+import {
+  getWhatsappActiveProvider,
+  setWhatsappActiveProvider,
+} from '../modules/whatsapp-business/whatsapp-provider.service';
 
 const featuresSchema = z.object({
   sms2faEnabled: z.boolean().optional(),
@@ -228,17 +232,23 @@ export async function platformRoutes(fastify: FastifyInstance) {
       tenantId
     );
     const whatsapp = await getWhatsappBridgeStatus(tenantId);
+    const activeProvider = await getWhatsappActiveProvider(tenantId);
     return reply.send({
       success: true,
       data: {
         whatsapp2faEnabled: features.whatsapp2faEnabled,
         whatsapp,
+        activeProvider,
       },
     });
   });
 
   fastify.patch('/platform/whatsapp/settings', whatsappAccess, async (request, reply) => {
+    const tenantId = resolveWhatsappTenantId(request);
     const body = z.object({ whatsapp2faEnabled: z.boolean() }).parse(request.body);
+    if (body.whatsapp2faEnabled) {
+      await setWhatsappActiveProvider(tenantId, 'generic');
+    }
     const features = await updateCommunicationFeaturesForActor(
       request.user.role as Role,
       request.user.tenantId,
@@ -256,7 +266,10 @@ export async function platformRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       success: true,
-      data: { whatsapp2faEnabled: features.whatsapp2faEnabled },
+      data: {
+        whatsapp2faEnabled: features.whatsapp2faEnabled,
+        activeProvider: body.whatsapp2faEnabled ? 'generic' : await getWhatsappActiveProvider(tenantId),
+      },
       message: 'Funcionalidade WhatsApp actualizada',
     });
   });

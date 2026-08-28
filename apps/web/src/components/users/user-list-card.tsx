@@ -25,6 +25,7 @@ export interface UserListItem {
   phone?: string | null;
   role: string;
   status: string;
+  mustChangePassword?: boolean;
   lastLoginAt: string | null;
   tenant?: { id: string; siteId: string; name: string } | null;
 }
@@ -32,6 +33,19 @@ export interface UserListItem {
 function displayName(user: UserListItem): string {
   if (user.username) return user.username;
   return user.email.split('@')[0] ?? user.email;
+}
+
+function statusBadge(status: string): { label: string; className: string } {
+  switch (status) {
+    case 'active':
+      return { label: 'Active', className: 'bg-emerald-500 text-white' };
+    case 'pending':
+      return { label: 'Pending', className: 'bg-amber-500 text-white' };
+    case 'suspended':
+      return { label: 'Suspended', className: 'bg-red-500 text-white' };
+    default:
+      return { label: status, className: 'bg-slate-400 text-white' };
+  }
 }
 
 function ActionIconButton({
@@ -73,12 +87,15 @@ export function UserListCard({
   canVehicles,
   canImpersonate,
   canContaCorrente,
+  canCredentialsAction,
+  credentialsBusy,
   onEdit,
   onDelete,
   onToggleStatus,
   onDetails,
   onVehicles,
   onImpersonate,
+  onCredentialsAction,
 }: {
   user: UserListItem;
   canEdit?: boolean;
@@ -88,15 +105,25 @@ export function UserListCard({
   canVehicles?: boolean;
   canImpersonate?: boolean;
   canContaCorrente?: boolean;
+  canCredentialsAction?: boolean;
+  credentialsBusy?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
   onToggleStatus?: () => void;
   onDetails?: () => void;
   onVehicles?: () => void;
   onImpersonate?: () => void;
+  onCredentialsAction?: () => void;
 }) {
   const isActive = user.status === 'active';
+  const isPending = user.status === 'pending';
   const siteId = user.tenant?.siteId;
+  const badge = statusBadge(user.status);
+  const keyLabel = isPending
+    ? 'Reenviar credenciais'
+    : isActive
+      ? 'Reset password'
+      : 'Credenciais indisponíveis';
 
   return (
     <article className="flex flex-col gap-4 rounded-xl border border-slate-200 bg-white px-5 py-4 shadow-sm lg:flex-row lg:items-center lg:justify-between">
@@ -119,11 +146,11 @@ export function UserListCard({
       <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:justify-end">
         <span
           className={clsx(
-            'rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide text-white',
-            isActive ? 'bg-emerald-500' : 'bg-red-500'
+            'rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide',
+            badge.className
           )}
         >
-          {isActive ? 'Active' : 'Inactive'}
+          {badge.label}
         </span>
 
         {canDetails !== false ? (
@@ -180,7 +207,12 @@ export function UserListCard({
             <BookOpen size={18} />
           </Link>
         ) : null}
-        <ActionIconButton label="Acessos" className="text-slate-500">
+        <ActionIconButton
+          label={credentialsBusy ? 'A processar…' : keyLabel}
+          onClick={canCredentialsAction ? onCredentialsAction : undefined}
+          disabled={!canCredentialsAction || credentialsBusy}
+          className={isPending ? 'text-amber-600' : 'text-violet-600'}
+        >
           <Key size={18} />
         </ActionIconButton>
         <ActionIconButton

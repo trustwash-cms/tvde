@@ -150,7 +150,7 @@ export function AdminMgmtDashboardPanel() {
       <div id="proximos-vencimentos" className="card space-y-3 scroll-mt-4">
         <h2 className="text-sm font-semibold text-slate-800">Próximos vencimentos</h2>
         {data.upcoming.length === 0 ? (
-          <p className="text-sm text-slate-500">Sem vencimentos pendentes.</p>
+          <p className="text-sm text-slate-500">Sem vencimentos próximos.</p>
         ) : (
           <div className="space-y-2">
             {data.upcoming.map((item) => (

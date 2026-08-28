@@ -24,12 +24,7 @@ function formatMoney(value: string | number) {
 
 function formatDateTime(value: string | null) {
   if (!value) return '—';
-  return new Date(value).toLocaleString('pt-PT');
-}
-
-function formatDate(value: string | null) {
-  if (!value) return '—';
-  return new Date(value).toLocaleDateString('pt-PT');
+  return new Date(value).toLocaleString('pt-PT', { timeZone: 'Europe/Lisbon' });
 }
 
 export function ViaVerdePanel() {
@@ -453,7 +448,6 @@ export function ViaVerdePanel() {
                 ) : null}
                 <th className="px-4 py-3">Matrícula</th>
                 <th className="px-4 py-3">Data entrada</th>
-                <th className="px-4 py-3">Data cobrança</th>
                 <th className="px-4 py-3">Entrada</th>
                 <th className="px-4 py-3">Saída</th>
                 <th className="px-4 py-3">Valor</th>
@@ -484,7 +478,6 @@ export function ViaVerdePanel() {
                   ) : null}
                   <td className="px-4 py-3 font-medium">{item.licensePlate}</td>
                   <td className="px-4 py-3">{formatDateTime(item.entryDate)}</td>
-                  <td className="px-4 py-3">{formatDate(item.systemEntryDate)}</td>
                   <td className="px-4 py-3">{item.entryPoint ?? '—'}</td>
                   <td className="px-4 py-3">{item.exitPoint ?? '—'}</td>
                   <td className="px-4 py-3">{formatMoney(item.value)}</td>

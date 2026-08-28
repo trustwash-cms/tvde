@@ -314,7 +314,7 @@ export async function syncBoltData(
 
 export async function syncAllBoltWorkspaces(type: BoltSyncType = 'all') {
   const connections = await prisma.boltConnection.findMany({
-    where: { isActive: true, boltCompanyId: { not: null } },
+    where: { isActive: true, autoSyncEnabled: true, boltCompanyId: { not: null } },
     select: { workspaceId: true },
   });
 

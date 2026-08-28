@@ -414,7 +414,8 @@ export function CalendarEventModal({
     setForm((f) => ({
       ...f,
       start,
-      end: coerceEndAfterStart(start, f.end, f.allDay, calendarTimezone),
+      // Sempre alinhado a +30 min (ou dia seguinte se dia inteiro); o utilizador pode ajustar o fim depois.
+      end: start ? defaultEndAfterStart(start, f.allDay, calendarTimezone) : f.end,
     }));
   }
 

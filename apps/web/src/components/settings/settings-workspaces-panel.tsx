@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { hasMinRole, type Role } from '@tvde/shared';
+import { hasMinRole, isHiddenActivationModule, type Role } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 
 interface ModuleRegistry {
@@ -74,7 +74,12 @@ export function SettingsWorkspacesPanel() {
   const businessKeys = useMemo(
     () =>
       allModules
-        .filter((m) => !m.isCore && allowedKeys.includes(m.key) && m.key !== 'clients')
+        .filter(
+          (m) =>
+            !m.isCore &&
+            allowedKeys.includes(m.key) &&
+            !isHiddenActivationModule(m.key)
+        )
         .map((m) => m.key),
     [allModules, allowedKeys]
   );

@@ -12,9 +12,75 @@ export function cellToImportString(cell: unknown): string {
     const y = cell.getFullYear();
     const m = String(cell.getMonth() + 1).padStart(2, '0');
     const d = String(cell.getDate()).padStart(2, '0');
+    const hh = cell.getHours();
+    const mm = cell.getMinutes();
+    const ss = cell.getSeconds();
+    if (hh || mm || ss) {
+      return `${y}-${m}-${d} ${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+    }
     return `${y}-${m}-${d}`;
   }
   return String(cell).trim();
+}
+
+/**
+ * Constrói um Date a partir de relógio de parede Europe/Lisbon
+ * (independente do TZ do processo — a API em produção corre em UTC).
+ */
+export function dateFromLisbonWallClock(
+  year: number,
+  month: number,
+  day: number,
+  hour = 0,
+  minute = 0,
+  second = 0
+): Date {
+  let utc = Date.UTC(year, month - 1, day, hour, minute, second);
+  for (let i = 0; i < 4; i += 1) {
+    const d = new Date(utc);
+    const parts = Object.fromEntries(
+      new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Lisbon',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(d)
+        .filter((p) => p.type !== 'literal')
+        .map((p) => [p.type, p.value])
+    ) as Record<string, string>;
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const desired = Date.UTC(year, month - 1, day, hour, minute, second);
+    utc += desired - asUtc;
+  }
+  return new Date(utc);
+}
+
+/**
+ * Dados gravados com `new Date(y,m,d,h,…)` em processo UTC (relógio de Lisboa
+ * tratado como UTC). Reinterpreta os componentes UTC como Europe/Lisbon.
+ * Idempotente só se corrido uma vez — não voltar a aplicar.
+ */
+export function reinterpretUtcWallClockAsLisbon(stored: Date): Date {
+  return dateFromLisbonWallClock(
+    stored.getUTCFullYear(),
+    stored.getUTCMonth() + 1,
+    stored.getUTCDate(),
+    stored.getUTCHours(),
+    stored.getUTCMinutes(),
+    stored.getUTCSeconds()
+  );
 }
 
 export function normalizeSpreadsheetRows(rows: unknown[][]): string[][] {
@@ -84,29 +150,62 @@ export function excelSerialToDate(serial: number): Date | null {
   return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
+function buildWallClockDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number,
+  timeZone: 'local' | 'Europe/Lisbon'
+): Date | null {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const dt =
+    timeZone === 'Europe/Lisbon'
+      ? dateFromLisbonWallClock(year, month, day, hour, minute, second)
+      : new Date(year, month - 1, day, hour, minute, second);
+  return Number.isNaN(dt.getTime()) ? null : dt;
+}
+
 export function parseSpreadsheetDateValue(
   value: string | undefined,
-  options?: { order?: 'dmy' | 'mdy' }
+  options?: { order?: 'dmy' | 'mdy'; timeZone?: 'local' | 'Europe/Lisbon' }
 ): Date | null {
   if (!value?.trim()) return null;
   const trimmed = value.trim();
   const order = options?.order ?? 'dmy';
+  const timeZone = options?.timeZone ?? 'local';
 
   if (/^\d+(\.\d+)?$/.test(trimmed)) {
     const serial = Number(trimmed);
     const fromSerial = excelSerialToDate(serial);
-    if (fromSerial) return fromSerial;
+    if (!fromSerial) return null;
+    // Serial Excel = relógio de parede; em Via Verde interpretar como Lisboa.
+    if (timeZone === 'Europe/Lisbon') {
+      return dateFromLisbonWallClock(
+        fromSerial.getUTCFullYear(),
+        fromSerial.getUTCMonth() + 1,
+        fromSerial.getUTCDate(),
+        fromSerial.getUTCHours(),
+        fromSerial.getUTCMinutes(),
+        fromSerial.getUTCSeconds()
+      );
+    }
+    return fromSerial;
   }
 
   // ISO date-only (vindo de cellToImportString com Date Excel)
   const isoDateOnly = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoDateOnly) {
-    const dt = new Date(
+    return buildWallClockDate(
       parseInt(isoDateOnly[1]!, 10),
-      parseInt(isoDateOnly[2]!, 10) - 1,
-      parseInt(isoDateOnly[3]!, 10)
+      parseInt(isoDateOnly[2]!, 10),
+      parseInt(isoDateOnly[3]!, 10),
+      0,
+      0,
+      0,
+      timeZone
     );
-    return Number.isNaN(dt.getTime()) ? null : dt;
   }
 
   const slashMatch = trimmed.match(
@@ -138,27 +237,25 @@ export function parseSpreadsheetDateValue(
       }
     }
 
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
     const hour = slashMatch[4] ? parseInt(slashMatch[4], 10) : 0;
     const minute = slashMatch[5] ? parseInt(slashMatch[5], 10) : 0;
     const sec = slashMatch[6] ? parseInt(slashMatch[6], 10) : 0;
-    const dt = new Date(year, month - 1, day, hour, minute, sec);
-    return Number.isNaN(dt.getTime()) ? null : dt;
+    return buildWallClockDate(year, month, day, hour, minute, sec, timeZone);
   }
 
   const isoWithTime = trimmed.match(
     /^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2}):(\d{2})(?:\.\d+)?(?:\s+[+-]\d{4}(?:\s+\w+)?)?$/
   );
   if (isoWithTime) {
-    const dt = new Date(
+    return buildWallClockDate(
       parseInt(isoWithTime[1]!, 10),
-      parseInt(isoWithTime[2]!, 10) - 1,
+      parseInt(isoWithTime[2]!, 10),
       parseInt(isoWithTime[3]!, 10),
       parseInt(isoWithTime[4]!, 10),
       parseInt(isoWithTime[5]!, 10),
-      parseInt(isoWithTime[6]!, 10)
+      parseInt(isoWithTime[6]!, 10),
+      timeZone
     );
-    return Number.isNaN(dt.getTime()) ? null : dt;
   }
 
   const iso = new Date(trimmed);

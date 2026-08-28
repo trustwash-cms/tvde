@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { BoltSyncType } from '@tvde/bolt';
-import type { Role } from '@tvde/shared';
+import { isDriverRole, type Role } from '@tvde/shared';
 import { createAuditLog } from '../services/audit.service';
 import { resolveWorkspaceTenantScope } from '../lib/workspace-scope';
 import { parseSearchQuery, textOr } from '../services/search.service';
 import {
   getBoltPublicStatus,
   saveBoltConfig,
+  setBoltAutoSync,
   testBoltConnection,
 } from '../services/bolt.service';
 import {
@@ -18,6 +19,7 @@ import {
   bulkMarkBoltOrdersPaid,
 } from '../services/bolt-sync.service';
 import { getDriverFleetScope } from '../services/user-vehicle-matching.service';
+import { sumDriverPaymentReportsInMonth } from '../services/payment-report.service';
 
 const syncTypeSchema = z.enum(['orders', 'drivers', 'vehicles', 'all']);
 
@@ -87,6 +89,44 @@ export async function boltRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data: config, message: 'Configuração Bolt guardada' });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Falha ao guardar configuração';
+      return reply.status(400).send({ success: false, error: message });
+    }
+  });
+
+  fastify.patch('/bolt/auto-sync', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    const body = z.object({
+      workspaceId: z.string().uuid().optional(),
+      autoSyncEnabled: z.boolean(),
+    }).parse(request.body);
+
+    const { workspaceId, tenantId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      body.workspaceId
+    );
+
+    try {
+      const config = await setBoltAutoSync(workspaceId, body.autoSyncEnabled);
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'bolt.auto_sync_updated',
+        entityType: 'bolt_connection',
+        entityId: config.id,
+        afterJson: { autoSyncEnabled: body.autoSyncEnabled },
+        ipAddress: request.ip,
+      });
+      return reply.send({
+        success: true,
+        data: { autoSyncEnabled: config.autoSyncEnabled },
+        message: body.autoSyncEnabled
+          ? 'Sincronização automática diária activada'
+          : 'Sincronização automática diária desactivada',
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao actualizar sincronização automática';
       return reply.status(400).send({ success: false, error: message });
     }
   });
@@ -161,7 +201,15 @@ export async function boltRoutes(fastify: FastifyInstance) {
       weekYear: query.weekYear,
       week: query.week,
     });
-    return reply.send({ success: true, data });
+    const paidToDriver = isDriverRole(request.user.role as Role)
+      ? await sumDriverPaymentReportsInMonth(
+          fastify.db,
+          tenantId,
+          request.user.sub,
+          query.month
+        )
+      : null;
+    return reply.send({ success: true, data: { ...data, paidToDriver } });
   });
 
   fastify.get('/bolt/orders', async (request, reply) => {

@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import clsx from 'clsx';
-import { WEB_ROUTES, hasMinRole, type Role } from '@tvde/shared';
+import { WEB_ROUTES, hasMinRole, isHiddenActivationModule, type Role } from '@tvde/shared';
 import { hasActiveModule, type ModuleCapabilities } from '@/lib/module-access';
 
 const NAV_ITEMS: Array<{
@@ -16,6 +16,12 @@ const NAV_ITEMS: Array<{
   { href: WEB_ROUTES.dashboard.settings.workspaces, label: 'Workspaces', minRole: 'superadmin' },
   { href: WEB_ROUTES.dashboard.settings.modules, label: 'Módulos', minRole: 'superadmin' },
   { href: WEB_ROUTES.dashboard.settings.sms, label: 'SMS', minRole: 'superadmin', moduleKey: 'sms' },
+  {
+    href: WEB_ROUTES.dashboard.settings.whatsapp,
+    label: 'WhatsApp',
+    minRole: 'superadmin',
+    moduleKey: 'whatsapp',
+  },
   { href: WEB_ROUTES.dashboard.settings.moloni, label: 'Moloni', minRole: 'superadmin', moduleKey: 'billing' },
   { href: WEB_ROUTES.dashboard.settings.whmcs, label: 'WHMCS', minRole: 'superadmin', moduleKey: 'whmcs' },
   { href: WEB_ROUTES.dashboard.settings.bolt, label: 'Bolt API', minRole: 'superadmin', moduleKey: 'bolt' },
@@ -39,6 +45,7 @@ export function SettingsSubNav({
   const visible = NAV_ITEMS.filter((item) => {
     if (!role || !hasMinRole(role, item.minRole)) return false;
     if (item.href === WEB_ROUTES.dashboard.settings.workspaces && role === 'master') return false;
+    if (item.moduleKey && isHiddenActivationModule(item.moduleKey)) return false;
     if (item.moduleKey && !hasActiveModule(role, capabilities, item.moduleKey)) return false;
     return true;
   });

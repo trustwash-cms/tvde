@@ -8,7 +8,7 @@ export function getWebConfig() {
     apiUrl: apiUrl ?? '',
     showDemoHint: process.env.NEXT_PUBLIC_SHOW_DEMO_HINT === 'true',
     // Acesso estático — Next.js só faz inline de process.env.NEXT_PUBLIC_* directo (não envOr dinâmico)
-    appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'CMS',
+    appName: process.env.NEXT_PUBLIC_APP_NAME ?? 'Fleet CRM',
     turnstileSiteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? '',
   };
 }

@@ -36,6 +36,8 @@ model Tenant {
   tenantModules  TenantModule[]
   workspaceRequests WorkspaceRequest[]
   whatsappTemplates WhatsappTemplate[]
+  whatsappBusinessConfig WhatsappBusinessConfig?
+  whatsappBusinessNotificationEvents WhatsappBusinessNotificationEvent[]
   calendars              Calendar[]
   calendarEvents           CalendarEvent[]
   calendarEventReminders   CalendarEventReminder[]
@@ -72,6 +74,8 @@ model Tenant {
   adminMgmtFaturas          AdminMgmtFatura[]
   adminMgmtLancamentos      AdminMgmtLancamento[]
   adminMgmtImportacoes      AdminMgmtImportacao[]
+  adminMgmtPrestacoes       AdminMgmtPrestacao[]
+  adminMgmtPrestacaoPagamentos AdminMgmtPrestacaoPagamento[]
   boltConnections           BoltConnection[]
   boltOrders                BoltOrder[]
   boltDrivers               BoltDriver[]
@@ -90,6 +94,12 @@ model Tenant {
   portalSyncJobs            PortalSyncJob[]
   whmcsConnections          WhmcsConnection[]
   whmcsInvoiceMaps          WhmcsInvoiceMap[]
+  virtualizationPbsServers  VirtualizationPbsServer[]
+  virtualizationPveServers  VirtualizationPveServer[]
+  virtualizationZerotierAccounts VirtualizationZerotierAccount[]
+  virtualizationZerotierNetworks VirtualizationZerotierNetwork[]
+  virtualizationZerotierJoinTargets VirtualizationZerotierJoinTarget[]
+  virtualizationSettings    VirtualizationSetting[]
 
   @@map("tenants")
 }
@@ -157,6 +167,8 @@ model Workspace {
   adminMgmtFaturas        AdminMgmtFatura[]
   adminMgmtLancamentos    AdminMgmtLancamento[]
   adminMgmtImportacoes    AdminMgmtImportacao[]
+  adminMgmtPrestacoes     AdminMgmtPrestacao[]
+  adminMgmtPrestacaoPagamentos AdminMgmtPrestacaoPagamento[]
   boltConnection          BoltConnection?
   boltOrders              BoltOrder[]
   boltDrivers             BoltDriver[]
@@ -164,6 +176,12 @@ model Workspace {
   boltSyncLogs            BoltSyncLog[]
   whmcsConnection         WhmcsConnection?
   whmcsInvoiceMaps        WhmcsInvoiceMap[]
+  virtualizationPbsServers VirtualizationPbsServer[]
+  virtualizationPveServers VirtualizationPveServer[]
+  virtualizationZerotierAccounts VirtualizationZerotierAccount[]
+  virtualizationZerotierNetworks VirtualizationZerotierNetwork[]
+  virtualizationZerotierJoinTargets VirtualizationZerotierJoinTarget[]
+  virtualizationSettings  VirtualizationSetting?
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -1859,6 +1877,226 @@ model AdminMgmtImportacao {
   @@map("admin_mgmt_importacoes")
 }
 
+model AdminMgmtPrestacao {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  titulo           String
+  beneficiarioNome String    @map("beneficiario_nome")
+  beneficiarioNif  String?   @map("beneficiario_nif")
+  valorTotal       Decimal   @map("valor_total") @db.Decimal(12, 2)
+  valorPrestacao   Decimal   @map("valor_prestacao") @db.Decimal(12, 2)
+  diaVencimento    Int?      @map("dia_vencimento")
+  dataInicio       DateTime  @map("data_inicio") @db.Date
+  dataFimPrevista  DateTime? @map("data_fim_prevista") @db.Date
+  status           String    @default("ativo")
+  notas            String?   @db.Text
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant     Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace  Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  pagamentos AdminMgmtPrestacaoPagamento[]
+
+  @@index([tenantId, workspaceId])
+  @@index([workspaceId, status])
+  @@map("admin_mgmt_prestacoes")
+}
+
+model AdminMgmtPrestacaoPagamento {
+  id            String    @id @default(uuid()) @db.Uuid
+  tenantId      String    @map("tenant_id") @db.Uuid
+  workspaceId   String    @map("workspace_id") @db.Uuid
+  prestacaoId   String    @map("prestacao_id") @db.Uuid
+  valor         Decimal   @db.Decimal(12, 2)
+  dataPagamento DateTime  @map("data_pagamento") @db.Date
+  mesReferencia DateTime? @map("mes_referencia") @db.Date
+  notas         String?   @db.Text
+  comprovativoStorageKey  String? @map("comprovativo_storage_key")
+  comprovativoFileName    String? @map("comprovativo_file_name") @db.VarChar(255)
+  comprovativoMimeType    String? @map("comprovativo_mime_type") @db.VarChar(100)
+  comprovativoSizeBytes   Int?    @map("comprovativo_size_bytes")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  prestacao AdminMgmtPrestacao @relation(fields: [prestacaoId], references: [id], onDelete: Cascade)
+  tenant    Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([prestacaoId, dataPagamento])
+  @@map("admin_mgmt_prestacao_pagamentos")
+}
+
+// ─── Virtualização (Proxmox VE / PBS) ───────────────────────────────────────
+
+model VirtualizationPbsServer {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  label             String    @db.VarChar(120)
+  tags              Json      @default("[]")
+  baseUrl           String    @map("base_url") @db.VarChar(500)
+  datastore         String    @db.VarChar(120)
+  apiTokenId        String?   @map("api_token_id") @db.VarChar(200)
+  encryptedApiToken String    @map("encrypted_api_token") @db.Text
+  verifySsl         Boolean   @default(true) @map("verify_ssl")
+  isActive          Boolean   @default(true) @map("is_active")
+  sortOrder         Int       @default(0) @map("sort_order")
+  lastError         String?   @map("last_error") @db.Text
+  lastCheckedAt     DateTime? @map("last_checked_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant      Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace   Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  joinTargets VirtualizationZerotierJoinTarget[]
+
+  @@index([tenantId, workspaceId])
+  @@index([workspaceId, sortOrder])
+  @@map("virtualization_pbs_servers")
+}
+
+model VirtualizationPveServer {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  label             String    @db.VarChar(120)
+  tags              Json      @default("[]")
+  baseUrl           String    @map("base_url") @db.VarChar(500)
+  apiTokenId        String?   @map("api_token_id") @db.VarChar(200)
+  encryptedApiToken String    @map("encrypted_api_token") @db.Text
+  verifySsl         Boolean   @default(true) @map("verify_ssl")
+  isActive          Boolean   @default(true) @map("is_active")
+  sortOrder         Int       @default(0) @map("sort_order")
+  lastError         String?   @map("last_error") @db.Text
+  lastCheckedAt     DateTime? @map("last_checked_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant      Tenant                             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace   Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  joinTargets VirtualizationZerotierJoinTarget[]
+
+  @@index([tenantId, workspaceId])
+  @@index([workspaceId, sortOrder])
+  @@map("virtualization_pve_servers")
+}
+
+model VirtualizationSetting {
+  id                     String   @id @default(uuid()) @db.Uuid
+  tenantId               String   @map("tenant_id") @db.Uuid
+  workspaceId            String   @unique @map("workspace_id") @db.Uuid
+  notifyOnBackupFailure  Boolean  @default(true) @map("notify_on_backup_failure")
+  notifyWhatsappEnabled  Boolean  @default(false) @map("notify_whatsapp_enabled")
+  notifyWhatsappPhones   Json     @default("[]") @map("notify_whatsapp_phones")
+  notifyEmailEnabled     Boolean  @default(false) @map("notify_email_enabled")
+  notifyEmailAddresses   Json     @default("[]") @map("notify_email_addresses")
+  pollIntervalMinutes    Int      @default(5) @map("poll_interval_minutes")
+  dashboardRefreshSeconds Int     @default(30) @map("dashboard_refresh_seconds")
+  sshDefaultPort         Int      @default(22) @map("ssh_default_port")
+  sshDefaultUsername     String   @default("root") @map("ssh_default_username") @db.VarChar(120)
+  sshAuthMode            String   @default("password") @map("ssh_auth_mode") @db.VarChar(20)
+  encryptedSshPassword   String?  @map("encrypted_ssh_password") @db.Text
+  encryptedSshPrivateKey String?  @map("encrypted_ssh_private_key") @db.Text
+  encryptedSshPassphrase String?  @map("encrypted_ssh_passphrase") @db.Text
+  createdAt              DateTime @default(now()) @map("created_at")
+  updatedAt              DateTime @updatedAt @map("updated_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("virtualization_settings")
+}
+
+model VirtualizationZerotierAccount {
+  id                String    @id @default(uuid()) @db.Uuid
+  tenantId          String    @map("tenant_id") @db.Uuid
+  workspaceId       String    @map("workspace_id") @db.Uuid
+  label             String    @db.VarChar(120)
+  email             String?   @db.VarChar(255)
+  encryptedApiToken String    @map("encrypted_api_token") @db.Text
+  apiMode           String    @default("legacy") @map("api_mode") @db.VarChar(20)
+  orgId             String?   @map("org_id") @db.VarChar(120)
+  sortOrder         Int       @default(0) @map("sort_order")
+  lastError         String?   @map("last_error") @db.Text
+  lastCheckedAt     DateTime? @map("last_checked_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  tenant      Tenant                            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace   Workspace                         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  networks    VirtualizationZerotierNetwork[]
+  joinTargets VirtualizationZerotierJoinTarget[]
+
+  @@index([tenantId, workspaceId])
+  @@map("virtualization_zerotier_accounts")
+}
+
+model VirtualizationZerotierNetwork {
+  id                  String    @id @default(uuid()) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  workspaceId         String    @map("workspace_id") @db.Uuid
+  accountId           String    @map("account_id") @db.Uuid
+  networkId           String    @map("network_id") @db.VarChar(16)
+  label               String    @db.VarChar(200)
+  description         String?   @db.VarChar(500)
+  isActive            Boolean   @default(true) @map("is_active")
+  memberLimit         Int       @default(10) @map("member_limit")
+  lastMemberCount     Int?      @map("last_member_count")
+  lastAuthorizedCount Int?      @map("last_authorized_count")
+  sortOrder           Int       @default(0) @map("sort_order")
+  lastError           String?   @map("last_error") @db.Text
+  lastCheckedAt       DateTime? @map("last_checked_at")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account     VirtualizationZerotierAccount        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  joinTargets VirtualizationZerotierJoinTarget[]
+
+  @@unique([accountId, networkId])
+  @@index([workspaceId])
+  @@map("virtualization_zerotier_networks")
+}
+
+model VirtualizationZerotierJoinTarget {
+  id                   String    @id @default(uuid()) @db.Uuid
+  tenantId             String    @map("tenant_id") @db.Uuid
+  workspaceId          String    @map("workspace_id") @db.Uuid
+  accountId            String    @map("account_id") @db.Uuid
+  networkRowId         String    @map("network_row_id") @db.Uuid
+  label                String    @db.VarChar(120)
+  sshHost              String    @map("ssh_host") @db.VarChar(255)
+  sshPort              Int       @default(22) @map("ssh_port")
+  sshUsername          String    @map("ssh_username") @db.VarChar(120)
+  useWorkspaceSsh      Boolean   @default(true) @map("use_workspace_ssh")
+  sshAuthMode          String    @default("password") @map("ssh_auth_mode") @db.VarChar(20)
+  encryptedSshPassword String?   @map("encrypted_ssh_password") @db.Text
+  encryptedSshPrivateKey String? @map("encrypted_ssh_private_key") @db.Text
+  encryptedSshPassphrase String? @map("encrypted_ssh_passphrase") @db.Text
+  targetKind           String    @default("custom") @map("target_kind") @db.VarChar(20)
+  pbsServerId          String?   @map("pbs_server_id") @db.Uuid
+  pveServerId          String?   @map("pve_server_id") @db.Uuid
+  nodeId               String?   @map("node_id") @db.VarChar(20)
+  joinStatus           String    @default("idle") @map("join_status") @db.VarChar(20)
+  lastError            String?   @map("last_error") @db.Text
+  provisionLog         String?   @map("provision_log") @db.Text
+  lastRunAt            DateTime? @map("last_run_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant                        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account   VirtualizationZerotierAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  network   VirtualizationZerotierNetwork @relation(fields: [networkRowId], references: [id], onDelete: Cascade)
+  pbsServer VirtualizationPbsServer?      @relation(fields: [pbsServerId], references: [id], onDelete: SetNull)
+  pveServer VirtualizationPveServer?      @relation(fields: [pveServerId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId])
+  @@index([networkRowId])
+  @@map("virtualization_zerotier_join_targets")
+}
+
 // ─── Config & Email ─────────────────────────────────────────────────────────
 
 model SmtpConfig {
@@ -1973,6 +2211,41 @@ model WhatsappTemplate {
 
   @@id([tenantId, key])
   @@map("whatsapp_templates")
+}
+
+model WhatsappBusinessConfig {
+  tenantId              String   @id @map("tenant_id") @db.Uuid
+  encryptedAccessToken  String   @map("encrypted_access_token") @db.Text
+  phoneNumberId         String   @map("phone_number_id")
+  businessAccountId     String?  @map("business_account_id")
+  apiVersion            String   @default("v18.0") @map("api_version")
+  webhookVerifyToken    String?  @map("webhook_verify_token")
+  enabled               Boolean  @default(true)
+  testMode              Boolean  @default(false) @map("test_mode")
+  portalPublicUrl       String?  @map("portal_public_url")
+  templateHeaderUrls    Json     @default("{}") @map("template_header_urls")
+  createdAt             DateTime @default(now()) @map("created_at")
+  updatedAt             DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_business_configs")
+}
+
+model WhatsappBusinessNotificationEvent {
+  tenantId          String   @map("tenant_id") @db.Uuid
+  eventKey          String   @map("event_key")
+  emailEnabled      Boolean  @default(true) @map("email_enabled")
+  whatsappEnabled   Boolean  @default(false) @map("whatsapp_enabled")
+  whatsappTemplate  String?  @map("whatsapp_template")
+  whatsappLanguage  String   @default("pt") @map("whatsapp_language")
+  configData        Json?    @map("config_data")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([tenantId, eventKey])
+  @@map("whatsapp_business_notification_events")
 }
 
 // ─── Calendar ───────────────────────────────────────────────────────────────
@@ -2366,6 +2639,7 @@ model BoltConnection {
   lastSyncAtVehicles    DateTime? @map("last_sync_at_vehicles")
   lastError             String?   @map("last_error") @db.Text
   connectedAt           DateTime? @map("connected_at")
+  autoSyncEnabled       Boolean   @default(true) @map("auto_sync_enabled")
   createdAt             DateTime  @default(now()) @map("created_at")
   updatedAt             DateTime  @updatedAt @map("updated_at")
 
@@ -2537,6 +2811,7 @@ model PortalConnection {
   lastError              String?                @map("last_error") @db.Text
   activeJobId            String?                @map("active_job_id") @db.Uuid
   isEnabled              Boolean                @default(true) @map("is_enabled")
+  autoSyncEnabled        Boolean                @default(false) @map("auto_sync_enabled")
   createdAt              DateTime               @default(now()) @map("created_at")
   updatedAt              DateTime               @updatedAt @map("updated_at")
 
@@ -2658,6 +2933,9 @@ model PaymentReport {
   reportHtml              String?   @map("report_html") @db.Text
   createdByUserId         String?   @map("created_by_user_id") @db.Uuid
   lastSentAt              DateTime? @map("last_sent_at")
+  emailSent               Boolean   @default(false) @map("email_sent")
+  whatsappSent            Boolean   @default(false) @map("whatsapp_sent")
+  notificationDebug       Json?     @map("notification_debug")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")
 

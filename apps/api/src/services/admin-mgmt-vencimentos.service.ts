@@ -204,6 +204,9 @@ export async function getAdminMgmtDashboard(workspaceId: string, tenantId: strin
   });
 
   const overdue = pending.filter((row) => row.status === 'atrasado');
+  const upcoming = pending
+    .filter((row) => row.status !== 'atrasado')
+    .filter((row) => startOfDay(new Date(row.dataVencimento)) >= today);
 
   const faturasPendentes = await prisma.adminMgmtFatura.count({
     where: {
@@ -269,7 +272,7 @@ export async function getAdminMgmtDashboard(workspaceId: string, tenantId: strin
       alertWindow: alertWindow.length,
     },
     byOrigem,
-    upcoming: pending.slice(0, 20),
+    upcoming: upcoming.slice(0, 20),
     overdue: overdue.slice(0, 20),
   };
 }

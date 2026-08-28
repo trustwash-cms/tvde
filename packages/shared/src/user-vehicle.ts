@@ -45,6 +45,58 @@ export interface TenantVehicleLimits {
   plan: string;
   siteId: string | null;
   tenantName: string | null;
+  /** Presente na listagem MASTER */
+  tenantId?: string;
+}
+
+/** Planos de limite de viaturas (legado CMS → TVDE). */
+export const VEHICLE_LIMIT_PLANS = {
+  gratuito: { label: 'Gratuito', maxVehicles: 3 },
+  standard: { label: 'Standard', maxVehicles: 30 },
+  business: { label: 'Business', maxVehicles: 999999 },
+} as const;
+
+export type VehicleLimitPlanType = keyof typeof VEHICLE_LIMIT_PLANS;
+
+export const VEHICLE_LIMIT_WHATSAPP_NUMBER = '925986983';
+
+export function resolveVehicleLimitPlanType(plan: string | null | undefined): VehicleLimitPlanType {
+  const key = (plan ?? '').trim().toLowerCase();
+  if (key === 'standard' || key === 'business' || key === 'gratuito') return key;
+  if (key === 'starter' || key === 'free' || key === 'partner') return 'gratuito';
+  return 'gratuito';
+}
+
+export function getVehicleLimitPlanLabel(plan: string | null | undefined): string {
+  const type = resolveVehicleLimitPlanType(plan);
+  return VEHICLE_LIMIT_PLANS[type].label;
+}
+
+export function buildVehicleLimitWhatsappMessage(input: {
+  siteId?: string | null;
+  username?: string | null;
+  fullName?: string | null;
+  plan?: string | null;
+  activeCount: number;
+  maxVehicles: number;
+}): string {
+  const userLabel = [input.username, input.fullName ? `(${input.fullName})` : null]
+    .filter(Boolean)
+    .join(' ');
+  return [
+    'Olá, preciso aumentar o limite de viaturas do meu plano.',
+    '',
+    'Informações:',
+    `• Site ID: ${input.siteId ?? '—'}`,
+    ...(userLabel ? [`• Utilizador: ${userLabel}`] : []),
+    `• Plano actual: ${getVehicleLimitPlanLabel(input.plan)}`,
+    `• Viaturas activas: ${input.activeCount} / ${input.maxVehicles}`,
+    `• Limite necessário: ${input.activeCount + 1} viaturas`,
+  ].join('\n');
+}
+
+export function buildVehicleLimitWhatsappUrl(message: string): string {
+  return `https://wa.me/351${VEHICLE_LIMIT_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`;
 }
 
 export function normalizeUserVehicleMatricula(input: {

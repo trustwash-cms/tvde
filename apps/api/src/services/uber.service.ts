@@ -154,7 +154,7 @@ export async function importUberCsvText(
   importedByUserId: string,
   csvText: string
 ) {
-  const { rows, errors } = parseUberCsv(csvText);
+  const { rows, errors } = parseUberCsv(csvText, { filename: 'upload.csv' });
   let inserted = 0;
   let skipped = 0;
   for (const row of rows) {

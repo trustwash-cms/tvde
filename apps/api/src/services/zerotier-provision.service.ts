@@ -1,0 +1,195 @@
+import { prisma } from '@tvde/database';
+import type { VirtualizationZerotierJoinTargetPublic } from '@tvde/shared';
+import { decrypt } from '../lib/crypto';
+import { getWorkspaceSshCredentials } from './virtualization.service';
+import {
+  buildSshExecOptionsFromJoinTarget,
+  buildZerotierInstallJoinScript,
+  parseNodeIdFromProvisionOutput,
+  sshExec,
+} from './zerotier-ssh.service';
+import { zerotierSetMemberAuthorized, type ZerotierClientConfig } from './zerotier.client';
+
+function mapJoinTargetPublic(row: {
+  id: string;
+  accountId: string;
+  networkRowId: string;
+  label: string;
+  sshHost: string;
+  sshPort: number;
+  sshUsername: string;
+  useWorkspaceSsh: boolean;
+  sshAuthMode: string;
+  encryptedSshPassword: string | null;
+  encryptedSshPrivateKey: string | null;
+  encryptedSshPassphrase: string | null;
+  targetKind: string;
+  pbsServerId: string | null;
+  pveServerId: string | null;
+  nodeId: string | null;
+  joinStatus: string;
+  lastError: string | null;
+  provisionLog: string | null;
+  lastRunAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  network: { networkId: string; label: string };
+  account: { label: string; email: string | null };
+}): VirtualizationZerotierJoinTargetPublic {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    accountLabel: row.account.label,
+    accountEmail: row.account.email,
+    networkRowId: row.networkRowId,
+    networkId: row.network.networkId,
+    networkLabel: row.network.label,
+    label: row.label,
+    sshHost: row.sshHost,
+    sshPort: row.sshPort,
+    sshUsername: row.sshUsername,
+    useWorkspaceSsh: row.useWorkspaceSsh,
+    sshAuthMode: row.sshAuthMode === 'private_key' ? 'private_key' : 'password',
+    hasSshPassword: Boolean(row.encryptedSshPassword),
+    hasSshPrivateKey: Boolean(row.encryptedSshPrivateKey),
+    targetKind: row.targetKind as VirtualizationZerotierJoinTargetPublic['targetKind'],
+    pbsServerId: row.pbsServerId,
+    pveServerId: row.pveServerId,
+    nodeId: row.nodeId,
+    joinStatus: row.joinStatus as VirtualizationZerotierJoinTargetPublic['joinStatus'],
+    lastError: row.lastError,
+    provisionLog: row.provisionLog,
+    lastRunAt: row.lastRunAt?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function getClientConfig(row: {
+  encryptedApiToken: string;
+  apiMode: string;
+  orgId: string | null;
+}): ZerotierClientConfig {
+  return {
+    apiToken: decrypt(row.encryptedApiToken),
+    apiMode: row.apiMode === 'central' ? 'central' : 'legacy',
+    orgId: row.orgId,
+  };
+}
+
+export async function provisionZerotierJoinTarget(
+  tenantId: string,
+  workspaceId: string,
+  targetId: string
+): Promise<VirtualizationZerotierJoinTargetPublic> {
+  const target = await prisma.virtualizationZerotierJoinTarget.findFirst({
+    where: { id: targetId, tenantId, workspaceId },
+    include: {
+      network: true,
+      account: true,
+    },
+  });
+  if (!target) throw new Error('Alvo de join não encontrado');
+
+  await prisma.virtualizationZerotierJoinTarget.update({
+    where: { id: targetId },
+    data: {
+      joinStatus: 'running',
+      lastError: null,
+      lastRunAt: new Date(),
+    },
+  });
+
+  const logLines: string[] = [];
+  const appendLog = (line: string) => {
+    logLines.push(line);
+  };
+
+  try {
+    appendLog(`[ssh] ${target.sshUsername}@${target.sshHost}:${target.sshPort} (${target.sshAuthMode})`);
+    const script = buildZerotierInstallJoinScript(target.network.networkId);
+
+    const workspaceSsh = target.useWorkspaceSsh
+      ? await getWorkspaceSshCredentials(tenantId, workspaceId)
+      : null;
+    const sshAuthMode = target.useWorkspaceSsh
+      ? workspaceSsh!.sshAuthMode
+      : target.sshAuthMode === 'private_key'
+        ? 'private_key'
+        : 'password';
+
+    const sshResult = await sshExec(
+      buildSshExecOptionsFromJoinTarget({
+        sshHost: target.sshHost,
+        sshPort: target.sshPort,
+        sshUsername: target.sshUsername,
+        sshAuthMode,
+        encryptedSshPassword: target.useWorkspaceSsh
+          ? workspaceSsh!.encryptedSshPassword
+          : target.encryptedSshPassword,
+        encryptedSshPrivateKey: target.useWorkspaceSsh
+          ? workspaceSsh!.encryptedSshPrivateKey
+          : target.encryptedSshPrivateKey,
+        encryptedSshPassphrase: target.useWorkspaceSsh
+          ? workspaceSsh!.encryptedSshPassphrase
+          : target.encryptedSshPassphrase,
+        decrypt,
+        command: `bash -s <<'ZT_EOF'\n${script}\nZT_EOF`,
+        timeoutMs: 180_000,
+      })
+    );
+
+    if (sshResult.stdout.trim()) appendLog(sshResult.stdout.trim());
+    if (sshResult.stderr.trim()) appendLog(sshResult.stderr.trim());
+
+    if (sshResult.code !== 0) {
+      throw new Error(`SSH falhou (código ${sshResult.code})`);
+    }
+
+    const nodeId = parseNodeIdFromProvisionOutput(sshResult.stdout);
+    if (!nodeId) {
+      throw new Error('Instalação concluída mas node ID não detectado no output');
+    }
+
+    appendLog(`[api] a autorizar membro ${nodeId}…`);
+    await zerotierSetMemberAuthorized(
+      getClientConfig(target.account),
+      target.network.networkId,
+      nodeId,
+      true
+    );
+    appendLog('[api] membro autorizado');
+
+    const updated = await prisma.virtualizationZerotierJoinTarget.update({
+      where: { id: targetId },
+      data: {
+        nodeId,
+        joinStatus: 'authorized',
+        lastError: null,
+        provisionLog: logLines.join('\n'),
+      },
+      include: {
+        network: true,
+        account: { select: { label: true, email: true } },
+      },
+    });
+
+    return mapJoinTargetPublic(updated);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Erro no provisioning';
+    appendLog(`[erro] ${message}`);
+    const updated = await prisma.virtualizationZerotierJoinTarget.update({
+      where: { id: targetId },
+      data: {
+        joinStatus: 'failed',
+        lastError: message,
+        provisionLog: logLines.join('\n'),
+      },
+      include: {
+        network: true,
+        account: { select: { label: true, email: true } },
+      },
+    });
+    throw Object.assign(new Error(message), { target: mapJoinTargetPublic(updated) });
+  }
+}

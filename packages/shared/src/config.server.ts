@@ -73,7 +73,7 @@ export function getServerConfig() {
     passwordResetExpiresMs: parseDurationMs(envOr('PASSWORD_RESET_EXPIRES', '1h')),
     webPublicUrl: envOr('WEB_PUBLIC_URL', envOr('CORS_ORIGIN', '')),
     exposeResetToken: envOr('RESET_EXPOSE_TOKEN', 'false') === 'true',
-    appName: envOr('NEXT_PUBLIC_APP_NAME', envOr('SMTP_FROM_NAME', 'CMS')),
+    appName: envOr('NEXT_PUBLIC_APP_NAME', envOr('SMTP_FROM_NAME', 'Fleet CRM')),
     smtpHost: envOr('SMTP_HOST', ''),
     smtpPort: parseInt(envOr('SMTP_PORT', '587'), 10),
     smtpUser: envOr('SMTP_USER', ''),

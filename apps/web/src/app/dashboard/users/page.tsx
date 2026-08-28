@@ -44,6 +44,7 @@ export default function UsersPage() {
   const [deleteUser, setDeleteUser] = useState<UserListItem | null>(null);
   const [detailsUser, setDetailsUser] = useState<UserListItem | null>(null);
   const [vehiclesUser, setVehiclesUser] = useState<UserListItem | null>(null);
+  const [credentialsBusyId, setCredentialsBusyId] = useState<string | null>(null);
 
   const isMaster = actorRole === 'master';
   const { alert, alertDialog } = useAlertDialog();
@@ -103,11 +104,22 @@ export default function UsersPage() {
 
     if (res.success) {
       load();
+      if (payload.password) {
+        return { ok: true, credentialsSent: false };
+      }
       if (res.data?.credentialsSent) {
         await alert({
-          title: 'Utilizador criado',
-          message: 'As credenciais foram enviadas por email ao utilizador.',
+          title: 'Utilizador criado (Pending)',
+          message:
+            'Conta criada em Pending. As credenciais foram enviadas — o utilizador activa a conta no 1º login.',
           variant: 'default',
+        });
+      } else {
+        await alert({
+          title: 'Utilizador criado (Pending)',
+          message:
+            'Conta criada, mas o envio de credenciais falhou ou ficou incompleto. Use o ícone da chave para reenviar.',
+          variant: 'warning',
         });
       }
       return { ok: true, credentialsSent: res.data?.credentialsSent };
@@ -205,8 +217,56 @@ export default function UsersPage() {
 
   function canToggleUser(u: UserListItem): boolean {
     if (!actorRole || !actorUserId || u.id === actorUserId) return false;
+    if (u.status === 'pending') return false;
     if (!canToggleUserStatus(actorRole)) return false;
     return canManageUser(actorRole, u.role as Role);
+  }
+
+  function canCredentialsAction(u: UserListItem): boolean {
+    if (!actorRole || !actorUserId || u.id === actorUserId) return false;
+    if (!canManageUser(actorRole, u.role as Role)) return false;
+    return u.status === 'pending' || u.status === 'active';
+  }
+
+  async function handleCredentialsAction(u: UserListItem) {
+    const isPending = u.status === 'pending';
+    const name = u.fullName || u.username || u.email;
+    const ok = await confirm({
+      title: isPending ? 'Reenviar credenciais' : 'Reset password',
+      message: isPending
+        ? `Gerar nova password temporária e reenviar para ${name}? A conta permanece Pending até ao 1º login.`
+        : `Gerar nova password temporária e enviar para ${name}? As sessões activas serão terminadas.`,
+      confirmLabel: isPending ? 'Reenviar' : 'Reset password',
+      cancelLabel: 'Cancelar',
+      variant: 'danger',
+    });
+    if (!ok) return;
+
+    setCredentialsBusyId(u.id);
+    const path = isPending
+      ? API_PATHS.users.resendCredentials(u.id)
+      : API_PATHS.users.resetPassword(u.id);
+    const res = await apiFetch(path, { method: 'POST' }, getStoredToken());
+    setCredentialsBusyId(null);
+
+    if (res.success) {
+      load();
+      await alert({
+        title: isPending ? 'Credenciais reenviadas' : 'Password redefinida',
+        message:
+          res.message ||
+          (isPending
+            ? 'Nova password temporária enviada ao utilizador.'
+            : 'Nova password temporária enviada. O utilizador deve alterar no próximo login.'),
+      });
+      return;
+    }
+
+    await alert({
+      title: 'Operação falhou',
+      message: getApiErrorMessage(res),
+      variant: 'error',
+    });
   }
 
   function canViewDetails(u: UserListItem): boolean {
@@ -311,12 +371,15 @@ export default function UsersPage() {
                 canVehicles={canViewDetails(u)}
                 canImpersonate={canImpersonateUser(u)}
                 canContaCorrente={actorRole === 'master' || actorRole === 'superadmin'}
+                canCredentialsAction={canCredentialsAction(u)}
+                credentialsBusy={credentialsBusyId === u.id}
                 onEdit={() => setEditUser(u)}
                 onDelete={() => setDeleteUser(u)}
                 onToggleStatus={() => handleToggleStatus(u)}
                 onDetails={() => setDetailsUser(u)}
                 onVehicles={() => setVehiclesUser(u)}
                 onImpersonate={() => handleImpersonate(u)}
+                onCredentialsAction={() => handleCredentialsAction(u)}
               />
             ))
           )}

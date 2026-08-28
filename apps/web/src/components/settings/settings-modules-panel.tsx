@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Layers } from 'lucide-react';
-import { WEB_ROUTES, filterTvdeModules } from '@tvde/shared';
+import { WEB_ROUTES, filterActivatableModules } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
@@ -27,6 +27,7 @@ interface ModuleHealth {
 
 const CONFIG_LINKS: Partial<Record<string, string>> = {
   sms: WEB_ROUTES.dashboard.settings.sms,
+  whatsapp: WEB_ROUTES.dashboard.settings.whatsapp,
   billing: WEB_ROUTES.dashboard.settings.moloni,
   whmcs: WEB_ROUTES.dashboard.settings.whmcs,
   bolt: WEB_ROUTES.dashboard.settings.bolt,
@@ -115,7 +116,7 @@ export function SettingsModulesPanel() {
       apiFetch<Module[]>(API_PATHS.modules.list, {}, token),
       apiFetch<ModuleHealth[]>(healthPath, {}, token),
     ]).then(([modsRes, healthRes]) => {
-      if (modsRes.data) setModules(filterTvdeModules(modsRes.data));
+      if (modsRes.data) setModules(filterActivatableModules(modsRes.data));
       if (healthRes.data) {
         setHealthMap(Object.fromEntries(healthRes.data.map((h) => [h.key, h])));
       }
@@ -135,8 +136,8 @@ export function SettingsModulesPanel() {
       <div>
         <h2 className="text-lg font-semibold text-slate-900">Módulos</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Estado dos módulos do sistema — activação em Configurações → Workspaces (excepto Clientes CRM,
-          activado pelo MASTER); integrações nas restantes secções.
+          Estado dos módulos do sistema — activação em Configurações → Workspaces;
+          integrações nas restantes secções.
         </p>
       </div>
 

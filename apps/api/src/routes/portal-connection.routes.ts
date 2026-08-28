@@ -10,6 +10,7 @@ import {
   getPortalLiveFrame,
   listPortalConnections,
   listUberPortalReports,
+  setPortalAutoSync,
   postPortalLiveInput,
   cancelPortalLiveJob,
   startPortalConnect,
@@ -50,6 +51,32 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
       const { portal } = portalParam.parse(request.params);
       const data = await getPortalConnectionDetail(fastify.db, tenantId, portal as PortalKind);
       return reply.send({ success: true, data });
+    } catch (err) {
+      return reply.status(400).send({
+        success: false,
+        error: err instanceof Error ? err.message : 'Erro',
+      });
+    }
+  });
+
+  fastify.patch('/portal-connections/:portal/auto-sync', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { portal } = portalParam.parse(request.params);
+      const body = z.object({ autoSyncEnabled: z.boolean() }).parse(request.body ?? {});
+      const data = await setPortalAutoSync(
+        fastify.db,
+        tenantId,
+        portal as PortalKind,
+        body.autoSyncEnabled
+      );
+      return reply.send({
+        success: true,
+        data,
+        message: body.autoSyncEnabled
+          ? 'Sincronização automática diária activada'
+          : 'Sincronização automática diária desactivada',
+      });
     } catch (err) {
       return reply.status(400).send({
         success: false,
@@ -159,7 +186,7 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
       const { portal } = portalParam.parse(request.params);
       const body = z
         .object({
-          syncScope: z.enum(['electric', 'fleet']).optional(),
+          syncScope: z.enum(['electric', 'fleet', 'both']).optional(),
           uberSync: z
             .object({
               mode: z.enum(['existing', 'generate']),

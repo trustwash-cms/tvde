@@ -12,6 +12,7 @@ import {
   listContaCorrenteDrivers,
   listContaCorrenteEntries,
   reopenContaCorrenteEntry,
+  updateContaCorrenteEntry,
 } from '../services/driver-current-account.service';
 import { openDriverCurrentAccountStream } from '../services/driver-current-account-storage.service';
 
@@ -66,6 +67,42 @@ const jsonCreateSchema = z.object({
   installmentEnabled: z.boolean().optional(),
   totalInstallments: z.number().int().positive().optional().nullable(),
   installmentAmount: z.number().positive().optional().nullable(),
+});
+
+const jsonUpdateSchema = z.object({
+  description: z.string().min(1).max(4000),
+  amount: z.coerce.number().positive().optional(),
+  type: z.enum(['credit', 'debit']).optional(),
+  category: z.string().max(120).optional().nullable(),
+  reference: z.string().max(255).optional().nullable(),
+  installmentEnabled: z.boolean().optional(),
+  totalInstallments: z.number().int().positive().optional().nullable(),
+  installmentAmount: z.number().positive().optional().nullable(),
+  removeAttachment: z.boolean().optional(),
+});
+
+const multipartUpdateSchema = z.object({
+  description: z.string().min(1).max(4000),
+  amount: z.preprocess(emptyToUndef, z.coerce.number().positive().optional()),
+  type: z.preprocess(emptyToUndef, z.enum(['credit', 'debit']).optional()),
+  category: z.preprocess(emptyToUndef, z.string().max(120).optional()),
+  reference: z.preprocess(emptyToUndef, z.string().max(255).optional()),
+  installmentEnabled: z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .optional()
+    .transform((v) => v === true || v === 'true' || v === '1'),
+  totalInstallments: z.preprocess(
+    emptyToUndef,
+    z.coerce.number().int().positive().optional()
+  ),
+  installmentAmount: z.preprocess(
+    emptyToUndef,
+    z.coerce.number().positive().optional()
+  ),
+  removeAttachment: z
+    .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+    .optional()
+    .transform((v) => v === true || v === 'true' || v === '1'),
 });
 
 export async function driverCurrentAccountRoutes(fastify: FastifyInstance) {
@@ -246,6 +283,92 @@ export async function driverCurrentAccountRoutes(fastify: FastifyInstance) {
       return reply
         .status(400)
         .send({ success: false, error: err instanceof Error ? err.message : 'Erro' });
+    }
+  });
+
+  fastify.patch('/conta-corrente/:id', async (request, reply) => {
+    try {
+      const tenantId = requireTenant(request);
+      const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+      const contentType = request.headers['content-type'] ?? '';
+
+      let payload: {
+        description: string;
+        amount?: number;
+        type?: 'credit' | 'debit';
+        category?: string | null;
+        reference?: string | null;
+        installmentEnabled?: boolean;
+        totalInstallments?: number | null;
+        installmentAmount?: number | null;
+        attachment?: { fileName: string; mimeType: string; buffer: Buffer } | null;
+        removeAttachment?: boolean;
+      };
+
+      if (contentType.includes('multipart/form-data')) {
+        const parts = request.parts();
+        const fields: Record<string, string> = {};
+        let attachment: { fileName: string; mimeType: string; buffer: Buffer } | null = null;
+
+        for await (const part of parts) {
+          if (part.type === 'file') {
+            if (part.fieldname !== 'attachment') continue;
+            const buffer = await part.toBuffer();
+            if (buffer.length > env.driverCurrentAccountMaxBytes) {
+              throw new Error('Ficheiro demasiado grande (máx. 10MB)');
+            }
+            const mime = part.mimetype || 'application/octet-stream';
+            if (!ALLOWED_MIME.has(mime)) {
+              throw new Error('Tipo de ficheiro não permitido (PDF, imagens ou documentos)');
+            }
+            attachment = {
+              fileName: part.filename || 'anexo',
+              mimeType: mime,
+              buffer,
+            };
+          } else {
+            fields[part.fieldname] = String(part.value ?? '');
+          }
+        }
+
+        const parsed = multipartUpdateSchema.parse(fields);
+        payload = {
+          description: parsed.description,
+          amount: parsed.amount,
+          type: parsed.type,
+          category: parsed.category ?? null,
+          reference: parsed.reference ?? null,
+          installmentEnabled: parsed.installmentEnabled,
+          totalInstallments: parsed.totalInstallments ?? null,
+          installmentAmount: parsed.installmentAmount ?? null,
+          removeAttachment: parsed.removeAttachment,
+          attachment,
+        };
+      } else {
+        const body = jsonUpdateSchema.parse(request.body);
+        payload = { ...body, attachment: null };
+      }
+
+      const data = await updateContaCorrenteEntry(fastify.db, tenantId, id, payload);
+
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'conta_corrente.update',
+        entityType: 'driver_current_account_entry',
+        entityId: id,
+        afterJson: { type: data.type, amount: data.amount, driverUserId: data.driverUserId },
+      });
+
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message =
+        err instanceof ZodError
+          ? formatZodError(err)
+          : err instanceof Error
+            ? err.message
+            : 'Erro';
+      return reply.status(400).send({ success: false, error: message });
     }
   });
 

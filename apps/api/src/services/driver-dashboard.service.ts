@@ -74,9 +74,9 @@ export async function getDriverSummary(
     cards.push({
       id: 'bolt',
       label: 'Bolt',
-      total: money(bolt.totalRevenue),
+      total: money(bolt.monthTotal),
       href: WEB_ROUTES.dashboard.bolt.root,
-      periodLabel: 'Total (próprias corridas)',
+      periodLabel: `Mês ${bolt.selectedMonth}`,
     });
   }
 
