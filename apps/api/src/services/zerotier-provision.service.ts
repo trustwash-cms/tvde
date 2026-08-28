@@ -77,6 +77,49 @@ function getClientConfig(row: {
   };
 }
 
+export async function startZerotierJoinTargetProvision(
+  tenantId: string,
+  workspaceId: string,
+  targetId: string
+): Promise<VirtualizationZerotierJoinTargetPublic> {
+  const target = await prisma.virtualizationZerotierJoinTarget.findFirst({
+    where: { id: targetId, tenantId, workspaceId },
+    include: {
+      network: true,
+      account: { select: { label: true, email: true } },
+    },
+  });
+  if (!target) throw new Error('Alvo de join não encontrado');
+
+  if (target.joinStatus === 'running') {
+    return mapJoinTargetPublic(target);
+  }
+
+  const running = await prisma.virtualizationZerotierJoinTarget.update({
+    where: { id: targetId },
+    data: {
+      joinStatus: 'running',
+      lastError: null,
+      lastRunAt: new Date(),
+      provisionLog: '[zt] provisioning iniciado em background…',
+    },
+    include: {
+      network: true,
+      account: { select: { label: true, email: true } },
+    },
+  });
+
+  void provisionZerotierJoinTarget(tenantId, workspaceId, targetId).catch((err) => {
+    console.error(
+      '[zerotier-provision]',
+      targetId,
+      err instanceof Error ? err.message : err
+    );
+  });
+
+  return mapJoinTargetPublic(running);
+}
+
 export async function provisionZerotierJoinTarget(
   tenantId: string,
   workspaceId: string,
@@ -91,14 +134,16 @@ export async function provisionZerotierJoinTarget(
   });
   if (!target) throw new Error('Alvo de join não encontrado');
 
-  await prisma.virtualizationZerotierJoinTarget.update({
-    where: { id: targetId },
-    data: {
-      joinStatus: 'running',
-      lastError: null,
-      lastRunAt: new Date(),
-    },
-  });
+  if (target.joinStatus !== 'running') {
+    await prisma.virtualizationZerotierJoinTarget.update({
+      where: { id: targetId },
+      data: {
+        joinStatus: 'running',
+        lastError: null,
+        lastRunAt: new Date(),
+      },
+    });
+  }
 
   const logLines: string[] = [];
   const appendLog = (line: string) => {

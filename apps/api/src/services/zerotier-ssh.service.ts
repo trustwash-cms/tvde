@@ -109,21 +109,29 @@ export function buildZerotierInstallJoinScript(networkId: string): string {
   const safeNetworkId = networkId.trim().toLowerCase();
   return [
     'set -e',
+    'if [ "$(id -u)" -eq 0 ]; then',
+    '  SUDO=""',
+    'elif command -v sudo >/dev/null 2>&1; then',
+    '  SUDO="sudo "',
+    'else',
+    '  echo "[zt] erro: precisa de root ou sudo instalado" >&2',
+    '  exit 1',
+    'fi',
     'if command -v zerotier-cli >/dev/null 2>&1; then',
     '  echo "[zt] zerotier-cli já instalado"',
     'else',
     '  echo "[zt] a instalar ZeroTier…"',
-    '  curl -fsSL https://install.zerotier.com | sudo bash',
+    '  curl -fsSL https://install.zerotier.com | ${SUDO}bash',
     'fi',
-    `sudo zerotier-cli join ${safeNetworkId}`,
+    `${'${SUDO}'}zerotier-cli join ${safeNetworkId}`,
     'sleep 3',
-    'NODE_ID=$(sudo zerotier-cli info 2>/dev/null | awk \'{print $3}\')',
+    'NODE_ID=$(${SUDO}zerotier-cli info 2>/dev/null | awk \'{print $3}\')',
     'if [ -z "$NODE_ID" ]; then',
     '  echo "[zt] erro: não foi possível obter node ID" >&2',
     '  exit 1',
     'fi',
     'echo "[zt] node_id=$NODE_ID"',
-    'sudo zerotier-cli listnetworks | grep -i join || true',
+    '${SUDO}zerotier-cli listnetworks | grep -i join || true',
   ].join('\n');
 }
 

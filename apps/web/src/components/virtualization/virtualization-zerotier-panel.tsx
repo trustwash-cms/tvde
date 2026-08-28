@@ -457,19 +457,58 @@ export function VirtualizationZerotierPanel() {
     if (!workspaceId) return;
     setProvisioningId(targetId);
     setError('');
+    setMessage('A iniciar instalação ZeroTier em background…');
+
     const res = await apiFetch<VirtualizationZerotierJoinTargetPublic>(
       withWorkspaceQuery(API_PATHS.virtualization.zerotierJoinTargetProvision(targetId), workspaceId),
       { method: 'POST' },
       getStoredToken()
     );
-    setProvisioningId(null);
-    if (res.data) {
-      setMessage(`ZeroTier instalado e autorizado — node ${res.data.nodeId}.`);
-      await loadAll();
-    } else {
+
+    if (!res.data) {
+      setProvisioningId(null);
       setError(getApiErrorMessage(res));
       await loadAll();
+      return;
     }
+
+    setJoinTargets((prev) =>
+      prev.map((target) => (target.id === targetId ? res.data! : target))
+    );
+
+    const startedAt = Date.now();
+    const maxWaitMs = 4 * 60_000;
+
+    while (Date.now() - startedAt < maxWaitMs) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      const poll = await apiFetch<VirtualizationZerotierJoinTargetPublic>(
+        withWorkspaceQuery(API_PATHS.virtualization.zerotierJoinTargetById(targetId), workspaceId),
+        {},
+        getStoredToken()
+      );
+      if (!poll.data) continue;
+
+      setJoinTargets((prev) =>
+        prev.map((target) => (target.id === targetId ? poll.data! : target))
+      );
+
+      if (poll.data.joinStatus === 'authorized') {
+        setProvisioningId(null);
+        setMessage(`ZeroTier instalado e autorizado — node ${poll.data.nodeId}.`);
+        await loadAll();
+        return;
+      }
+      if (poll.data.joinStatus === 'failed') {
+        setProvisioningId(null);
+        setError(poll.data.lastError || 'Falha na instalação ZeroTier');
+        await loadAll();
+        return;
+      }
+    }
+
+    setProvisioningId(null);
+    setError('A instalação ainda está a decorrer — actualize a página dentro de momentos.');
+    await loadAll();
   };
 
   const handleDeleteJoinTarget = async (targetId: string) => {
@@ -1015,6 +1054,7 @@ export function VirtualizationZerotierPanel() {
               <input
                 className="input w-full"
                 value={joinTargetForm.sshUsername}
+                autoComplete="username"
                 onChange={(e) => setJoinTargetForm((prev) => ({ ...prev, sshUsername: e.target.value }))}
                 required
               />

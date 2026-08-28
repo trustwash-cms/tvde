@@ -106,6 +106,7 @@ export function VirtualizationConfigPanel() {
                   <input
                     className="input w-full"
                     value={settings.sshDefaultUsername}
+                    autoComplete="username"
                     onChange={(e) =>
                       setSettings((prev) =>
                         prev ? { ...prev, sshDefaultUsername: e.target.value } : prev

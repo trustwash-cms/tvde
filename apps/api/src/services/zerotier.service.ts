@@ -623,6 +623,22 @@ export async function createVirtualizationZerotierJoinTarget(
   return mapJoinTargetPublic(row);
 }
 
+export async function getVirtualizationZerotierJoinTarget(
+  tenantId: string,
+  workspaceId: string,
+  targetId: string
+): Promise<VirtualizationZerotierJoinTargetPublic> {
+  const row = await prisma.virtualizationZerotierJoinTarget.findFirst({
+    where: { id: targetId, tenantId, workspaceId },
+    include: {
+      network: { select: { networkId: true, label: true } },
+      account: { select: { label: true, email: true } },
+    },
+  });
+  if (!row) throw new Error('Alvo de join não encontrado');
+  return mapJoinTargetPublic(row);
+}
+
 export async function deleteVirtualizationZerotierJoinTarget(
   tenantId: string,
   workspaceId: string,

@@ -34,6 +34,7 @@ import {
   createVirtualizationZerotierJoinTarget,
   deleteVirtualizationZerotierAccount,
   deleteVirtualizationZerotierJoinTarget,
+  getVirtualizationZerotierJoinTarget,
   linkVirtualizationZerotierNetwork,
   listVirtualizationZerotierAccounts,
   listVirtualizationZerotierJoinTargets,
@@ -47,7 +48,7 @@ import {
   unlinkVirtualizationZerotierNetwork,
   updateVirtualizationZerotierAccount,
 } from '../services/zerotier.service';
-import { provisionZerotierJoinTarget } from '../services/zerotier-provision.service';
+import { startZerotierJoinTargetProvision } from '../services/zerotier-provision.service';
 
 const workspaceQuerySchema = z.object({
   workspaceId: z.string().uuid().optional(),
@@ -765,6 +766,22 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
     }
   });
 
+  fastify.get('/virtualization/zerotier/join-targets/:id', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { id } = request.params as { id: string };
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await getVirtualizationZerotierJoinTarget(tenantId, workspaceId, id);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      throw fastify.httpErrors.notFound(err instanceof Error ? err.message : 'Alvo não encontrado');
+    }
+  });
+
   fastify.delete('/virtualization/zerotier/join-targets/:id', async (request, reply) => {
     const query = workspaceQuerySchema.parse(request.query);
     const { id } = request.params as { id: string };
@@ -790,19 +807,12 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
       query.workspaceId
     );
     try {
-      const data = await provisionZerotierJoinTarget(tenantId, workspaceId, id);
-      return reply.send({ success: true, data });
+      const data = await startZerotierJoinTargetProvision(tenantId, workspaceId, id);
+      return reply.code(202).send({ success: true, data });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Falha no provisioning';
-      const target =
-        err && typeof err === 'object' && 'target' in err
-          ? (err as { target: unknown }).target
-          : undefined;
-      return reply.status(502).send({
-        success: false,
-        error: message,
-        data: target ?? null,
-      });
+      throw fastify.httpErrors.badRequest(
+        err instanceof Error ? err.message : 'Falha ao iniciar provisioning'
+      );
     }
   });
 }
