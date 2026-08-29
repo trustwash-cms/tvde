@@ -27,7 +27,13 @@ export function ConfirmDialog({
     confirmLabel ?? (variant === 'danger' ? 'Eliminar' : 'Confirmar');
 
   return (
-    <Modal open={open} onClose={onCancel} title={title} panelClassName="max-w-md">
+    <Modal
+      open={open}
+      onClose={onCancel}
+      title={title}
+      panelClassName="max-w-md"
+      overlayClassName="z-[60]"
+    >
       <p className="mb-6 whitespace-pre-line text-sm leading-relaxed text-slate-600">{message}</p>
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <button type="button" className="btn-secondary" onClick={onCancel}>

@@ -16,6 +16,7 @@ import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { NoAutofillSecretInput } from '@/components/whatsapp/no-autofill-field';
 import { Modal } from '@/components/modal';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface ServerFormState {
   label: string;
@@ -41,6 +42,7 @@ const emptyServerForm: ServerFormState = {
 
 export function VirtualizationPbsPanel() {
   const { workspaceId } = useWorkspaceContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [servers, setServers] = useState<VirtualizationPbsServerPublic[]>([]);
   const [details, setDetails] = useState<Record<string, VirtualizationPbsServerDetail>>({});
   const [serverForm, setServerForm] = useState<ServerFormState>(emptyServerForm);
@@ -255,7 +257,13 @@ export function VirtualizationPbsPanel() {
 
   const handleDeleteServer = async (serverId: string) => {
     if (!workspaceId) return;
-    if (!window.confirm('Remover este servidor PBS?')) return;
+    const ok = await confirm({
+      title: 'Remover servidor PBS',
+      message: 'Remover este servidor PBS?',
+      variant: 'danger',
+      confirmLabel: 'Remover',
+    });
+    if (!ok) return;
 
     setBusy(true);
     const res = await apiFetch(
@@ -596,6 +604,7 @@ export function VirtualizationPbsPanel() {
           </label>
         </form>
       </Modal>
+      {confirmDialog}
     </div>
   );
 }

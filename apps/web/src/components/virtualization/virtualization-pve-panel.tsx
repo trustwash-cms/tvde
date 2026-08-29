@@ -17,6 +17,7 @@ import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { NoAutofillSecretInput } from '@/components/whatsapp/no-autofill-field';
 import { Modal } from '@/components/modal';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
 interface ServerFormState {
   label: string;
@@ -90,6 +91,7 @@ export function VirtualizationPvePanel() {
   const searchParams = useSearchParams();
   const focusServerId = searchParams.get('server');
   const { workspaceId } = useWorkspaceContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [servers, setServers] = useState<VirtualizationPveServerPublic[]>([]);
   const [details, setDetails] = useState<Record<string, VirtualizationPveServerDetail>>({});
   const [serverForm, setServerForm] = useState<ServerFormState>(emptyServerForm);
@@ -301,7 +303,13 @@ export function VirtualizationPvePanel() {
 
   const handleDeleteServer = async (serverId: string) => {
     if (!workspaceId) return;
-    if (!window.confirm('Remover este servidor PVE?')) return;
+    const ok = await confirm({
+      title: 'Remover servidor PVE',
+      message: 'Remover este servidor PVE?',
+      variant: 'danger',
+      confirmLabel: 'Remover',
+    });
+    if (!ok) return;
 
     setBusy(true);
     const res = await apiFetch(
@@ -659,6 +667,7 @@ export function VirtualizationPvePanel() {
           </label>
         </form>
       </Modal>
+      {confirmDialog}
     </div>
   );
 }

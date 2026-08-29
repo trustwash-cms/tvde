@@ -19,6 +19,8 @@ import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { NoAutofillSecretInput } from '@/components/whatsapp/no-autofill-field';
 import { Modal } from '@/components/modal';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
+import { usePromptDialog } from '@/hooks/use-prompt-dialog';
 
 interface AccountFormState {
   label: string;
@@ -70,6 +72,8 @@ const emptyJoinTargetForm: JoinTargetFormState = {
 
 export function VirtualizationZerotierPanel() {
   const { workspaceId } = useWorkspaceContext();
+  const { confirm, confirmDialog } = useConfirmDialog();
+  const { prompt, promptDialog } = usePromptDialog();
   const [accounts, setAccounts] = useState<VirtualizationZerotierAccountPublic[]>([]);
   const [networks, setNetworks] = useState<VirtualizationZerotierNetworkPublic[]>([]);
   const [joinTargets, setJoinTargets] = useState<VirtualizationZerotierJoinTargetPublic[]>([]);
@@ -258,7 +262,14 @@ export function VirtualizationZerotierPanel() {
   };
 
   const handleDeleteAccount = async (accountId: string) => {
-    if (!workspaceId || !window.confirm('Remover esta conta ZeroTier e todas as redes associadas?')) return;
+    if (!workspaceId) return;
+    const ok = await confirm({
+      title: 'Remover conta ZeroTier',
+      message: 'Remover esta conta ZeroTier e todas as redes associadas?',
+      variant: 'danger',
+      confirmLabel: 'Remover',
+    });
+    if (!ok) return;
     setBusy(true);
     const res = await apiFetch(
       withWorkspaceQuery(API_PATHS.virtualization.zerotierAccountById(accountId), workspaceId),
@@ -320,7 +331,14 @@ export function VirtualizationZerotierPanel() {
   };
 
   const handleUnlinkNetwork = async (networkRowId: string) => {
-    if (!workspaceId || !window.confirm('Remover esta rede da app?')) return;
+    if (!workspaceId) return;
+    const ok = await confirm({
+      title: 'Remover rede',
+      message: 'Remover esta rede da app?',
+      variant: 'danger',
+      confirmLabel: 'Remover',
+    });
+    if (!ok) return;
     setBusy(true);
     const res = await apiFetch(
       withWorkspaceQuery(API_PATHS.virtualization.zerotierNetworkById(networkRowId), workspaceId),
@@ -375,7 +393,12 @@ export function VirtualizationZerotierPanel() {
     let name: string | undefined;
     if (authorized && !currentName?.trim()) {
       const suggested = memberId.slice(0, 10);
-      const entered = window.prompt('Nome do membro na rede ZeroTier:', suggested);
+      const entered = await prompt({
+        title: 'Nome do membro',
+        label: 'Nome na rede ZeroTier',
+        defaultValue: suggested,
+        confirmLabel: 'Autorizar',
+      });
       if (entered == null) return;
       name = entered.trim() || suggested;
     }
@@ -407,7 +430,12 @@ export function VirtualizationZerotierPanel() {
 
   const handleRenameMember = async (member: VirtualizationZerotierMemberPublic) => {
     if (!workspaceId || !membersNetworkId) return;
-    const entered = window.prompt('Nome do membro na rede ZeroTier:', member.name ?? member.nodeId);
+    const entered = await prompt({
+      title: 'Nome do membro',
+      label: 'Nome na rede ZeroTier',
+      defaultValue: member.name ?? member.nodeId,
+      confirmLabel: 'Guardar',
+    });
     if (entered == null) return;
     const name = entered.trim();
     if (!name) return;
@@ -648,7 +676,14 @@ export function VirtualizationZerotierPanel() {
   };
 
   const handleDeleteJoinTarget = async (targetId: string) => {
-    if (!workspaceId || !window.confirm('Remover este alvo de instalação?')) return;
+    if (!workspaceId) return;
+    const ok = await confirm({
+      title: 'Remover alvo',
+      message: 'Remover este alvo de instalação?',
+      variant: 'danger',
+      confirmLabel: 'Remover',
+    });
+    if (!ok) return;
     setBusy(true);
     const res = await apiFetch(
       withWorkspaceQuery(API_PATHS.virtualization.zerotierJoinTargetById(targetId), workspaceId),
@@ -1403,6 +1438,8 @@ export function VirtualizationZerotierPanel() {
           ) : null}
         </form>
       </Modal>
+      {confirmDialog}
+      {promptDialog}
     </section>
   );
 }
