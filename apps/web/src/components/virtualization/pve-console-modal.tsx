@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import type { VirtualizationPveConsoleSession } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { buildVirtualizationWsUrl } from './pve-ws-url';
@@ -24,8 +25,26 @@ type RfbInstance = {
 export function PveConsoleModal({ open, onClose, workspaceId, session }: PveConsoleModalProps) {
   const screenRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
+  const fitRef = useRef<(() => void) | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!open) setExpanded(false);
+  }, [open]);
+
+  // Reajustar VNC/xterm quando o utilizador amplia ou a janela muda.
+  useEffect(() => {
+    if (!open) return;
+    const id = window.setTimeout(() => fitRef.current?.(), 50);
+    const onWinResize = () => fitRef.current?.();
+    window.addEventListener('resize', onWinResize);
+    return () => {
+      window.clearTimeout(id);
+      window.removeEventListener('resize', onWinResize);
+    };
+  }, [open, expanded]);
 
   useEffect(() => {
     if (!open || !session) return;
@@ -34,13 +53,13 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
     let cleanup: (() => void) | undefined;
     setError('');
     setStatus('A ligar…');
+    fitRef.current = null;
 
     void (async () => {
       try {
         const wsUrl = buildVirtualizationWsUrl(session.websocketPath, workspaceId);
 
         if (session.mode === 'vnc') {
-          // Esperar o contentor existir no DOM (modal portal).
           await new Promise((r) => requestAnimationFrame(() => r(undefined)));
           const host = screenRef.current;
           if (!host) {
@@ -54,13 +73,31 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
 
           const { default: RFB } = await import('@novnc/novnc');
 
-          // No Proxmox, o ticket do vncproxy é a password RFB.
           const rfb = new RFB(host, wsUrl, {
             wsProtocols: ['binary'],
             credentials: { password: session.ticket },
           }) as unknown as RfbInstance;
           rfb.scaleViewport = true;
           rfb.resizeSession = true;
+
+          const ro = new ResizeObserver(() => {
+            // scaleViewport reage ao tamanho do contentor no próximo frame
+            requestAnimationFrame(() => {
+              try {
+                rfb.focus();
+              } catch {
+                // ignore
+              }
+            });
+          });
+          ro.observe(host);
+          fitRef.current = () => {
+            try {
+              rfb.focus();
+            } catch {
+              // ignore
+            }
+          };
 
           rfb.addEventListener('connect', () => {
             if (!disposed) {
@@ -93,6 +130,8 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
           });
 
           cleanup = () => {
+            ro.disconnect();
+            fitRef.current = null;
             try {
               rfb.disconnect();
             } catch {
@@ -115,7 +154,7 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
 
         const term = new Terminal({
           cursorBlink: true,
-          fontSize: 13,
+          fontSize: expanded ? 15 : 13,
           theme: { background: '#0f172a', foreground: '#e2e8f0' },
         });
         const fit = new FitAddon();
@@ -126,8 +165,22 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
         const socket = new WebSocket(wsUrl);
         socket.binaryType = 'arraybuffer';
 
+        const doFit = () => {
+          fit.fit();
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+          }
+        };
+        fitRef.current = doFit;
+
+        const ro = new ResizeObserver(() => doFit());
+        ro.observe(host);
+
         socket.onopen = () => {
-          if (!disposed) setStatus('Ligado');
+          if (!disposed) {
+            setStatus('Ligado');
+            doFit();
+          }
         };
         socket.onmessage = (ev) => {
           if (typeof ev.data === 'string') {
@@ -146,16 +199,9 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
           if (socket.readyState === WebSocket.OPEN) socket.send(data);
         });
 
-        const onResize = () => {
-          fit.fit();
-          if (socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-          }
-        };
-        window.addEventListener('resize', onResize);
-
         cleanup = () => {
-          window.removeEventListener('resize', onResize);
+          ro.disconnect();
+          fitRef.current = null;
           try {
             socket.close();
           } catch {
@@ -177,25 +223,51 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
     };
   }, [open, session, workspaceId]);
 
+  const handleClose = () => {
+    setExpanded(false);
+    onClose();
+  };
+
+  const consoleHeight = expanded
+    ? 'h-[calc(98vh-9rem)] min-h-[420px]'
+    : 'h-[min(75vh,640px)]';
+
   return (
     <Modal
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       title={
         session
           ? `Consola · ${session.name} (${session.guestType.toUpperCase()} ${session.vmid})`
           : 'Consola'
       }
-      panelClassName="max-w-5xl"
+      panelClassName={
+        expanded
+          ? '!max-h-[98vh] !max-w-[98vw] w-[98vw]'
+          : 'max-w-6xl'
+      }
       scrollBody
       showCloseButton
       overlayClassName="z-[60]"
+      closeOnBackdrop={!expanded}
+      headerActions={
+        <button
+          type="button"
+          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+          aria-label={expanded ? 'Reduzir consola' : 'Ampliar consola'}
+          title={expanded ? 'Reduzir' : 'Ampliar'}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+        </button>
+      }
     >
-      <p className="mb-3 text-xs text-slate-500">
-        Consola via proxy da API (como no browser do PVE). Clique na área escura para focar o
-        teclado/rato.
-      </p>
-      {status ? <p className="mb-2 text-xs text-slate-600">{status}</p> : null}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-slate-500">
+          Clique na área escura para focar. Use o botão ampliar no canto para ecrã quase completo.
+        </p>
+        {status ? <p className="text-xs text-slate-600">{status}</p> : null}
+      </div>
       {error ? (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
           {error}
@@ -204,10 +276,13 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
       {session?.mode === 'vnc' ? (
         <div
           ref={screenRef}
-          className="h-[min(70vh,560px)] overflow-hidden rounded-lg bg-slate-900"
+          className={`${consoleHeight} overflow-hidden rounded-lg bg-slate-900`}
         />
       ) : (
-        <div ref={termRef} className="h-[min(70vh,560px)] overflow-hidden rounded-lg bg-slate-900 p-2" />
+        <div
+          ref={termRef}
+          className={`${consoleHeight} overflow-hidden rounded-lg bg-slate-900 p-2`}
+        />
       )}
     </Modal>
   );

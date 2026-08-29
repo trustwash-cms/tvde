@@ -19,6 +19,8 @@ interface ModalProps {
   closeOnEscape?: boolean;
   /** Botão X no cabeçalho (defeito: false). */
   showCloseButton?: boolean;
+  /** Acções extra à esquerda do botão fechar. */
+  headerActions?: ReactNode;
   /** Classes extra no overlay (ex. z-[60] sobre outro modal). */
   overlayClassName?: string;
 }
@@ -34,6 +36,7 @@ export function Modal({
   closeOnBackdrop = true,
   closeOnEscape = true,
   showCloseButton = false,
+  headerActions,
   overlayClassName,
 }: ModalProps) {
   const [mounted, setMounted] = useState(false);
@@ -80,11 +83,11 @@ export function Modal({
         aria-labelledby={title ? 'modal-title' : undefined}
         className={`relative z-10 w-full rounded-2xl bg-white shadow-xl ${
           scrollBody
-            ? `flex max-h-[min(90vh,720px)] flex-col overflow-hidden ${panelClassName ?? 'max-w-lg'}`
+            ? `flex max-h-[min(92vh,900px)] flex-col overflow-hidden ${panelClassName ?? 'max-w-lg'}`
             : `p-6 sm:p-8 ${panelClassName ?? 'max-w-lg'}`
         }`}
       >
-        {(title || showCloseButton) && (
+        {(title || showCloseButton || headerActions) && (
           <div
             className={
               scrollBody
@@ -102,16 +105,19 @@ export function Modal({
             ) : (
               <span className="flex-1" />
             )}
-            {showCloseButton && (
-              <button
-                type="button"
-                className="shrink-0 rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Fechar"
-                onClick={onClose}
-              >
-                <X size={20} />
-              </button>
-            )}
+            <div className="flex shrink-0 items-center gap-1">
+              {headerActions}
+              {showCloseButton && (
+                <button
+                  type="button"
+                  className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Fechar"
+                  onClick={onClose}
+                >
+                  <X size={20} />
+                </button>
+              )}
+            </div>
           </div>
         )}
         {scrollBody ? (
