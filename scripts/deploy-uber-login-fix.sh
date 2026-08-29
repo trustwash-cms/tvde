@@ -48,6 +48,7 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$HOST" 'set -e
 
   npm install --no-audit --no-fund
   npm run db:migrate:deploy
+  npm run db:generate
   npm run build --workspace=@tvde/shared
   npm run build --workspace=apps/api
   npm run build --workspace=apps/web
