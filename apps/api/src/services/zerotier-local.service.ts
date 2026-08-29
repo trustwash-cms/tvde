@@ -60,8 +60,89 @@ async function resolveCliPath(): Promise<string | null> {
 
 async function canSudoNopass(): Promise<boolean> {
   if (process.getuid?.() === 0) return true;
+  const cli = await resolveCliPath();
+  if (cli) {
+    const zt = await runLocal(cli, ['info'], { sudo: true });
+    if (zt.code === 0) return true;
+  }
   const check = await runLocal('sudo', ['-n', 'true']);
   return check.code === 0;
+}
+
+const SETUP_HINT =
+  'No servidor da API corre uma vez: bash ~/tvde/scripts/setup-zerotier-api-host.sh (pede o sudo). Depois «Entrar em todas as redes». A password SSH do workspace é para PBS/PVE, não para este host.';
+
+async function runScriptViaSudoBash(script: string): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    const child = spawn('sudo', ['-n', 'bash', '-s'], {
+      env: { ...process.env, PATH: `${ZT_PATH}:${process.env.PATH ?? ''}` },
+    });
+    const out: string[] = [];
+    const err: string[] = [];
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      resolve({ stdout: out.join(''), stderr: err.join('') || 'timeout', code: 1 });
+    }, 180_000);
+    child.stdout.on('data', (d) => out.push(String(d)));
+    child.stderr.on('data', (d) => err.push(String(d)));
+    child.on('close', (c) => {
+      clearTimeout(timer);
+      resolve({ stdout: out.join(''), stderr: err.join(''), code: c ?? 1 });
+    });
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ stdout: '', stderr: e.message, code: 1 });
+    });
+    child.stdin.write(script);
+    child.stdin.end();
+  });
+}
+
+/** Join/authorize usando só `sudo -n zerotier-cli` (após setup-zerotier-api-host.sh). */
+async function provisionViaSudoZerotierCli(
+  networkId: string,
+  append: (line: string) => void
+): Promise<{ stdout: string; stderr: string; code: number }> {
+  const cli = await resolveCliPath();
+  if (!cli) {
+    return { stdout: '', stderr: 'zerotier-cli não encontrado', code: 1 };
+  }
+
+  append(`[local] sudo -n ${cli} …`);
+  const infoBefore = await runLocal(cli, ['info'], { sudo: true });
+  if (infoBefore.code !== 0) {
+    return {
+      stdout: infoBefore.stdout,
+      stderr: infoBefore.stderr || 'sudo -n zerotier-cli info falhou',
+      code: infoBefore.code,
+    };
+  }
+  if (infoBefore.stdout.trim()) append(infoBefore.stdout.trim());
+
+  const join = await runLocal(cli, ['join', networkId], { sudo: true, timeoutMs: 60_000 });
+  if (join.stdout.trim()) append(join.stdout.trim());
+  if (join.stderr.trim()) append(join.stderr.trim());
+  if (join.code !== 0) {
+    return { stdout: join.stdout, stderr: join.stderr, code: join.code };
+  }
+
+  await new Promise((r) => setTimeout(r, 2000));
+  const infoAfter = await runLocal(cli, ['info'], { sudo: true });
+  const list = await runLocal(cli, ['listnetworks'], { sudo: true });
+  const nodeMatch = infoAfter.stdout.match(/\b200\s+info\s+([a-f0-9]{10})\b/i);
+  if (nodeMatch?.[1]) append(`[zt] node_id=${nodeMatch[1].toLowerCase()}`);
+  if (list.stdout.trim()) append(list.stdout.trim());
+  return {
+    stdout: [infoAfter.stdout, list.stdout, nodeMatch?.[1] ? `[zt] node_id=${nodeMatch[1].toLowerCase()}` : '']
+      .filter(Boolean)
+      .join('\n'),
+    stderr: `${infoAfter.stderr}${list.stderr}`,
+    code: infoAfter.code,
+  };
 }
 
 function parseNetworks(listOutput: string): VirtualizationZerotierLocalHostPublic['networks'] {
@@ -115,8 +196,8 @@ export async function getLocalZerotierHostStatus(): Promise<VirtualizationZeroti
       networks: [],
       lastError: null,
       hint: sudoPasswordless
-        ? 'ZeroTier não instalado neste servidor. Use «Instalar neste servidor» com uma rede associada.'
-        : 'ZeroTier não instalado. A app corre como utilizador sem sudo sem password — o install usa SSH root@127.0.0.1 com as credenciais SSH do workspace.',
+        ? 'ZeroTier não instalado neste servidor. Use «Instalar / join aqui» com uma rede associada.'
+        : SETUP_HINT,
     };
   }
 
@@ -149,8 +230,8 @@ export async function getLocalZerotierHostStatus(): Promise<VirtualizationZeroti
       lastError: (info.stderr || info.stdout || 'zerotier-cli info falhou').trim().slice(0, 500),
       hint: needsRoot
         ? sudoPasswordless
-          ? 'CLI instalado mas precisa de root (sudo). Tente «Instalar / join neste servidor».'
-          : 'CLI presente (ex. snap) mas sem serviço/root. Instale o pacote oficial via «Instalar neste servidor» (SSH root@127.0.0.1).'
+          ? 'CLI instalado mas precisa de root (sudo). Tente «Instalar / join aqui».'
+          : SETUP_HINT
         : 'zerotier-cli instalado mas o serviço não responde.',
     };
   }
@@ -195,8 +276,9 @@ function getClientConfig(row: {
 
 /**
  * Instala/join ZeroTier no servidor onde a API corre.
- * Preferência: SSH root@127.0.0.1 com credenciais do workspace (macbusinesss não tem sudo NOPASSWD).
- * Fallback: sudo -n local se disponível.
+ * 1) Preferência: sudo -n zerotier-cli (após scripts/setup-zerotier-api-host.sh)
+ * 2) Fallback: sudo -n bash (NOPASSWD total)
+ * 3) Último recurso: SSH 127.0.0.1 com credenciais do workspace (só se forem deste host)
  */
 export async function provisionLocalZerotierHost(
   tenantId: string,
@@ -222,79 +304,75 @@ export async function provisionLocalZerotierHost(
   let stderr = '';
   let code = 1;
 
-  const hasWorkspaceSsh =
-    (workspaceSsh.sshAuthMode === 'password' && Boolean(workspaceSsh.encryptedSshPassword)) ||
-    (workspaceSsh.sshAuthMode === 'private_key' && Boolean(workspaceSsh.encryptedSshPrivateKey));
-
-  if (hasWorkspaceSsh) {
-    append(
-      `[local] a provisionar via SSH ${workspaceSsh.sshDefaultUsername}@127.0.0.1:${workspaceSsh.sshDefaultPort} (credenciais do workspace)`
-    );
-    const sshResult = await sshExec(
-      buildSshExecOptionsFromJoinTarget({
-        sshHost: '127.0.0.1',
-        sshPort: workspaceSsh.sshDefaultPort || 22,
-        sshUsername: workspaceSsh.sshDefaultUsername || 'root',
-        sshAuthMode: workspaceSsh.sshAuthMode,
-        encryptedSshPassword: workspaceSsh.encryptedSshPassword,
-        encryptedSshPrivateKey: workspaceSsh.encryptedSshPrivateKey,
-        encryptedSshPassphrase: workspaceSsh.encryptedSshPassphrase,
-        decrypt,
-        command: `bash -s <<'ZT_EOF'\n${script}\nZT_EOF`,
-        timeoutMs: 180_000,
-      })
-    );
-    stdout = sshResult.stdout;
-    stderr = sshResult.stderr;
-    code = sshResult.code;
+  const viaCli = await provisionViaSudoZerotierCli(network.networkId, append);
+  if (viaCli.code === 0) {
+    stdout = viaCli.stdout;
+    stderr = viaCli.stderr;
+    code = 0;
   } else if (await canSudoNopass()) {
-    append('[local] a provisionar com sudo -n (sem password)');
-    const viaSudo = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-      const child = spawn('sudo', ['-n', 'bash', '-s'], {
-        env: { ...process.env, PATH: `${ZT_PATH}:${process.env.PATH ?? ''}` },
-      });
-      const out: string[] = [];
-      const err: string[] = [];
-      const timer = setTimeout(() => {
-        try {
-          child.kill('SIGKILL');
-        } catch {
-          /* ignore */
-        }
-        resolve({ stdout: out.join(''), stderr: err.join('') || 'timeout', code: 1 });
-      }, 180_000);
-      child.stdout.on('data', (d) => out.push(String(d)));
-      child.stderr.on('data', (d) => err.push(String(d)));
-      child.on('close', (c) => {
-        clearTimeout(timer);
-        resolve({ stdout: out.join(''), stderr: err.join(''), code: c ?? 1 });
-      });
-      child.on('error', (e) => {
-        clearTimeout(timer);
-        resolve({ stdout: '', stderr: e.message, code: 1 });
-      });
-      child.stdin.write(script);
-      child.stdin.end();
-    });
+    append('[local] a provisionar com sudo -n bash');
+    const viaSudo = await runScriptViaSudoBash(script);
     stdout = viaSudo.stdout;
     stderr = viaSudo.stderr;
     code = viaSudo.code;
   } else {
-    throw new Error(
-      'Configure as credenciais SSH do workspace (utilizador root) — a app corre como macbusinesss sem sudo sem password, e usa SSH a 127.0.0.1 para instalar ZeroTier neste servidor.'
+    const hasWorkspaceSsh =
+      (workspaceSsh.sshAuthMode === 'password' && Boolean(workspaceSsh.encryptedSshPassword)) ||
+      (workspaceSsh.sshAuthMode === 'private_key' && Boolean(workspaceSsh.encryptedSshPrivateKey));
+
+    if (!hasWorkspaceSsh) {
+      throw Object.assign(new Error(SETUP_HINT), { provisionLog: logLines.join('\n') });
+    }
+
+    append(
+      `[local] fallback SSH ${workspaceSsh.sshDefaultUsername}@127.0.0.1:${workspaceSsh.sshDefaultPort} (só funciona se for a password/chave DESTE servidor, não a dos PBS/PVE)`
     );
+    try {
+      const sshResult = await sshExec(
+        buildSshExecOptionsFromJoinTarget({
+          sshHost: '127.0.0.1',
+          sshPort: workspaceSsh.sshDefaultPort || 22,
+          sshUsername: workspaceSsh.sshDefaultUsername || 'root',
+          sshAuthMode: workspaceSsh.sshAuthMode,
+          encryptedSshPassword: workspaceSsh.encryptedSshPassword,
+          encryptedSshPrivateKey: workspaceSsh.encryptedSshPrivateKey,
+          encryptedSshPassphrase: workspaceSsh.encryptedSshPassphrase,
+          decrypt,
+          command: `bash -s <<'ZT_EOF'\n${script}\nZT_EOF`,
+          timeoutMs: 180_000,
+        })
+      );
+      stdout = sshResult.stdout;
+      stderr = sshResult.stderr;
+      code = sshResult.code;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      append(`[erro] SSH local: ${msg}`);
+      throw Object.assign(
+        new Error(
+          /authentication methods failed|All configured authentication/i.test(msg)
+            ? SETUP_HINT
+            : msg
+        ),
+        { provisionLog: logLines.join('\n') }
+      );
+    }
   }
 
   if (stdout.trim()) append(stdout.trim());
   if (stderr.trim()) append(stderr.trim());
 
   if (code !== 0) {
-    throw Object.assign(new Error(`Provisionamento local falhou (código ${code})`), {
-      provisionLog: logLines.join('\n'),
-    });
+    const authFail = /authentication methods failed|All configured authentication/i.test(
+      `${stdout}\n${stderr}`
+    );
+    throw Object.assign(
+      new Error(authFail ? SETUP_HINT : `Provisionamento local falhou (código ${code})`),
+      { provisionLog: logLines.join('\n') }
+    );
   }
 
-  let nodeId = parseNodeIdFromProvisionOutput(stdout);
+  let nodeId = parseNodeIdFromProvisionOutput(stdout + '\n' + logLines.join('\n'));
   if (!nodeId) {
     const status = await getLocalZerotierHostStatus();
     nodeId = status.nodeId;
