@@ -106,7 +106,14 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
     .on('ready', () => {
       conn.shell({ term: 'xterm-256color' }, (err, stream) => {
         if (err) {
-          closeBoth(1011, err.message.slice(0, 100));
+          if (browser.readyState === WebSocket.OPEN) {
+            try {
+              browser.send(`\r\n[SSH] ${err.message}\r\n`);
+            } catch {
+              // ignore
+            }
+          }
+          closeBoth(1011, err.message.slice(0, 120));
           return;
         }
 
@@ -153,7 +160,14 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
       });
     })
     .on('error', (err: Error) => {
-      closeBoth(1011, err.message.slice(0, 100));
+      if (browser.readyState === WebSocket.OPEN) {
+        try {
+          browser.send(`\r\n[SSH] ${err.message}\r\n`);
+        } catch {
+          // ignore
+        }
+      }
+      closeBoth(1011, err.message.slice(0, 120));
     })
     .on('close', () => closeBoth());
 

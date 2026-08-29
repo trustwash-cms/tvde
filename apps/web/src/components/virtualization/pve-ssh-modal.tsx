@@ -141,9 +141,10 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         else term.write(new Uint8Array(ev.data as ArrayBuffer));
       };
       socket.onerror = () => setError('Erro na ligação SSH');
-      socket.onclose = () => {
+      socket.onclose = (ev) => {
         setConnected(false);
-        setError((prev) => prev || 'SSH desligado');
+        const reason = ev.reason?.trim();
+        setError((prev) => prev || reason || 'SSH desligado');
       };
       term.onData((data) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(data);
