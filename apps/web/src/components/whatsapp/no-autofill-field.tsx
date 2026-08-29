@@ -30,6 +30,7 @@ export function NoAutofillInput({
 export function NoAutofillSecretInput({
   className,
   onFocus,
+  onClick,
   ...props
 }: InputHTMLAttributes<HTMLInputElement>) {
   return (
@@ -39,6 +40,10 @@ export function NoAutofillSecretInput({
       className={className}
       autoComplete="new-password"
       readOnly
+      onClick={(e) => {
+        e.currentTarget.removeAttribute('readonly');
+        onClick?.(e);
+      }}
       onFocus={(e) => unlockOnFocus(e, onFocus)}
     />
   );

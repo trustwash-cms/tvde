@@ -107,6 +107,7 @@ export function VirtualizationPvePanel() {
   const [testFeedback, setTestFeedback] = useState<
     Record<string, { type: 'success' | 'error'; message: string }>
   >({});
+  const [savingPhase, setSavingPhase] = useState<'idle' | 'saving' | 'testing'>('idle');
   const submittingRef = useRef(false);
 
   const loadServers = useCallback(async () => {
@@ -196,13 +197,27 @@ export function VirtualizationPvePanel() {
     setServerModalOpen(true);
   };
 
-  const handleServerSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!workspaceId || submittingRef.current || busy) return;
+  const handleServerSubmit = async (event?: FormEvent) => {
+    event?.preventDefault();
+    if (!workspaceId) {
+      setModalError('Seleccione um workspace antes de guardar.');
+      return;
+    }
+    if (submittingRef.current || busy) return;
 
     const tokenId = serverForm.apiTokenId.trim();
     const tokenSecret = normalizePveApiTokenSecret(serverForm.apiTokenSecret);
+    const label = serverForm.label.trim();
+    const baseUrl = serverForm.baseUrl.trim().replace(/\/+$/, '');
 
+    if (!label) {
+      setModalError('A etiqueta é obrigatória.');
+      return;
+    }
+    if (!baseUrl) {
+      setModalError('A URL base é obrigatória.');
+      return;
+    }
     if (!editingId && (!tokenId || !tokenSecret)) {
       setModalError('Token ID e Secret são obrigatórios ao adicionar um servidor.');
       return;
@@ -216,6 +231,7 @@ export function VirtualizationPvePanel() {
     const wasCreate = !editingId;
     submittingRef.current = true;
     setBusy(true);
+    setSavingPhase('saving');
     setModalError('');
     setError('');
     setMessage('');
@@ -227,9 +243,9 @@ export function VirtualizationPvePanel() {
         .filter(Boolean);
 
       const payload = {
-        label: serverForm.label,
+        label,
         tags,
-        baseUrl: serverForm.baseUrl.trim().replace(/\/+$/, ''),
+        baseUrl,
         verifySsl: serverForm.verifySsl,
         isActive: serverForm.isActive,
         ...(tokenId && tokenSecret
@@ -260,7 +276,7 @@ export function VirtualizationPvePanel() {
           );
 
       if (!res.data) {
-        setModalError(getApiErrorMessage(res));
+        setModalError(getApiErrorMessage(res) || 'Não foi possível guardar o servidor.');
         return;
       }
 
@@ -270,6 +286,7 @@ export function VirtualizationPvePanel() {
         setEditingOriginalTokenId(res.data.apiTokenId ?? tokenId);
       }
 
+      setSavingPhase('testing');
       const testRes = await apiFetch<{ ok: true; version: string; nodes: string[] }>(
         withWorkspaceQuery(API_PATHS.virtualization.pveServerTest(serverId), workspaceId),
         { method: 'POST' },
@@ -286,7 +303,7 @@ export function VirtualizationPvePanel() {
         await loadServers();
       } else {
         setModalError(
-          `Ligação falhou: ${formatProxmoxAuthError(getApiErrorMessage(testRes), 'pve')}`
+          `Guardado, mas a ligação falhou: ${formatProxmoxAuthError(getApiErrorMessage(testRes), 'pve')}`
         );
         setServerForm((prev) => ({
           ...prev,
@@ -295,9 +312,12 @@ export function VirtualizationPvePanel() {
         }));
         await loadServers();
       }
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'Erro ao guardar o servidor.');
     } finally {
       submittingRef.current = false;
       setBusy(false);
+      setSavingPhase('idle');
     }
   };
 
@@ -555,13 +575,31 @@ export function VirtualizationPvePanel() {
         scrollBody
         showCloseButton
         footer={
-          <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" className="btn-secondary" onClick={closeServerModal} disabled={busy}>
-              Cancelar
-            </button>
-            <button type="submit" form="virtualization-pve-server-form" className="btn-primary" disabled={busy}>
-              {busy ? 'A guardar…' : editingId ? 'Guardar alterações' : 'Adicionar servidor'}
-            </button>
+          <div className="space-y-3">
+            {modalError ? (
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+                {modalError}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={closeServerModal} disabled={busy}>
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={busy}
+                onClick={() => void handleServerSubmit()}
+              >
+                {savingPhase === 'testing'
+                  ? 'A testar ligação…'
+                  : busy
+                    ? 'A guardar…'
+                    : editingId
+                      ? 'Guardar alterações'
+                      : 'Adicionar servidor'}
+              </button>
+            </div>
           </div>
         }
       >
@@ -579,15 +617,9 @@ export function VirtualizationPvePanel() {
           </ul>
         </div>
 
-        {modalError ? (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {modalError}
-          </div>
-        ) : null}
-
         <form
           id="virtualization-pve-server-form"
-          onSubmit={handleServerSubmit}
+          onSubmit={(e) => void handleServerSubmit(e)}
           className="mt-5 grid gap-4 md:grid-cols-2"
         >
           <label className="block text-sm">
@@ -597,7 +629,6 @@ export function VirtualizationPvePanel() {
               value={serverForm.label}
               onChange={(e) => setServerForm((prev) => ({ ...prev, label: e.target.value }))}
               placeholder="PVE Cesario"
-              required
             />
           </label>
 
@@ -617,7 +648,6 @@ export function VirtualizationPvePanel() {
               value={serverForm.baseUrl}
               onChange={(e) => setServerForm((prev) => ({ ...prev, baseUrl: e.target.value }))}
               placeholder="https://192.168.x.x:8006"
-              required
             />
           </label>
 
@@ -628,7 +658,6 @@ export function VirtualizationPvePanel() {
               value={serverForm.apiTokenId}
               onChange={(e) => setServerForm((prev) => ({ ...prev, apiTokenId: e.target.value }))}
               placeholder="root@pam!PVEcv"
-              required={!editingId}
               autoComplete="off"
             />
           </label>
@@ -644,7 +673,6 @@ export function VirtualizationPvePanel() {
                 setServerForm((prev) => ({ ...prev, apiTokenSecret: e.target.value }))
               }
               placeholder="uuid-do-secret"
-              required={!editingId}
             />
           </label>
 
