@@ -12,6 +12,7 @@ import { extractPveApiTokenId, normalizePveApiTokenValue } from '@tvde/shared';
 import { decrypt, encrypt } from '../lib/crypto';
 import {
   pveGuestAgentNetworkInterfaces,
+  pveGuestPower,
   pveListClusterResources,
   pveListNodes,
   pveListStorageResources,
@@ -280,11 +281,87 @@ export async function listVirtualizationPveGuests(
   serverId: string
 ): Promise<VirtualizationPveGuest[]> {
   const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const manualIps = parseGuestManualIps(server.guestManualIps);
   const resources = await pveListClusterResources(getClientConfig(server));
   return resources
     .map(mapPveGuestResource)
     .filter((guest): guest is VirtualizationPveGuest => guest != null)
+    .map((guest) => ({
+      ...guest,
+      manualIp: manualIps[guestManualIpKey(guest.type, guest.vmid)] ?? null,
+    }))
     .sort((a, b) => a.vmid - b.vmid || a.name.localeCompare(b.name, 'pt'));
+}
+
+function guestManualIpKey(guestType: VirtualizationPveGuestType, vmid: number): string {
+  return `${guestType}:${vmid}`;
+}
+
+function parseGuestManualIps(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'string' && raw.trim()) out[key] = raw.trim();
+  }
+  return out;
+}
+
+export async function setVirtualizationPveGuestManualIp(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string,
+  guestType: VirtualizationPveGuestType,
+  vmid: number,
+  ip: string | null
+): Promise<VirtualizationPveGuest> {
+  const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const key = guestManualIpKey(guestType, vmid);
+  const next = parseGuestManualIps(server.guestManualIps);
+  const cleaned = (ip ?? '').trim();
+  if (cleaned) {
+    // Validação leve IPv4/IPv6
+    if (!/^[\d.:a-fA-F]+$/.test(cleaned) || cleaned.length > 45) {
+      throw new Error('IP inválido');
+    }
+    next[key] = cleaned;
+  } else {
+    delete next[key];
+  }
+
+  await prisma.virtualizationPveServer.update({
+    where: { id: serverId },
+    data: { guestManualIps: next },
+  });
+
+  const guests = await listVirtualizationPveGuests(tenantId, workspaceId, serverId);
+  const guest = guests.find((item) => item.type === guestType && item.vmid === vmid);
+  if (!guest) throw new Error('Guest não encontrado');
+  return guest;
+}
+
+export async function powerVirtualizationPveGuest(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string,
+  guestType: VirtualizationPveGuestType,
+  vmid: number,
+  action: 'start' | 'stop'
+): Promise<{ ok: true }> {
+  const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const guests = await listVirtualizationPveGuests(tenantId, workspaceId, serverId);
+  const guest = guests.find((item) => item.type === guestType && item.vmid === vmid);
+  if (!guest) throw new Error('Guest não encontrado');
+
+  const running = guest.status.toLowerCase() === 'running';
+  if (action === 'start' && running) {
+    throw new Error('A máquina já está a correr');
+  }
+  if (action === 'stop' && !running) {
+    throw new Error('A máquina já está parada');
+  }
+
+  await pveGuestPower(getClientConfig(server), guest.node, guestType, vmid, action);
+  return { ok: true };
 }
 
 function extractIpv4FromAgentPayload(payload: unknown): VirtualizationPveGuestNetworkAddress[] {

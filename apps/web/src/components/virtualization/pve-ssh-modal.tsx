@@ -40,7 +40,7 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
     setPassword('');
     setPrivateKey('');
     setNetwork(null);
-    setHost('');
+    setHost(guest.manualIp?.trim() || '');
 
     void (async () => {
       const res = await apiFetch<VirtualizationPveGuestNetwork>(
@@ -53,13 +53,17 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
       );
       if (res.data) {
         setNetwork(res.data);
-        const preferred =
-          res.data.ips.find((ip) => ip.family === 'ipv4') ?? res.data.ips[0] ?? null;
-        if (preferred) setHost(preferred.address);
-        if (!res.data.ips.length && res.data.reason) {
+        if (guest.manualIp?.trim()) {
+          setHost(guest.manualIp.trim());
+        } else {
+          const preferred =
+            res.data.ips.find((ip) => ip.family === 'ipv4') ?? res.data.ips[0] ?? null;
+          if (preferred) setHost(preferred.address);
+        }
+        if (!res.data.ips.length && !guest.manualIp && res.data.reason) {
           setError(res.data.reason);
         }
-      } else {
+      } else if (!guest.manualIp) {
         setError(getApiErrorMessage(res) || 'Não foi possível obter IPs');
       }
     })();
@@ -217,19 +221,30 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         <form id="pve-ssh-connect-form" onSubmit={(e) => void handleConnect(e)} className="grid gap-3 md:grid-cols-2">
           <label className="block text-sm md:col-span-2">
             <span className="mb-1 block text-slate-700">IP / host</span>
-            {network && network.ips.length > 0 ? (
-              <select
-                className="input w-full"
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
-              >
-                {network.ips.map((ip) => (
-                  <option key={`${ip.interfaceName}-${ip.address}`} value={ip.address}>
-                    {ip.address}
-                    {ip.interfaceName ? ` (${ip.interfaceName})` : ''} · {ip.family}
-                  </option>
-                ))}
-              </select>
+            {guest?.manualIp || (network && network.ips.length > 0) ? (
+              <div className="space-y-2">
+                <select
+                  className="input w-full"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                >
+                  {guest?.manualIp ? (
+                    <option value={guest.manualIp}>{guest.manualIp} · manual</option>
+                  ) : null}
+                  {(network?.ips ?? []).map((ip) => (
+                    <option key={`${ip.interfaceName}-${ip.address}`} value={ip.address}>
+                      {ip.address}
+                      {ip.interfaceName ? ` (${ip.interfaceName})` : ''} · {ip.family}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="input w-full"
+                  value={host}
+                  onChange={(e) => setHost(e.target.value)}
+                  placeholder="Ou escreva outro IP"
+                />
+              </div>
             ) : (
               <input
                 className="input w-full"

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { Copy, Pencil, Play, Square } from 'lucide-react';
 import {
   WEB_ROUTES,
   formatVirtualizationBytes,
@@ -11,6 +12,8 @@ import {
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { Modal } from '@/components/modal';
+import { usePromptDialog } from '@/hooks/use-prompt-dialog';
+import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { PveConsoleModal } from './pve-console-modal';
 import { PveSshModal } from './pve-ssh-modal';
 
@@ -33,9 +36,12 @@ export function PveGuestsModal({
   serverId,
   serverLabel,
 }: PveGuestsModalProps) {
+  const { prompt, promptDialog } = usePromptDialog();
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [guests, setGuests] = useState<VirtualizationPveGuest[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [consoleSession, setConsoleSession] = useState<VirtualizationPveConsoleSession | null>(null);
   const [sshGuest, setSshGuest] = useState<VirtualizationPveGuest | null>(null);
@@ -63,6 +69,8 @@ export function PveGuestsModal({
       void loadGuests();
       setConsoleSession(null);
       setSshGuest(null);
+      setMessage('');
+      setError('');
     }
   }, [open, serverId, loadGuests]);
 
@@ -92,6 +100,89 @@ export function PveGuestsModal({
     setSshGuest(guest);
   };
 
+  const powerGuest = async (guest: VirtualizationPveGuest, action: 'start' | 'stop') => {
+    if (!workspaceId || !serverId) return;
+    if (action === 'stop') {
+      const ok = await confirm({
+        title: `Parar ${guest.name}?`,
+        message: `Vai enviar stop ao ${guest.type === 'qemu' ? 'VM' : 'CT'} ${guest.vmid}.`,
+        variant: 'danger',
+        confirmLabel: 'Parar',
+      });
+      if (!ok) return;
+    }
+
+    setActionBusy(guestKey(guest));
+    setError('');
+    setMessage('');
+    const path =
+      action === 'start'
+        ? API_PATHS.virtualization.pveServerGuestStart(serverId, guest.type, guest.vmid)
+        : API_PATHS.virtualization.pveServerGuestStop(serverId, guest.type, guest.vmid);
+    const res = await apiFetch<{ ok: true }>(
+      withWorkspaceQuery(path, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    setActionBusy(null);
+    if (!res.success && !res.data) {
+      setError(getApiErrorMessage(res) || `Falha ao ${action === 'start' ? 'iniciar' : 'parar'}`);
+      return;
+    }
+    setMessage(
+      action === 'start'
+        ? `${guest.name}: pedido de start enviado.`
+        : `${guest.name}: pedido de stop enviado.`
+    );
+    window.setTimeout(() => void loadGuests(), 1500);
+  };
+
+  const editIp = async (guest: VirtualizationPveGuest) => {
+    if (!workspaceId || !serverId) return;
+    const value = await prompt({
+      title: `IP · ${guest.name}`,
+      message: 'IP manual (usado no SSH). Deixe vazio para limpar.',
+      defaultValue: guest.manualIp ?? '',
+      confirmLabel: 'Guardar',
+      placeholder: '10.x.x.x',
+    });
+    if (value === null) return;
+
+    setActionBusy(guestKey(guest));
+    setError('');
+    const res = await apiFetch<VirtualizationPveGuest>(
+      withWorkspaceQuery(
+        API_PATHS.virtualization.pveServerGuestIp(serverId, guest.type, guest.vmid),
+        workspaceId
+      ),
+      {
+        method: 'PUT',
+        body: JSON.stringify({ ip: value.trim() ? value.trim() : null }),
+      },
+      getStoredToken()
+    );
+    setActionBusy(null);
+    if (!res.data) {
+      setError(getApiErrorMessage(res) || 'Não foi possível guardar o IP');
+      return;
+    }
+    setGuests((prev) =>
+      prev.map((item) =>
+        item.type === guest.type && item.vmid === guest.vmid ? { ...item, ...res.data } : item
+      )
+    );
+    setMessage(`IP de ${guest.name} actualizado.`);
+  };
+
+  const copyIp = async (ip: string) => {
+    try {
+      await navigator.clipboard.writeText(ip);
+      setMessage(`IP copiado: ${ip}`);
+    } catch {
+      setError('Não foi possível copiar o IP');
+    }
+  };
+
   const running = guests.filter((g) => isRunning(g.status)).length;
 
   return (
@@ -100,7 +191,7 @@ export function PveGuestsModal({
         open={open}
         onClose={onClose}
         title={`Guests · ${serverLabel}`}
-        panelClassName="max-w-3xl"
+        panelClassName="max-w-5xl"
         scrollBody
         showCloseButton
       >
@@ -126,6 +217,11 @@ export function PveGuestsModal({
           </div>
         </div>
 
+        {message ? (
+          <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            {message}
+          </div>
+        ) : null}
         {error ? (
           <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
             {error}
@@ -144,8 +240,8 @@ export function PveGuestsModal({
                   <th className="pb-2 pr-3 font-medium">ID</th>
                   <th className="pb-2 pr-3 font-medium">Nome</th>
                   <th className="pb-2 pr-3 font-medium">Tipo</th>
-                  <th className="pb-2 pr-3 font-medium">Node</th>
                   <th className="pb-2 pr-3 font-medium">Estado</th>
+                  <th className="pb-2 pr-3 font-medium">IP</th>
                   <th className="pb-2 pr-3 font-medium">RAM</th>
                   <th className="pb-2 font-medium">Acções</th>
                 </tr>
@@ -154,14 +250,19 @@ export function PveGuestsModal({
                 {guests.map((guest) => {
                   const online = isRunning(guest.status);
                   const key = guestKey(guest);
+                  const busy = actionBusy === key;
                   return (
                     <tr key={key}>
                       <td className="py-2 pr-3 font-mono text-xs text-slate-700">{guest.vmid}</td>
-                      <td className="py-2 pr-3 font-medium text-slate-900">{guest.name}</td>
+                      <td className="py-2 pr-3 font-medium text-slate-900">
+                        <span className="block truncate" title={guest.name}>
+                          {guest.name}
+                        </span>
+                        <span className="text-[10px] text-slate-400">{guest.node}</span>
+                      </td>
                       <td className="py-2 pr-3 text-slate-600">
                         {guest.type === 'qemu' ? 'VM' : 'CT'}
                       </td>
-                      <td className="py-2 pr-3 text-slate-600">{guest.node}</td>
                       <td className="py-2 pr-3">
                         <span
                           className={`inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
@@ -173,6 +274,32 @@ export function PveGuestsModal({
                           {online ? 'online' : guest.status || 'offline'}
                         </span>
                       </td>
+                      <td className="py-2 pr-3">
+                        <div className="flex min-w-[8rem] items-center gap-1">
+                          <span className="font-mono text-xs text-slate-700">
+                            {guest.manualIp || '—'}
+                          </span>
+                          <button
+                            type="button"
+                            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            title="Editar IP"
+                            disabled={busy}
+                            onClick={() => void editIp(guest)}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          {guest.manualIp ? (
+                            <button
+                              type="button"
+                              className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                              title="Copiar IP"
+                              onClick={() => void copyIp(guest.manualIp!)}
+                            >
+                              <Copy size={12} />
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
                       <td className="py-2 pr-3 text-xs text-slate-600">
                         {guest.maxmem && guest.maxmem > 0
                           ? `${formatVirtualizationBytes(guest.mem ?? 0)} / ${formatVirtualizationBytes(guest.maxmem)}`
@@ -180,15 +307,34 @@ export function PveGuestsModal({
                       </td>
                       <td className="py-2">
                         <div className="flex flex-wrap gap-1.5">
+                          {online ? (
+                            <button
+                              type="button"
+                              className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs"
+                              disabled={busy}
+                              title="Parar"
+                              onClick={() => void powerGuest(guest, 'stop')}
+                            >
+                              <Square size={11} />
+                              Stop
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-secondary inline-flex items-center gap-1 px-2 py-1 text-xs"
+                              disabled={busy}
+                              title="Iniciar"
+                              onClick={() => void powerGuest(guest, 'start')}
+                            >
+                              <Play size={11} />
+                              Start
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn-secondary px-2 py-1 text-xs"
-                            disabled={!online || actionBusy === key}
-                            title={
-                              online
-                                ? 'Abrir consola (VNC / term)'
-                                : 'Máquina parada'
-                            }
+                            disabled={!online || busy}
+                            title={online ? 'Abrir consola' : 'Máquina parada'}
                             onClick={() => void openConsole(guest)}
                           >
                             Consola
@@ -196,7 +342,7 @@ export function PveGuestsModal({
                           <button
                             type="button"
                             className="btn-secondary px-2 py-1 text-xs"
-                            disabled={!online || actionBusy === key}
+                            disabled={!online || busy}
                             title={online ? 'SSH ao guest' : 'Máquina parada'}
                             onClick={() => openSsh(guest)}
                           >
@@ -229,6 +375,8 @@ export function PveGuestsModal({
           guest={sshGuest}
         />
       ) : null}
+      {promptDialog}
+      {confirmDialog}
     </>
   );
 }

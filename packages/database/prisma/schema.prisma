@@ -1969,6 +1969,8 @@ model VirtualizationPveServer {
   sortOrder         Int       @default(0) @map("sort_order")
   lastError         String?   @map("last_error") @db.Text
   lastCheckedAt     DateTime? @map("last_checked_at")
+  /// IPs manuais por guest: { "qemu:161": "10.147.20.5", "lxc:100": "..." }
+  guestManualIps    Json      @default("{}") @map("guest_manual_ips")
   createdAt         DateTime  @default(now()) @map("created_at")
   updatedAt         DateTime  @updatedAt @map("updated_at")
 

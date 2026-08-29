@@ -73,6 +73,8 @@ export interface VirtualizationPveGuest {
   cpu?: number;
   mem?: number;
   maxmem?: number;
+  /** IP guardado manualmente na app (preferido para SSH). */
+  manualIp?: string | null;
 }
 
 export interface VirtualizationPveGuestNetworkAddress {

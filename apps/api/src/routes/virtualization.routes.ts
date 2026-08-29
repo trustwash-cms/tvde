@@ -28,6 +28,8 @@ import {
   getVirtualizationPveServerDetail,
   listVirtualizationPveGuests,
   listVirtualizationPveServers,
+  powerVirtualizationPveGuest,
+  setVirtualizationPveGuestManualIp,
   testVirtualizationPveServer,
   updateVirtualizationPveServer,
 } from '../services/virtualization-pve.service';
@@ -618,6 +620,101 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao abrir SSH';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/pve/servers/:id/guests/:guestType/:vmid/start', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await powerVirtualizationPveGuest(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid,
+        'start'
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao iniciar guest';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/pve/servers/:id/guests/:guestType/:vmid/stop', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await powerVirtualizationPveGuest(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid,
+        'stop'
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao parar guest';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.put('/virtualization/pve/servers/:id/guests/:guestType/:vmid/ip', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const body = z
+      .object({
+        ip: z.string().max(45).nullable(),
+      })
+      .parse(request.body);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await setVirtualizationPveGuestManualIp(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid,
+        body.ip
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao guardar IP';
       throw fastify.httpErrors.badRequest(message);
     }
   });

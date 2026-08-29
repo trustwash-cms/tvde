@@ -184,9 +184,10 @@ export async function createVirtualizationPveSshSession(
     vmid
   );
   const allowed = new Set(network.ips.map((ip) => ip.address));
-  // Só valida contra a lista se o agent/config devolveu IPs; senão permite IP manual.
+  if (guest.manualIp) allowed.add(guest.manualIp);
+  // Se há IPs conhecidos (agent ou manual), o host tem de coincidir; senão permite IP livre.
   if (allowed.size > 0 && !allowed.has(host)) {
-    throw new Error('O IP escolhido não corresponde às interfaces detectadas do guest');
+    throw new Error('O IP escolhido não corresponde ao IP manual nem às interfaces detectadas');
   }
 
   const sessionId = randomUUID();

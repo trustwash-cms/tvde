@@ -519,6 +519,12 @@ export const API_PATHS = {
       `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/console`,
     pveServerGuestSsh: (id: string, guestType: string, vmid: number) =>
       `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/ssh`,
+    pveServerGuestStart: (id: string, guestType: string, vmid: number) =>
+      `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/start`,
+    pveServerGuestStop: (id: string, guestType: string, vmid: number) =>
+      `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/stop`,
+    pveServerGuestIp: (id: string, guestType: string, vmid: number) =>
+      `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/ip`,
     pveConsoleWs: (sessionId: string) => `/virtualization/pve/console-ws/${sessionId}`,
     pveSshWs: (sessionId: string) => `/virtualization/pve/ssh-ws/${sessionId}`,
     zerotierAccounts: '/virtualization/zerotier/accounts',

@@ -236,6 +236,20 @@ export async function pveCreateTermProxy(
   return data;
 }
 
+export async function pveGuestPower(
+  config: PveClientConfig,
+  node: string,
+  guestType: 'qemu' | 'lxc',
+  vmid: number,
+  action: 'start' | 'stop'
+): Promise<void> {
+  await pveRequest<unknown>(
+    config,
+    guestApiPath(guestType, node, vmid, `/status/${action}`),
+    { method: 'POST', body: '' }
+  );
+}
+
 export async function pveGuestAgentNetworkInterfaces(
   config: PveClientConfig,
   node: string,
