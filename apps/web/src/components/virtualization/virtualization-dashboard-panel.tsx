@@ -29,12 +29,30 @@ function formatBackupTime(iso: string | null): string {
   });
 }
 
+const BACKUPS_PAGE_SIZE = 10;
+
+/** Preferir "VM 209" / "CT 101"; evita UPIDs longos. */
+function formatBackupGuestLabel(backup: {
+  backupId: string;
+  name: string;
+}): string {
+  const name = backup.name?.trim() || '';
+  if (/^(VM|CT)\s+\d+$/i.test(name)) return name.replace(/^(vm|ct)\s+/i, (m) => m.toUpperCase());
+  if (/^\d+$/.test(backup.backupId) && /^(VM|CT)\b/i.test(name)) {
+    return `${name.match(/^(VM|CT)/i)?.[1]?.toUpperCase() ?? 'VM'} ${backup.backupId}`;
+  }
+  if (/^\d+$/.test(backup.backupId)) return `VM ${backup.backupId}`;
+  if (name && name !== '—' && name.length < 40) return name;
+  return backup.backupId.length < 24 ? backup.backupId : '—';
+}
+
 export function VirtualizationDashboardPanel() {
   const { workspaceId } = useWorkspaceContext();
   const [data, setData] = useState<VirtualizationDashboardData | null>(null);
   const [refreshSeconds, setRefreshSeconds] = useState(30);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [backupsPage, setBackupsPage] = useState(0);
   const hasLoadedRef = useRef(false);
 
   const loadDashboard = useCallback(
@@ -298,36 +316,83 @@ export function VirtualizationDashboardPanel() {
         {data.latestBackups.length === 0 ? (
           <p className="mt-4 text-sm text-slate-500">Sem tarefas de backup recentes.</p>
         ) : (
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                  <th className="pb-3 pr-4 font-medium">VM / CT</th>
-                  <th className="pb-3 pr-4 font-medium">Servidor</th>
-                  <th className="pb-3 pr-4 font-medium">Data</th>
-                  <th className="pb-3 pr-4 font-medium">Tamanho</th>
-                  <th className="pb-3 font-medium">Estado</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {data.latestBackups.map((backup, index) => (
-                  <tr key={`${backup.serverId}-${backup.backupId}-${index}`}>
-                    <td className="py-3 pr-4 font-medium text-slate-900">
-                      {backup.backupId} · {backup.name}
-                    </td>
-                    <td className="py-3 pr-4 text-slate-600">{backup.serverLabel}</td>
-                    <td className="py-3 pr-4 text-slate-600">{formatBackupTime(backup.backupTime)}</td>
-                    <td className="py-3 pr-4 text-slate-600">
-                      {backup.sizeBytes != null ? formatVirtualizationBytes(backup.sizeBytes) : '—'}
-                    </td>
-                    <td className={`py-3 ${virtualizationBackupStatusClass(backup.status)}`}>
-                      {getVirtualizationBackupStatusLabel(backup.status)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          (() => {
+            const totalPages = Math.max(1, Math.ceil(data.latestBackups.length / BACKUPS_PAGE_SIZE));
+            const page = Math.min(backupsPage, totalPages - 1);
+            const slice = data.latestBackups.slice(
+              page * BACKUPS_PAGE_SIZE,
+              page * BACKUPS_PAGE_SIZE + BACKUPS_PAGE_SIZE
+            );
+            return (
+              <>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <th className="pb-3 pr-4 font-medium">VM / CT</th>
+                        <th className="pb-3 pr-4 font-medium">Servidor</th>
+                        <th className="pb-3 pr-4 font-medium">Data</th>
+                        <th className="pb-3 pr-4 font-medium">Tamanho</th>
+                        <th className="pb-3 font-medium">Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {slice.map((backup, index) => (
+                        <tr key={`${backup.serverId}-${backup.backupId}-${page}-${index}`}>
+                          <td className="py-3 pr-4 font-medium text-slate-900">
+                            {formatBackupGuestLabel(backup)}
+                          </td>
+                          <td className="py-3 pr-4 text-slate-600">{backup.serverLabel}</td>
+                          <td className="py-3 pr-4 text-slate-600">
+                            {formatBackupTime(backup.backupTime)}
+                          </td>
+                          <td className="py-3 pr-4 text-slate-600">
+                            {backup.sizeBytes != null
+                              ? formatVirtualizationBytes(backup.sizeBytes)
+                              : '—'}
+                          </td>
+                          <td className={`py-3 ${virtualizationBackupStatusClass(backup.status)}`}>
+                            {getVirtualizationBackupStatusLabel(backup.status)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {totalPages > 1 ? (
+                  <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-600">
+                    <span>
+                      {page * BACKUPS_PAGE_SIZE + 1}–
+                      {Math.min((page + 1) * BACKUPS_PAGE_SIZE, data.latestBackups.length)} de{' '}
+                      {data.latestBackups.length}
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={page <= 0}
+                        onClick={() => setBackupsPage((p) => Math.max(0, p - 1))}
+                      >
+                        Anterior
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={page >= totalPages - 1}
+                        onClick={() => setBackupsPage((p) => Math.min(totalPages - 1, p + 1))}
+                      >
+                        Seguinte
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-slate-500">
+                    A mostrar os {data.latestBackups.length} backups mais recentes.
+                  </p>
+                )}
+              </>
+            );
+          })()
         )}
       </div>
 
@@ -338,7 +403,7 @@ export function VirtualizationDashboardPanel() {
             {data.recentFailures.map((failure, index) => (
               <li key={`${failure.serverId}-${failure.backupId}-${index}`}>
                 <span className="font-medium">
-                  {failure.serverLabel} — {failure.backupId} · {failure.name}
+                  {failure.serverLabel} — {formatBackupGuestLabel(failure)}
                 </span>
                 {failure.errorMessage ? (
                   <span className="text-red-700"> — {failure.errorMessage}</span>

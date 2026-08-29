@@ -633,12 +633,12 @@ export function VirtualizationZerotierPanel() {
         <div>
           <h2 className="text-base font-semibold text-slate-900">ZeroTier</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Várias contas e network IDs — cada rede suporta até {ZEROTIER_NETWORK_MEMBER_LIMIT} dispositivos
-            (app + restantes).
+            Sequência: 1) conta → 2) associar rede (o servidor da API entra nessa rede) → 3) adicionar
+            servidor → 4) Instalar &amp; join <strong>só à rede escolhida</strong> nesse alvo.
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Cada conta ZeroTier (email + API token) gere as suas redes. Para instalar nos servidores PBS/PVE,
-            a app liga por SSH, instala o ZeroTier, faz join e autoriza o membro via API.
+            Cada rede tem até {ZEROTIER_NETWORK_MEMBER_LIMIT} dispositivos. O «Entrar em todas as redes»
+            aplica-se apenas a <em>este</em> servidor (API), não aos PBS/PVE.
           </p>
           <p className="mt-1 text-xs text-slate-500">
             Token em{' '}
@@ -678,7 +678,8 @@ export function VirtualizationZerotierPanel() {
             <div>
               <p className="text-sm font-semibold text-slate-900">Este servidor (API)</p>
               <p className="mt-0.5 text-xs text-slate-500">
-                Entra automaticamente em cada rede que associares — acesso directo a todos os hosts ZT.
+                Ao associar uma rede, este host entra nessa rede (não nas outras). «Entrar em todas»
+                sincroniza as redes já associadas na app.
               </p>
               <p className="mt-1 font-mono text-xs text-slate-600">
                 {localHost.username}@{localHost.hostname}
@@ -853,8 +854,9 @@ export function VirtualizationZerotierPanel() {
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Instalar ZeroTier nos servidores</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Host manual ou PBS/PVE já configurados. SSH usa IP + porta 22 — não a porta da API
-            (8006/8007).
+            Cada alvo faz join <strong>apenas à rede seleccionada</strong> no formulário. Se o host já
+            estava noutras redes ZT, o log pode listá-las — não significa reassociação. SSH: IP + porta
+            22 (não 8006/8007).
           </p>
           {networks.length === 0 ? (
             <p className="mt-1 text-xs text-amber-700">

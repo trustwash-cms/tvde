@@ -258,8 +258,30 @@ export function extractDeduplicationRatio(usage: PbsDatastoreUsageEntry | null):
   return null;
 }
 
+export function parseBackupGuestFromTask(task: PbsTask): {
+  kind: 'vm' | 'ct' | 'unknown';
+  vmid: string | null;
+  label: string;
+} {
+  const raw = `${task.id ?? ''} ${task.upid ?? ''}`;
+  const decoded = raw.replace(/\\x3a/gi, ':').replace(/%3[Aa]/g, ':');
+  const match = decoded.match(/\b(vm|ct)[_:\-/]?(\d{1,8})\b/i);
+  if (match) {
+    const kind = match[1].toLowerCase() as 'vm' | 'ct';
+    return {
+      kind,
+      vmid: match[2],
+      label: `${kind.toUpperCase()} ${match[2]}`,
+    };
+  }
+  return { kind: 'unknown', vmid: null, label: '—' };
+}
+
 export function parseBackupNameFromTask(task: PbsTask): string {
-  const raw = task.id ?? '';
+  const guest = parseBackupGuestFromTask(task);
+  if (guest.kind !== 'unknown') return guest.label;
+
+  const raw = (task.id ?? '').replace(/\\x3a/gi, ':').replace(/%3[Aa]/g, ':');
   const parts = raw.split('/');
   const last = parts[parts.length - 1] ?? raw;
   if (last && last !== raw) return last;
@@ -267,6 +289,9 @@ export function parseBackupNameFromTask(task: PbsTask): string {
 }
 
 export function parseBackupIdFromTask(task: PbsTask): string {
+  const guest = parseBackupGuestFromTask(task);
+  if (guest.vmid) return guest.vmid;
+
   const raw = task.id ?? task.upid ?? 'unknown';
   const match = raw.match(/\/(\d+)(?:\/|$)/);
   if (match?.[1]) return match[1];

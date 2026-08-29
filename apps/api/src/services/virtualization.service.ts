@@ -631,7 +631,7 @@ export async function getVirtualizationDashboard(
     deduplicationRatio: dedupCount > 0 ? dedupSum / dedupCount : null,
     datastores,
     pveServers: pveServerSummaries,
-    latestBackups: latestBackups.slice(0, 15),
+    latestBackups: latestBackups.slice(0, 40),
     recentFailures: recentFailures.slice(0, 10),
   };
 }

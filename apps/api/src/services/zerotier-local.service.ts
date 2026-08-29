@@ -146,28 +146,31 @@ async function provisionViaSudoZerotierCli(
 }
 
 function parseNetworks(listOutput: string): VirtualizationZerotierLocalHostPublic['networks'] {
-  const lines = listOutput
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .filter((l) => !/^200\s+listnetworks/i.test(l) && !/^nwid\b/i.test(l));
-
   const networks: VirtualizationZerotierLocalHostPublic['networks'] = [];
-  for (const line of lines) {
-    const parts = line.split(/\s+/);
-    // zerotier-cli listnetworks: <nwid> <name> <mac> <status> ...
-    const networkId = parts.find((p) => /^[0-9a-f]{16}$/i.test(p));
-    if (!networkId) continue;
+  for (const line of listOutput.split('\n')) {
+    const trimmed = line.trim();
+    // Formato real: "200 listnetworks <nwid> [name] <mac> <status> ..."
+    const match = trimmed.match(/^200\s+listnetworks\s+([0-9a-f]{16})\s+(.*)$/i);
+    if (!match) continue;
+    const networkId = match[1].toLowerCase();
+    const restParts = match[2].trim().split(/\s+/).filter(Boolean);
     const status =
-      parts.find((p) =>
+      restParts.find((p) =>
         /^(OK|ACCESS_DENIED|NOT_FOUND|REQUESTING_CONFIGURATION|PORT_ERROR|CLIENT_TOO_OLD)$/i.test(p)
-      ) ?? parts[3] ?? 'unknown';
-    const nameIdx = parts.indexOf(networkId);
-    const name = nameIdx >= 0 && parts[nameIdx + 1] && !/^[0-9a-f:]{11,}$/i.test(parts[nameIdx + 1])
-      ? parts[nameIdx + 1]
-      : null;
+      ) ?? 'unknown';
+    const statusIdx = restParts.findIndex((p) => p === status);
+    let name: string | null = null;
+    if (statusIdx > 0) {
+      const beforeStatus = restParts.slice(0, statusIdx);
+      const macIdx = beforeStatus.findIndex((p) => /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(p));
+      if (macIdx > 0) {
+        name = beforeStatus.slice(0, macIdx).join(' ') || null;
+      } else if (macIdx < 0 && beforeStatus[0] && !/^([0-9a-f]{2}:)/i.test(beforeStatus[0])) {
+        name = beforeStatus[0];
+      }
+    }
     networks.push({
-      networkId: networkId.toLowerCase(),
+      networkId,
       status,
       name: name && name !== '-' ? name : null,
     });

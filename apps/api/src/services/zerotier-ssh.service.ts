@@ -139,7 +139,8 @@ export function buildZerotierInstallJoinScript(networkId: string): string {
     '  exit 1',
     'fi',
     'echo "[zt] node_id=$NODE_ID"',
-    '${SUDO}"$ZT_CLI" listnetworks | grep -iE "join|OK|ACCESS" || true',
+    `echo "[zt] join apenas à rede ${safeNetworkId} (outras redes no listnetworks já existiam neste host)"`,
+    `${'${SUDO}'}"$ZT_CLI" listnetworks | grep -i "${safeNetworkId}" || true`,
   ].join('\n');
 }
 
