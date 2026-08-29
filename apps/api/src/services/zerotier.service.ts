@@ -6,7 +6,11 @@ import type {
   VirtualizationZerotierNetworkPublic,
   VirtualizationZerotierRemoteNetwork,
 } from '@tvde/shared';
-import { ZEROTIER_NETWORK_MEMBER_LIMIT, extractHostFromServerUrl } from '@tvde/shared';
+import {
+  ZEROTIER_NETWORK_MEMBER_LIMIT,
+  extractHostFromServerUrl,
+  parseSshEndpoint,
+} from '@tvde/shared';
 import { decrypt, encrypt } from '../lib/crypto';
 import { touchZerotierAccountStatusIfChanged,
   touchZerotierNetworkStatusIfChanged,
@@ -567,6 +571,16 @@ export async function createVirtualizationZerotierJoinTarget(
     ? await getWorkspaceSshCredentials(tenantId, workspaceId)
     : null;
 
+  const defaultSshPort = input.sshPort ?? workspaceSsh?.sshDefaultPort ?? 22;
+  const endpoint = parseSshEndpoint(sshHost, defaultSshPort);
+  sshHost = endpoint.host;
+  const sshPort =
+    input.sshPort != null && Number.isFinite(input.sshPort) && input.sshPort > 0
+      ? input.sshPort
+      : endpoint.port;
+
+  if (!sshHost) throw new Error('Host SSH é obrigatório');
+
   const sshAuthMode = useWorkspaceSsh
     ? workspaceSsh!.sshAuthMode
     : input.sshAuthMode ?? 'password';
@@ -594,7 +608,7 @@ export async function createVirtualizationZerotierJoinTarget(
       networkRowId: network.id,
       label: input.label.trim(),
       sshHost,
-      sshPort: input.sshPort ?? workspaceSsh?.sshDefaultPort ?? 22,
+      sshPort,
       sshUsername: input.sshUsername?.trim() || workspaceSsh?.sshDefaultUsername || 'root',
       useWorkspaceSsh,
       sshAuthMode,

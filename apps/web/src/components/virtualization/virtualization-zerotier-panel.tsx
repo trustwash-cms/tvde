@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
   ZEROTIER_NETWORK_MEMBER_LIMIT,
+  extractHostFromServerUrl,
   type VirtualizationPbsServerPublic,
   type VirtualizationPveServerPublic,
   type VirtualizationSettingsPublic,
@@ -662,7 +663,8 @@ export function VirtualizationZerotierPanel() {
         <div>
           <h3 className="text-sm font-semibold text-slate-900">Instalar ZeroTier nos servidores</h3>
           <p className="mt-1 text-xs text-slate-500">
-            Host manual (qualquer IP/SSH) ou PBS/PVE já configurados — não depende do dashboard PVE/PBS.
+            Host manual ou PBS/PVE já configurados. SSH usa IP + porta 22 — não a porta da API
+            (8006/8007).
           </p>
           {networks.length === 0 ? (
             <p className="mt-1 text-xs text-amber-700">
@@ -1016,6 +1018,15 @@ export function VirtualizationZerotierPanel() {
                   </option>
                 ))}
               </select>
+              {joinTargetForm.pbsServerId ? (
+                <p className="mt-1 font-mono text-xs text-slate-500">
+                  SSH →{' '}
+                  {extractHostFromServerUrl(
+                    pbsServers.find((s) => s.id === joinTargetForm.pbsServerId)?.baseUrl ?? ''
+                  ) || '—'}
+                  :{joinTargetForm.sshPort || 22} (API PBS :8007 não é SSH)
+                </p>
+              ) : null}
             </label>
           ) : null}
           {joinTargetForm.targetKind === 'pve' ? (
@@ -1034,6 +1045,15 @@ export function VirtualizationZerotierPanel() {
                   </option>
                 ))}
               </select>
+              {joinTargetForm.pveServerId ? (
+                <p className="mt-1 font-mono text-xs text-slate-500">
+                  SSH →{' '}
+                  {extractHostFromServerUrl(
+                    pveServers.find((s) => s.id === joinTargetForm.pveServerId)?.baseUrl ?? ''
+                  ) || '—'}
+                  :{joinTargetForm.sshPort || 22} (API PVE :8006 não é SSH)
+                </p>
+              ) : null}
             </label>
           ) : null}
           {joinTargetForm.targetKind === 'custom' ? (
@@ -1046,6 +1066,9 @@ export function VirtualizationZerotierPanel() {
                 placeholder="192.168.1.10"
                 required
               />
+              <p className="mt-1 text-xs text-slate-500">
+                Só IP ou hostname — sem :8007. A porta SSH é o campo ao lado.
+              </p>
             </label>
           ) : null}
           <div className="grid grid-cols-2 gap-3">

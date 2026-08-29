@@ -1,5 +1,5 @@
 import { prisma } from '@tvde/database';
-import type { VirtualizationZerotierJoinTargetPublic } from '@tvde/shared';
+import { parseSshEndpoint, type VirtualizationZerotierJoinTargetPublic } from '@tvde/shared';
 import { decrypt } from '../lib/crypto';
 import { getWorkspaceSshCredentials } from './virtualization.service';
 import {
@@ -151,7 +151,27 @@ export async function provisionZerotierJoinTarget(
   };
 
   try {
-    appendLog(`[ssh] ${target.sshUsername}@${target.sshHost}:${target.sshPort} (${target.sshAuthMode})`);
+    const endpoint = parseSshEndpoint(target.sshHost, target.sshPort);
+    const sshHost = endpoint.host;
+    const sshPort = target.sshPort > 0 ? target.sshPort : endpoint.port;
+
+    if (!sshHost) {
+      throw new Error('Host SSH inválido');
+    }
+
+    if (sshHost !== target.sshHost || sshPort !== target.sshPort) {
+      appendLog(
+        `[ssh] host normalizado: ${target.sshHost}:${target.sshPort} → ${sshHost}:${sshPort}`
+      );
+      await prisma.virtualizationZerotierJoinTarget.update({
+        where: { id: targetId },
+        data: { sshHost, sshPort },
+      });
+      target.sshHost = sshHost;
+      target.sshPort = sshPort;
+    }
+
+    appendLog(`[ssh] ${target.sshUsername}@${sshHost}:${sshPort} (${target.sshAuthMode})`);
     const script = buildZerotierInstallJoinScript(target.network.networkId);
 
     const workspaceSsh = target.useWorkspaceSsh
@@ -165,8 +185,8 @@ export async function provisionZerotierJoinTarget(
 
     const sshResult = await sshExec(
       buildSshExecOptionsFromJoinTarget({
-        sshHost: target.sshHost,
-        sshPort: target.sshPort,
+        sshHost,
+        sshPort,
         sshUsername: target.sshUsername,
         sshAuthMode,
         encryptedSshPassword: target.useWorkspaceSsh

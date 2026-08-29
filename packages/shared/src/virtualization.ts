@@ -231,13 +231,60 @@ export interface VirtualizationZerotierJoinTargetPublic {
   updatedAt: string;
 }
 
-export function extractHostFromServerUrl(baseUrl: string): string {
+/** Portas da API Proxmox — nunca são porta SSH. */
+const PROXMOX_API_PORTS = new Set([8006, 8007]);
+
+/**
+ * Normaliza host/porta SSH a partir de URL PBS/PVE, IP, ou "host:porta".
+ * Se a porta embutida for 8006/8007 (API), ignora-a e usa defaultPort (SSH).
+ */
+export function parseSshEndpoint(
+  input: string,
+  defaultPort = 22
+): { host: string; port: number } {
+  let raw = input.trim();
+  if (!raw) return { host: '', port: defaultPort };
+
   try {
-    const url = new URL(baseUrl);
-    return url.hostname;
+    const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`;
+    const url = new URL(withScheme);
+    if (url.hostname) {
+      const urlPort = url.port ? Number(url.port) : NaN;
+      if (Number.isFinite(urlPort) && urlPort > 0 && !PROXMOX_API_PORTS.has(urlPort)) {
+        return { host: url.hostname, port: urlPort };
+      }
+      return { host: url.hostname, port: defaultPort };
+    }
   } catch {
-    return baseUrl.replace(/^https?:\/\//i, '').split('/')[0]?.split(':')[0] ?? baseUrl;
+    // fall through
   }
+
+  raw = raw.replace(/^https?:\/\//i, '');
+  raw = raw.split('/')[0] ?? raw;
+
+  const ipv6 = raw.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  if (ipv6) {
+    const port = ipv6[2] ? Number(ipv6[2]) : defaultPort;
+    if (PROXMOX_API_PORTS.has(port)) return { host: ipv6[1], port: defaultPort };
+    return { host: ipv6[1], port: Number.isFinite(port) && port > 0 ? port : defaultPort };
+  }
+
+  const lastColon = raw.lastIndexOf(':');
+  if (lastColon > 0) {
+    const maybePort = raw.slice(lastColon + 1);
+    if (/^\d{1,5}$/.test(maybePort)) {
+      const port = Number(maybePort);
+      const host = raw.slice(0, lastColon);
+      if (PROXMOX_API_PORTS.has(port)) return { host, port: defaultPort };
+      return { host, port };
+    }
+  }
+
+  return { host: raw, port: defaultPort };
+}
+
+export function extractHostFromServerUrl(baseUrl: string): string {
+  return parseSshEndpoint(baseUrl).host;
 }
 
 export function normalizePbsApiTokenSecret(secret: string): string {

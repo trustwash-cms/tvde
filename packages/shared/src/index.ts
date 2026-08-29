@@ -256,6 +256,7 @@ export {
   type VirtualizationZerotierSshAuthMode,
   type VirtualizationZerotierJoinStatus,
   extractHostFromServerUrl,
+  parseSshEndpoint,
   type VirtualizationPveServerDetail,
   type VirtualizationPveServerPublic,
   type VirtualizationSettingsPublic,
