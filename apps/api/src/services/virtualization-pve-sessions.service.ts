@@ -135,6 +135,7 @@ export async function createVirtualizationPveConsoleSession(
     node: guest.node,
     name: guest.name,
     websocketPath: `/virtualization/pve/console-ws/${sessionId}`,
+    ...(mode === 'vnc' ? { ticket } : {}),
   };
 }
 

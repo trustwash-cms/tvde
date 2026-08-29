@@ -11,8 +11,16 @@ declare module '@novnc/novnc' {
     scaleViewport: boolean;
     resizeSession: boolean;
     disconnect(): void;
-    addEventListener(type: string, listener: (event: { detail?: { reason?: string } }) => void): void;
-    removeEventListener(type: string, listener: (event: { detail?: { reason?: string } }) => void): void;
+    focus(): void;
+    sendCredentials(creds: { password?: string }): void;
+    addEventListener(
+      type: string,
+      listener: (event: { detail?: { reason?: string; status?: string } }) => void
+    ): void;
+    removeEventListener(
+      type: string,
+      listener: (event: { detail?: { reason?: string; status?: string } }) => void
+    ): void;
   }
 }
 

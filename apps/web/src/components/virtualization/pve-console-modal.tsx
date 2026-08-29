@@ -12,10 +12,20 @@ interface PveConsoleModalProps {
   session: VirtualizationPveConsoleSession | null;
 }
 
+type RfbInstance = {
+  disconnect: () => void;
+  scaleViewport: boolean;
+  resizeSession: boolean;
+  focus: () => void;
+  sendCredentials: (creds: { password?: string }) => void;
+  addEventListener: (type: string, fn: (e: { detail?: { reason?: string; status?: string } }) => void) => void;
+};
+
 export function PveConsoleModal({ open, onClose, workspaceId, session }: PveConsoleModalProps) {
   const screenRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
 
   useEffect(() => {
     if (!open || !session) return;
@@ -23,45 +33,82 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
     let disposed = false;
     let cleanup: (() => void) | undefined;
     setError('');
+    setStatus('A ligar…');
 
     void (async () => {
       try {
         const wsUrl = buildVirtualizationWsUrl(session.websocketPath, workspaceId);
 
         if (session.mode === 'vnc') {
+          // Esperar o contentor existir no DOM (modal portal).
+          await new Promise((r) => requestAnimationFrame(() => r(undefined)));
           const host = screenRef.current;
-          if (!host) return;
-          const RFB = (await import('@novnc/novnc')).default as new (
-            target: HTMLElement,
-            url: string,
-            options?: { wsProtocols?: string[]; credentials?: { password?: string } }
-          ) => {
-            disconnect: () => void;
-            scaleViewport: boolean;
-            resizeSession: boolean;
-            addEventListener: (type: string, fn: (e: { detail?: { reason?: string } }) => void) => void;
-          };
+          if (!host) {
+            setError('Área da consola indisponível');
+            return;
+          }
+          if (!session.ticket) {
+            setError('Ticket VNC em falta — volte a abrir a consola.');
+            return;
+          }
 
-          const rfb = new RFB(host, wsUrl);
+          const { default: RFB } = await import('@novnc/novnc');
+
+          // No Proxmox, o ticket do vncproxy é a password RFB.
+          const rfb = new RFB(host, wsUrl, {
+            wsProtocols: ['binary'],
+            credentials: { password: session.ticket },
+          }) as unknown as RfbInstance;
           rfb.scaleViewport = true;
           rfb.resizeSession = true;
+
+          rfb.addEventListener('connect', () => {
+            if (!disposed) {
+              setStatus('Ligado — clique na consola para focar o teclado');
+              try {
+                rfb.focus();
+              } catch {
+                // ignore
+              }
+            }
+          });
+          rfb.addEventListener('credentialsrequired', () => {
+            try {
+              rfb.sendCredentials({ password: session.ticket });
+            } catch {
+              // ignore
+            }
+          });
+          rfb.addEventListener('securityfailure', (e) => {
+            if (!disposed) {
+              setError(e.detail?.reason || e.detail?.status || 'Falha de autenticação VNC');
+              setStatus('');
+            }
+          });
           rfb.addEventListener('disconnect', (e) => {
             if (!disposed) {
               setError(e.detail?.reason || 'Consola desligada');
+              setStatus('');
             }
           });
+
           cleanup = () => {
             try {
               rfb.disconnect();
             } catch {
               // ignore
             }
+            host.replaceChildren();
           };
           return;
         }
 
+        await new Promise((r) => requestAnimationFrame(() => r(undefined)));
         const host = termRef.current;
-        if (!host) return;
+        if (!host) {
+          setError('Área do terminal indisponível');
+          return;
+        }
         const { Terminal } = await import('@xterm/xterm');
         const { FitAddon } = await import('@xterm/addon-fit');
         await import('@xterm/xterm/css/xterm.css');
@@ -79,6 +126,9 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
         const socket = new WebSocket(wsUrl);
         socket.binaryType = 'arraybuffer';
 
+        socket.onopen = () => {
+          if (!disposed) setStatus('Ligado');
+        };
         socket.onmessage = (ev) => {
           if (typeof ev.data === 'string') {
             term.write(ev.data);
@@ -116,6 +166,7 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
       } catch (err) {
         if (!disposed) {
           setError(err instanceof Error ? err.message : 'Falha ao iniciar consola');
+          setStatus('');
         }
       }
     })();
@@ -141,8 +192,10 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
       overlayClassName="z-[60]"
     >
       <p className="mb-3 text-xs text-slate-500">
-        Requer permissão de consola no token PVE (ex. VM.Console). A sessão passa pelo proxy da API.
+        Consola via proxy da API (como no browser do PVE). Clique na área escura para focar o
+        teclado/rato.
       </p>
+      {status ? <p className="mb-2 text-xs text-slate-600">{status}</p> : null}
       {error ? (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
           {error}

@@ -94,6 +94,8 @@ export interface VirtualizationPveConsoleSession {
   node: string;
   name: string;
   websocketPath: string;
+  /** Ticket VNC (password RFB). Só para mode=vnc; TTL curto. */
+  ticket?: string;
 }
 
 export interface VirtualizationPveSshSession {

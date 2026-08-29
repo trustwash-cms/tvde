@@ -3,6 +3,13 @@ import WebSocket, { type RawData } from 'ws';
 import { formatPveAuthorizationHeader } from '@tvde/shared';
 import type { PveConsoleSessionRecord, PveSshSessionRecord } from './virtualization-pve-sessions.service';
 
+function toBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(String(data));
+}
+
 export function proxyPveConsoleWebsocket(
   browser: WebSocket,
   session: PveConsoleSessionRecord
@@ -18,6 +25,9 @@ export function proxyPveConsoleWebsocket(
   });
 
   let closed = false;
+  let upstreamReady = false;
+  const pendingFromBrowser: Buffer[] = [];
+
   const closeBoth = (code = 1000, reason = 'closed') => {
     if (closed) return;
     closed = true;
@@ -37,18 +47,21 @@ export function proxyPveConsoleWebsocket(
 
   upstream.on('open', () => {
     if (session.mode === 'term') {
+      // Protocolo Proxmox termproxy: primeiro frame = user:ticket\n
       upstream.send(`${session.user}:${session.ticket}\n`);
     }
+    upstreamReady = true;
+    for (const chunk of pendingFromBrowser) {
+      upstream.send(chunk);
+    }
+    pendingFromBrowser.length = 0;
   });
 
   upstream.on('message', (data: RawData, isBinary: boolean) => {
     if (browser.readyState !== WebSocket.OPEN) return;
-    if (isBinary || Buffer.isBuffer(data)) {
-      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-      browser.send(buf, { binary: true });
-    } else {
-      browser.send(String(data));
-    }
+    const buf = toBuffer(data);
+    // RFB/VNC e termproxy usam frames binários; forçar binary evita corrupção.
+    browser.send(buf, { binary: isBinary || true });
   });
 
   upstream.on('error', (err: Error) => {
@@ -57,14 +70,13 @@ export function proxyPveConsoleWebsocket(
 
   upstream.on('close', () => closeBoth());
 
-  browser.on('message', (data: RawData, isBinary: boolean) => {
-    if (upstream.readyState !== WebSocket.OPEN) return;
-    if (isBinary || Buffer.isBuffer(data)) {
-      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-      upstream.send(buf);
-    } else {
-      upstream.send(String(data));
+  browser.on('message', (data: RawData) => {
+    const buf = toBuffer(data);
+    if (!upstreamReady || upstream.readyState !== WebSocket.OPEN) {
+      pendingFromBrowser.push(buf);
+      return;
     }
+    upstream.send(buf);
   });
 
   browser.on('close', () => closeBoth());
@@ -125,7 +137,7 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
             stream.write(data);
             return;
           }
-          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+          const buf = toBuffer(data);
           const asText = buf.toString('utf8');
           try {
             const parsed = JSON.parse(asText) as { type?: string; cols?: number; rows?: number };
