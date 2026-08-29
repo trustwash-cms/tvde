@@ -52,6 +52,7 @@ import { startZerotierJoinTargetProvision } from '../services/zerotier-provision
 import {
   getLocalZerotierHostStatus,
   provisionLocalZerotierHost,
+  ensureLocalZerotierOnAllWorkspaceNetworks,
 } from '../services/zerotier-local.service';
 
 const workspaceQuerySchema = z.object({
@@ -853,6 +854,23 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
         error: message,
         data: provisionLog ? { provisionLog } : null,
       });
+    }
+  });
+
+  fastify.post('/virtualization/zerotier/local-host/ensure-all', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await ensureLocalZerotierOnAllWorkspaceNetworks(tenantId, workspaceId);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      throw fastify.httpErrors.badGateway(
+        err instanceof Error ? err.message : 'Falha ao sincronizar ZeroTier local'
+      );
     }
   });
 }

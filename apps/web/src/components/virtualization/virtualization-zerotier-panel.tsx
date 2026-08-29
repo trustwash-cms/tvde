@@ -305,9 +305,19 @@ export function VirtualizationZerotierPanel() {
       setModalError(getApiErrorMessage(res));
       return;
     }
-    setMessage(`Rede ${res.data.label} associada.`);
+    setMessage(
+      `Rede ${res.data.label} associada — a juntar automaticamente este servidor (API) à rede ZeroTier…`
+    );
     setLinkModalOpen(false);
     await loadAll();
+    // Sincroniza redes existentes + a nova (idempotente).
+    void apiFetch(
+      withWorkspaceQuery(API_PATHS.virtualization.zerotierLocalHostEnsureAll, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    ).then(async (ensureRes) => {
+      if (ensureRes.data) await loadAll();
+    });
   };
 
   const handleUnlinkNetwork = async (networkRowId: string) => {
@@ -563,6 +573,40 @@ export function VirtualizationZerotierPanel() {
     await loadAll();
   };
 
+  const handleEnsureAllLocal = async () => {
+    if (!workspaceId || localProvisioning) return;
+    setLocalProvisioning(true);
+    setError('');
+    setMessage('A juntar este servidor a todas as redes ZeroTier associadas…');
+    const res = await apiFetch<{
+      local: VirtualizationZerotierLocalHostPublic;
+      results: Array<{ networkId: string; skipped: boolean; error?: string; provisionLog: string }>;
+    }>(
+      withWorkspaceQuery(API_PATHS.virtualization.zerotierLocalHostEnsureAll, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    setLocalProvisioning(false);
+    if (res.data?.local) setLocalHost(res.data.local);
+    const logs = (res.data?.results ?? [])
+      .map((r) => r.provisionLog || r.error || '')
+      .filter(Boolean)
+      .join('\n---\n');
+    if (logs) setLocalProvisionLog(logs);
+    if (!res.success || !res.data) {
+      setError(getApiErrorMessage(res));
+      await loadAll();
+      return;
+    }
+    const failed = res.data.results.filter((r) => r.error);
+    if (failed.length) {
+      setError(`Falhou em ${failed.length} rede(s): ${failed.map((f) => f.error).join('; ')}`);
+    } else {
+      setMessage('Servidor da app sincronizado com todas as redes associadas.');
+    }
+    await loadAll();
+  };
+
   const handleDeleteJoinTarget = async (targetId: string) => {
     if (!workspaceId || !window.confirm('Remover este alvo de instalação?')) return;
     setBusy(true);
@@ -633,6 +677,9 @@ export function VirtualizationZerotierPanel() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-900">Este servidor (API)</p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                Entra automaticamente em cada rede que associares — acesso directo a todos os hosts ZT.
+              </p>
               <p className="mt-1 font-mono text-xs text-slate-600">
                 {localHost.username}@{localHost.hostname}
                 {localHost.cliPath ? ` · ${localHost.cliPath}` : ''}
@@ -686,6 +733,14 @@ export function VirtualizationZerotierPanel() {
                   onClick={() => void loadAll()}
                 >
                   Verificar
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary text-sm"
+                  disabled={busy || localProvisioning || networks.length === 0}
+                  onClick={() => void handleEnsureAllLocal()}
+                >
+                  {localProvisioning ? 'A sincronizar…' : 'Entrar em todas as redes'}
                 </button>
                 <button
                   type="button"

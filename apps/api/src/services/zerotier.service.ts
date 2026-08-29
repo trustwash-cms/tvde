@@ -6,11 +6,8 @@ import type {
   VirtualizationZerotierNetworkPublic,
   VirtualizationZerotierRemoteNetwork,
 } from '@tvde/shared';
-import {
-  ZEROTIER_NETWORK_MEMBER_LIMIT,
-  extractHostFromServerUrl,
-  parseSshEndpoint,
-} from '@tvde/shared';
+import { ZEROTIER_NETWORK_MEMBER_LIMIT, extractHostFromServerUrl, parseSshEndpoint } from '@tvde/shared';
+import { startLocalZerotierEnsureInBackground } from './zerotier-local.service';
 import { decrypt, encrypt } from '../lib/crypto';
 import { touchZerotierAccountStatusIfChanged,
   touchZerotierNetworkStatusIfChanged,
@@ -324,6 +321,9 @@ export async function linkVirtualizationZerotierNetwork(
     },
     include: { account: { select: { label: true } } },
   });
+
+  // Servidor da API entra automaticamente nesta rede (SSH root@127.0.0.1 / sudo).
+  startLocalZerotierEnsureInBackground(tenantId, workspaceId, row.id);
 
   return mapNetworkPublic(row, row.account.label);
 }

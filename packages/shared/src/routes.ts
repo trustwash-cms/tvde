@@ -531,6 +531,7 @@ export const API_PATHS = {
       `/virtualization/zerotier/join-targets/${id}/provision`,
     zerotierLocalHost: '/virtualization/zerotier/local-host',
     zerotierLocalHostProvision: '/virtualization/zerotier/local-host/provision',
+    zerotierLocalHostEnsureAll: '/virtualization/zerotier/local-host/ensure-all',
   },
   billing: {
     moloniStatus: '/billing/moloni/status',

@@ -318,3 +318,161 @@ export async function provisionLocalZerotierHost(
   const local = await getLocalZerotierHostStatus();
   return { local, nodeId, provisionLog: logLines.join('\n') };
 }
+
+const localJoinInFlight = new Set<string>();
+
+export type LocalZerotierEnsureResult = {
+  networkRowId: string;
+  networkId: string;
+  skipped: boolean;
+  reason?: string;
+  nodeId: string | null;
+  provisionLog: string;
+  error?: string;
+};
+
+/**
+ * Garante que o servidor da API está nesta rede ZT (join + authorize).
+ * Idempotente: se já estiver OK, só reautoriza na Central se necessário.
+ */
+export async function ensureLocalZerotierOnNetwork(
+  tenantId: string,
+  workspaceId: string,
+  networkRowId: string
+): Promise<LocalZerotierEnsureResult> {
+  const key = `${workspaceId}:${networkRowId}`;
+  if (localJoinInFlight.has(key)) {
+    return {
+      networkRowId,
+      networkId: '',
+      skipped: true,
+      reason: 'in_flight',
+      nodeId: null,
+      provisionLog: '[local] join já em curso',
+    };
+  }
+
+  localJoinInFlight.add(key);
+  try {
+    const network = await prisma.virtualizationZerotierNetwork.findFirst({
+      where: { id: networkRowId, tenantId, workspaceId },
+      include: { account: true },
+    });
+    if (!network) {
+      return {
+        networkRowId,
+        networkId: '',
+        skipped: true,
+        reason: 'not_found',
+        nodeId: null,
+        provisionLog: '',
+        error: 'Rede não encontrada',
+      };
+    }
+
+    const local = await getLocalZerotierHostStatus();
+    const membership = local.networks.find((n) => n.networkId === network.networkId);
+
+    if (local.nodeId && membership && /^OK$/i.test(membership.status)) {
+      try {
+        await zerotierSetMemberAuthorized(
+          getClientConfig(network.account),
+          network.networkId,
+          local.nodeId,
+          true
+        );
+      } catch {
+        /* already authorized */
+      }
+      return {
+        networkRowId,
+        networkId: network.networkId,
+        skipped: true,
+        reason: 'already_ok',
+        nodeId: local.nodeId,
+        provisionLog: `[local] já na rede ${network.networkId} (OK)`,
+      };
+    }
+
+    if (local.nodeId && membership && /ACCESS_DENIED/i.test(membership.status)) {
+      await zerotierSetMemberAuthorized(
+        getClientConfig(network.account),
+        network.networkId,
+        local.nodeId,
+        true
+      );
+      return {
+        networkRowId,
+        networkId: network.networkId,
+        skipped: false,
+        reason: 'authorized_only',
+        nodeId: local.nodeId,
+        provisionLog: `[local] autorizado node ${local.nodeId} na rede ${network.networkId}`,
+      };
+    }
+
+    const provisioned = await provisionLocalZerotierHost(tenantId, workspaceId, networkRowId);
+    return {
+      networkRowId,
+      networkId: network.networkId,
+      skipped: false,
+      reason: 'provisioned',
+      nodeId: provisioned.nodeId,
+      provisionLog: provisioned.provisionLog,
+    };
+  } catch (err) {
+    return {
+      networkRowId,
+      networkId: '',
+      skipped: false,
+      nodeId: null,
+      provisionLog: '',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    localJoinInFlight.delete(key);
+  }
+}
+
+/** Junta o servidor da API a todas as redes ZT activas do workspace. */
+export async function ensureLocalZerotierOnAllWorkspaceNetworks(
+  tenantId: string,
+  workspaceId: string
+): Promise<{
+  local: VirtualizationZerotierLocalHostPublic;
+  results: LocalZerotierEnsureResult[];
+}> {
+  const networks = await prisma.virtualizationZerotierNetwork.findMany({
+    where: { tenantId, workspaceId, isActive: true },
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+  });
+
+  const results: LocalZerotierEnsureResult[] = [];
+  for (const network of networks) {
+    results.push(await ensureLocalZerotierOnNetwork(tenantId, workspaceId, network.id));
+  }
+
+  return {
+    local: await getLocalZerotierHostStatus(),
+    results,
+  };
+}
+
+/** Dispara join local em background (não bloqueia a resposta HTTP). */
+export function startLocalZerotierEnsureInBackground(
+  tenantId: string,
+  workspaceId: string,
+  networkRowId: string
+): void {
+  void ensureLocalZerotierOnNetwork(tenantId, workspaceId, networkRowId).then((result) => {
+    if (result.error) {
+      console.error('[zerotier-local] auto-join falhou', networkRowId, result.error);
+    } else {
+      console.log(
+        '[zerotier-local] auto-join',
+        result.networkId || networkRowId,
+        result.skipped ? `skip:${result.reason}` : result.reason
+      );
+    }
+  });
+}
