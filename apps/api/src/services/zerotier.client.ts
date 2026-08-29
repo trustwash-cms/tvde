@@ -127,17 +127,31 @@ export async function zerotierListMembers(
   return data.items ?? [];
 }
 
+function resolveMemberNodeId(memberId: string): string {
+  const trimmed = memberId.trim().toLowerCase();
+  if (/^[0-9a-f]{10}$/.test(trimmed)) return trimmed;
+  const parts = trimmed.split('-');
+  const last = parts[parts.length - 1] ?? trimmed;
+  if (/^[0-9a-f]{10}$/.test(last)) return last;
+  return trimmed;
+}
+
 export async function zerotierGetMember(
   config: ZerotierClientConfig,
   networkId: string,
   memberId: string
 ): Promise<ZerotierRemoteMemberRaw> {
+  const nodeId = resolveMemberNodeId(memberId);
   return zerotierRequest<ZerotierRemoteMemberRaw>(
     config,
-    `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(memberId)}`
+    `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(nodeId)}`
   );
 }
 
+/**
+ * Actualiza autorização e/ou nome do membro.
+ * A API ZeroTier (Legacy e Central) usa POST — não PATCH.
+ */
 export async function zerotierSetMemberAuthorized(
   config: ZerotierClientConfig,
   networkId: string,
@@ -145,6 +159,7 @@ export async function zerotierSetMemberAuthorized(
   authorized: boolean,
   options?: { name?: string | null }
 ): Promise<ZerotierRemoteMemberRaw> {
+  const nodeId = resolveMemberNodeId(memberId);
   const name = options?.name?.trim();
   const body: Record<string, unknown> = {
     config: { authorized },
@@ -153,23 +168,20 @@ export async function zerotierSetMemberAuthorized(
     body.name = name;
   }
 
-  if (config.apiMode === 'central') {
-    return zerotierRequest<ZerotierRemoteMemberRaw>(
-      config,
-      `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(memberId)}`,
-      {
-        method: 'PATCH',
-        body,
-      }
-    );
-  }
-
-  return zerotierRequest<ZerotierRemoteMemberRaw>(
+  // Central e Legacy: update = POST (documentação oficial).
+  await zerotierRequest<ZerotierRemoteMemberRaw>(
     config,
-    `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(memberId)}`,
+    `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(nodeId)}`,
     {
       method: 'POST',
       body,
     }
   );
+
+  // Re-ler para garantir o estado (a resposta do POST por vezes vem incompleta).
+  const verified = await zerotierGetMember(config, networkId, nodeId);
+  if (name && !(verified.name ?? '').trim()) {
+    return { ...verified, name, nodeId: verified.nodeId ?? nodeId };
+  }
+  return verified;
 }

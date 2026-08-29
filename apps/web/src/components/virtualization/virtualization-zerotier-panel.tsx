@@ -403,6 +403,7 @@ export function VirtualizationZerotierPanel() {
       name = entered.trim() || suggested;
     }
     setBusy(true);
+    setModalError('');
     const res = await apiFetch<VirtualizationZerotierMemberPublic>(
       withWorkspaceQuery(
         API_PATHS.virtualization.zerotierNetworkMemberById(membersNetworkId, memberId),
@@ -419,12 +420,25 @@ export function VirtualizationZerotierPanel() {
     );
     setBusy(false);
     if (!res.data) {
-      setModalError(getApiErrorMessage(res));
+      setModalError(getApiErrorMessage(res) || 'Não foi possível actualizar o membro.');
       return;
     }
     setMembers((prev) =>
-      prev.map((member) => (member.memberId === memberId ? res.data! : member))
+      prev.map((member) =>
+        member.memberId === memberId || member.nodeId === memberId
+          ? { ...res.data!, name: res.data!.name?.trim() || name || res.data!.name }
+          : member
+      )
     );
+    const listRes = await apiFetch<VirtualizationZerotierMemberPublic[]>(
+      withWorkspaceQuery(
+        API_PATHS.virtualization.zerotierNetworkMembers(membersNetworkId),
+        workspaceId
+      ),
+      {},
+      getStoredToken()
+    );
+    if (listRes.data) setMembers(listRes.data);
     await loadAll();
   };
 
@@ -439,10 +453,13 @@ export function VirtualizationZerotierPanel() {
     if (entered == null) return;
     const name = entered.trim();
     if (!name) return;
+    if (name === (member.name ?? '').trim()) return;
+
     setBusy(true);
+    setModalError('');
     const res = await apiFetch<VirtualizationZerotierMemberPublic>(
       withWorkspaceQuery(
-        API_PATHS.virtualization.zerotierNetworkMemberById(membersNetworkId, member.memberId),
+        API_PATHS.virtualization.zerotierNetworkMemberById(membersNetworkId, member.nodeId),
         workspaceId
       ),
       {
@@ -453,12 +470,29 @@ export function VirtualizationZerotierPanel() {
     );
     setBusy(false);
     if (!res.data) {
-      setModalError(getApiErrorMessage(res));
+      setModalError(getApiErrorMessage(res) || 'Não foi possível actualizar o nome.');
       return;
     }
+    // Preferir o nome pedido se a API devolver vazio.
+    const updated = {
+      ...res.data,
+      name: res.data.name?.trim() || name,
+    };
     setMembers((prev) =>
-      prev.map((row) => (row.memberId === member.memberId ? res.data! : row))
+      prev.map((row) =>
+        row.memberId === member.memberId || row.nodeId === member.nodeId ? updated : row
+      )
     );
+    // Recarregar lista completa para confirmar na fonte.
+    const listRes = await apiFetch<VirtualizationZerotierMemberPublic[]>(
+      withWorkspaceQuery(
+        API_PATHS.virtualization.zerotierNetworkMembers(membersNetworkId),
+        workspaceId
+      ),
+      {},
+      getStoredToken()
+    );
+    if (listRes.data) setMembers(listRes.data);
   };
 
   const openJoinTargetModal = () => {
