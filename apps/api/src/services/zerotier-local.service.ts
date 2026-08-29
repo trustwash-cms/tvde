@@ -387,12 +387,14 @@ export async function provisionLocalZerotierHost(
     });
   }
 
-  append(`[zt] a autorizar node ${nodeId} na rede ${network.networkId}`);
+  const memberName = `API ${os.hostname()}`;
+  append(`[zt] a autorizar node ${nodeId} na rede ${network.networkId} como «${memberName}»`);
   await zerotierSetMemberAuthorized(
     getClientConfig(network.account),
     network.networkId,
     nodeId,
-    true
+    true,
+    { name: memberName }
   );
   append('[zt] membro autorizado');
 
@@ -454,13 +456,16 @@ export async function ensureLocalZerotierOnNetwork(
     const local = await getLocalZerotierHostStatus();
     const membership = local.networks.find((n) => n.networkId === network.networkId);
 
+    const localMemberName = `API ${os.hostname()}`;
+
     if (local.nodeId && membership && /^OK$/i.test(membership.status)) {
       try {
         await zerotierSetMemberAuthorized(
           getClientConfig(network.account),
           network.networkId,
           local.nodeId,
-          true
+          true,
+          { name: localMemberName }
         );
       } catch {
         /* already authorized */
@@ -480,7 +485,8 @@ export async function ensureLocalZerotierOnNetwork(
         getClientConfig(network.account),
         network.networkId,
         local.nodeId,
-        true
+        true,
+        { name: localMemberName }
       );
       return {
         networkRowId,

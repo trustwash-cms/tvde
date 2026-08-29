@@ -24,9 +24,11 @@ export interface ZerotierRemoteMemberRaw {
   id: string;
   nodeId?: string;
   name?: string;
+  description?: string;
   config?: {
     authorized?: boolean;
     activeBridge?: boolean;
+    ipAssignments?: string[];
   };
   lastOnline?: number;
 }
@@ -140,15 +142,24 @@ export async function zerotierSetMemberAuthorized(
   config: ZerotierClientConfig,
   networkId: string,
   memberId: string,
-  authorized: boolean
+  authorized: boolean,
+  options?: { name?: string | null }
 ): Promise<ZerotierRemoteMemberRaw> {
+  const name = options?.name?.trim();
+  const body: Record<string, unknown> = {
+    config: { authorized },
+  };
+  if (name) {
+    body.name = name;
+  }
+
   if (config.apiMode === 'central') {
     return zerotierRequest<ZerotierRemoteMemberRaw>(
       config,
       `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(memberId)}`,
       {
         method: 'PATCH',
-        body: { config: { authorized } },
+        body,
       }
     );
   }
@@ -158,7 +169,7 @@ export async function zerotierSetMemberAuthorized(
     `/network/${encodeURIComponent(networkId)}/member/${encodeURIComponent(memberId)}`,
     {
       method: 'POST',
-      body: { config: { authorized } },
+      body,
     }
   );
 }

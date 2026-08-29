@@ -690,7 +690,12 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
   fastify.patch('/virtualization/zerotier/networks/:id/members/:memberId', async (request, reply) => {
     const query = workspaceQuerySchema.parse(request.query);
     const { id, memberId } = request.params as { id: string; memberId: string };
-    const body = z.object({ authorized: z.boolean() }).parse(request.body);
+    const body = z
+      .object({
+        authorized: z.boolean(),
+        name: z.string().max(120).nullable().optional(),
+      })
+      .parse(request.body);
     const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
       fastify,
       request.user,
@@ -702,7 +707,8 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
         workspaceId,
         id,
         memberId,
-        body.authorized
+        body.authorized,
+        { name: body.name }
       );
       return reply.send({ success: true, data });
     } catch (err) {

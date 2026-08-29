@@ -3,7 +3,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import {
-  ZEROTIER_NETWORK_MEMBER_LIMIT,
   extractHostFromServerUrl,
   type VirtualizationPbsServerPublic,
   type VirtualizationPveServerPublic,
@@ -371,15 +370,28 @@ export function VirtualizationZerotierPanel() {
     }
   };
 
-  const handleToggleMember = async (memberId: string, authorized: boolean) => {
+  const handleToggleMember = async (memberId: string, authorized: boolean, currentName: string | null) => {
     if (!workspaceId || !membersNetworkId) return;
+    let name: string | undefined;
+    if (authorized && !currentName?.trim()) {
+      const suggested = memberId.slice(0, 10);
+      const entered = window.prompt('Nome do membro na rede ZeroTier:', suggested);
+      if (entered == null) return;
+      name = entered.trim() || suggested;
+    }
     setBusy(true);
     const res = await apiFetch<VirtualizationZerotierMemberPublic>(
       withWorkspaceQuery(
         API_PATHS.virtualization.zerotierNetworkMemberById(membersNetworkId, memberId),
         workspaceId
       ),
-      { method: 'PATCH', body: JSON.stringify({ authorized }) },
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          authorized,
+          ...(name ? { name } : {}),
+        }),
+      },
       getStoredToken()
     );
     setBusy(false);
@@ -391,6 +403,34 @@ export function VirtualizationZerotierPanel() {
       prev.map((member) => (member.memberId === memberId ? res.data! : member))
     );
     await loadAll();
+  };
+
+  const handleRenameMember = async (member: VirtualizationZerotierMemberPublic) => {
+    if (!workspaceId || !membersNetworkId) return;
+    const entered = window.prompt('Nome do membro na rede ZeroTier:', member.name ?? member.nodeId);
+    if (entered == null) return;
+    const name = entered.trim();
+    if (!name) return;
+    setBusy(true);
+    const res = await apiFetch<VirtualizationZerotierMemberPublic>(
+      withWorkspaceQuery(
+        API_PATHS.virtualization.zerotierNetworkMemberById(membersNetworkId, member.memberId),
+        workspaceId
+      ),
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ authorized: member.authorized, name }),
+      },
+      getStoredToken()
+    );
+    setBusy(false);
+    if (!res.data) {
+      setModalError(getApiErrorMessage(res));
+      return;
+    }
+    setMembers((prev) =>
+      prev.map((row) => (row.memberId === member.memberId ? res.data! : row))
+    );
   };
 
   const openJoinTargetModal = () => {
@@ -632,14 +672,6 @@ export function VirtualizationZerotierPanel() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-base font-semibold text-slate-900">ZeroTier</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Sequência: 1) conta → 2) associar rede (o servidor da API entra nessa rede) → 3) adicionar
-            servidor → 4) Instalar &amp; join <strong>só à rede escolhida</strong> nesse alvo.
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Cada rede tem até {ZEROTIER_NETWORK_MEMBER_LIMIT} dispositivos. O «Entrar em todas as redes»
-            aplica-se apenas a <em>este</em> servidor (API), não aos PBS/PVE.
-          </p>
           <p className="mt-1 text-xs text-slate-500">
             Token em{' '}
             <a href="https://my.zerotier.com/account" target="_blank" rel="noreferrer" className="underline">
@@ -677,14 +709,6 @@ export function VirtualizationZerotierPanel() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <p className="text-sm font-semibold text-slate-900">Este servidor (API)</p>
-              <p className="mt-0.5 text-xs text-slate-500">
-                Ao associar uma rede, este host entra nessa rede (não nas outras). «Entrar em todas»
-                sincroniza as redes já associadas na app.
-              </p>
-              <p className="mt-1 font-mono text-xs text-slate-600">
-                {localHost.username}@{localHost.hostname}
-                {localHost.cliPath ? ` · ${localHost.cliPath}` : ''}
-              </p>
               <p className="mt-1 text-xs text-slate-700">
                 Estado:{' '}
                 <strong>
@@ -694,8 +718,6 @@ export function VirtualizationZerotierPanel() {
                       ? `online · node ${localHost.nodeId}${localHost.version ? ` · v${localHost.version}` : ''}`
                       : 'instalado mas offline / sem root'}
                 </strong>
-                {' · '}
-                sudo sem password: {localHost.sudoPasswordless ? 'sim' : 'não'}
               </p>
               {localHost.networks.length > 0 ? (
                 <ul className="mt-2 space-y-0.5 font-mono text-xs text-slate-600">
@@ -1080,21 +1102,44 @@ export function VirtualizationZerotierPanel() {
                 className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 px-3 py-2"
               >
                 <div>
-                  <p className="font-mono text-sm text-slate-900">{member.nodeId}</p>
-                  <p className="text-xs text-slate-500">{member.name ?? 'Sem nome'}</p>
+                  <p className="text-sm font-medium text-slate-900">
+                    {member.name ?? 'Sem nome'}
+                  </p>
+                  <p className="font-mono text-xs text-slate-500">{member.nodeId}</p>
+                  {member.ipAssignments.length > 0 ? (
+                    <p className="font-mono text-xs text-slate-600">
+                      IP: {member.ipAssignments.join(', ')}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-400">IP: —</p>
+                  )}
                   <p className="text-xs text-slate-500">
                     {member.authorized ? 'Autorizado' : 'Pendente'}
-                    {member.lastOnline ? ` · online ${new Date(member.lastOnline).toLocaleString()}` : ''}
+                    {member.lastOnline
+                      ? ` · online ${new Date(member.lastOnline).toLocaleString()}`
+                      : ''}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  className="btn-secondary text-sm"
-                  disabled={busy}
-                  onClick={() => void handleToggleMember(member.memberId, !member.authorized)}
-                >
-                  {member.authorized ? 'Desautorizar' : 'Autorizar'}
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary text-sm"
+                    disabled={busy}
+                    onClick={() => void handleRenameMember(member)}
+                  >
+                    Nome
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-secondary text-sm"
+                    disabled={busy}
+                    onClick={() =>
+                      void handleToggleMember(member.memberId, !member.authorized, member.name)
+                    }
+                  >
+                    {member.authorized ? 'Desautorizar' : 'Autorizar'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>

@@ -396,16 +396,20 @@ function mapMemberPublic(member: {
   id: string;
   nodeId?: string;
   name?: string;
-  config?: { authorized?: boolean };
+  config?: { authorized?: boolean; ipAssignments?: string[] };
   lastOnline?: number;
 }): VirtualizationZerotierMemberPublic {
   const memberId = member.id;
   const nodeId = member.nodeId ?? member.id;
+  const ipAssignments = Array.isArray(member.config?.ipAssignments)
+    ? member.config!.ipAssignments!.filter((ip) => typeof ip === 'string' && ip.trim()).map((ip) => ip.trim())
+    : [];
   return {
     memberId,
     nodeId,
     name: member.name?.trim() || null,
     authorized: Boolean(member.config?.authorized),
+    ipAssignments,
     lastOnline:
       member.lastOnline != null && member.lastOnline > 0
         ? new Date(member.lastOnline).toISOString()
@@ -487,7 +491,8 @@ export async function setVirtualizationZerotierMemberAuthorized(
   workspaceId: string,
   networkRowId: string,
   memberId: string,
-  authorized: boolean
+  authorized: boolean,
+  options?: { name?: string | null }
 ): Promise<VirtualizationZerotierMemberPublic> {
   const row = await prisma.virtualizationZerotierNetwork.findFirst({
     where: { id: networkRowId, tenantId, workspaceId },
@@ -499,7 +504,8 @@ export async function setVirtualizationZerotierMemberAuthorized(
     getClientConfig(row.account),
     row.networkId,
     memberId,
-    authorized
+    authorized,
+    { name: options?.name }
   );
   await refreshVirtualizationZerotierNetwork(tenantId, workspaceId, networkRowId);
   return mapMemberPublic(updated);

@@ -230,12 +230,13 @@ export async function provisionZerotierJoinTarget(
       throw new Error('Instalação concluída mas node ID não detectado no output');
     }
 
-    appendLog(`[api] a autorizar membro ${nodeId}…`);
+    appendLog(`[api] a autorizar membro ${nodeId} como «${target.label}»…`);
     await zerotierSetMemberAuthorized(
       getClientConfig(target.account),
       target.network.networkId,
       nodeId,
-      true
+      true,
+      { name: target.label.trim() || `host-${nodeId.slice(0, 6)}` }
     );
     appendLog('[api] membro autorizado');
 

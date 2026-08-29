@@ -191,6 +191,7 @@ export interface VirtualizationZerotierMemberPublic {
   nodeId: string;
   name: string | null;
   authorized: boolean;
+  ipAssignments: string[];
   lastOnline: string | null;
 }
 
