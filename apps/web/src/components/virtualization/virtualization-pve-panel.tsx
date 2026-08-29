@@ -522,8 +522,16 @@ export function VirtualizationPvePanel() {
                       <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                         Storages
                       </h4>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Storages PBS ligados ao PVE estão ocultos (já contam no separador PBS).
+                      </p>
                       <PveStorageCards storages={detail.storages} />
                     </div>
+                  ) : detail && !detail.lastError ? (
+                    <p className="mt-5 text-xs text-slate-500">
+                      Sem storages locais. Storages PBS ligados ao PVE estão ocultos (já contam no
+                      separador PBS).
+                    </p>
                   ) : null}
 
                   {detail && detail.nodes.length > 0 ? (

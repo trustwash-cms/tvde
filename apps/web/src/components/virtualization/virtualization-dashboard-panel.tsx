@@ -16,6 +16,7 @@ import {
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
+import { PveGuestsModal } from './pve-guests-modal';
 
 function formatBackupTime(iso: string | null): string {
   if (!iso) return '—';
@@ -53,6 +54,9 @@ export function VirtualizationDashboardPanel() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [backupsPage, setBackupsPage] = useState(0);
+  const [guestsModal, setGuestsModal] = useState<{ serverId: string; serverLabel: string } | null>(
+    null
+  );
   const hasLoadedRef = useRef(false);
 
   const loadDashboard = useCallback(
@@ -207,7 +211,7 @@ export function VirtualizationDashboardPanel() {
         <div className="card p-5">
           <h2 className="text-sm font-semibold text-slate-900">Infraestrutura</h2>
           <p className="mt-1 text-xs text-slate-500">
-            PBS por datastore · PVE resumido (clique para ver storages).
+            PBS por datastore · PVE: clique para ver VMs/CTs (consola e SSH).
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {data.datastores.map((ds) => (
@@ -253,10 +257,13 @@ export function VirtualizationDashboardPanel() {
             ))}
 
             {data.pveServers.map((pve) => (
-              <Link
+              <button
                 key={`pve-${pve.serverId}`}
-                href={`${WEB_ROUTES.dashboard.virtualization.pve}?server=${pve.serverId}`}
-                className="rounded-lg border border-orange-100 bg-orange-50/40 p-3 transition hover:border-orange-200 hover:bg-orange-50/70"
+                type="button"
+                onClick={() =>
+                  setGuestsModal({ serverId: pve.serverId, serverLabel: pve.serverLabel })
+                }
+                className="rounded-lg border border-orange-100 bg-orange-50/40 p-3 text-left transition hover:border-orange-200 hover:bg-orange-50/70"
               >
                 <div className="flex items-start justify-between gap-2">
                   <p className="truncate text-xs font-medium text-slate-900" title={pve.serverLabel}>
@@ -294,13 +301,24 @@ export function VirtualizationDashboardPanel() {
                     {pve.version ? (
                       <p className="mt-2 text-[10px] text-slate-500">PVE {pve.version}</p>
                     ) : null}
+                    <p className="mt-2 text-[10px] font-medium text-orange-700">
+                      Ver VMs / consola / SSH
+                    </p>
                   </>
                 )}
-              </Link>
+              </button>
             ))}
           </div>
         </div>
       ) : null}
+
+      <PveGuestsModal
+        open={Boolean(guestsModal)}
+        onClose={() => setGuestsModal(null)}
+        workspaceId={workspaceId}
+        serverId={guestsModal?.serverId ?? null}
+        serverLabel={guestsModal?.serverLabel ?? ''}
+      />
 
       <div className="card p-5">
         <div className="flex items-center justify-between gap-3">

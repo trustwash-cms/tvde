@@ -24,11 +24,23 @@ import {
 import {
   createVirtualizationPveServer,
   deleteVirtualizationPveServer,
+  getVirtualizationPveGuestNetwork,
   getVirtualizationPveServerDetail,
+  listVirtualizationPveGuests,
   listVirtualizationPveServers,
   testVirtualizationPveServer,
   updateVirtualizationPveServer,
 } from '../services/virtualization-pve.service';
+import {
+  createVirtualizationPveConsoleSession,
+  createVirtualizationPveSshSession,
+  getPveConsoleSession,
+  getPveSshSession,
+} from '../services/virtualization-pve-sessions.service';
+import {
+  proxyPveConsoleWebsocket,
+  proxyPveSshWebsocket,
+} from '../services/virtualization-pve-ws-proxy.service';
 import {
   createVirtualizationZerotierAccount,
   createVirtualizationZerotierJoinTarget,
@@ -206,6 +218,15 @@ const settingsBodySchema = z.object({
 });
 
 export async function virtualizationRoutes(fastify: FastifyInstance) {
+  await fastify.register(import('@fastify/websocket'));
+
+  fastify.addHook('onRequest', async (request) => {
+    const query = request.query as { token?: string };
+    if (typeof query.token === 'string' && query.token.trim() && !request.headers.authorization) {
+      request.headers.authorization = `Bearer ${query.token.trim()}`;
+    }
+  });
+
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', fastify.requireModule('virtualization'));
   fastify.addHook('preHandler', fastify.requireRole('superadmin'));
@@ -485,6 +506,185 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
       throw fastify.httpErrors.notFound(message);
     }
   });
+
+  const guestTypeSchema = z.enum(['qemu', 'lxc']);
+
+  fastify.get('/virtualization/pve/servers/:id/guests', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { id } = request.params as { id: string };
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await listVirtualizationPveGuests(tenantId, workspaceId, id);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Servidor não encontrado';
+      throw fastify.httpErrors.notFound(message);
+    }
+  });
+
+  fastify.get('/virtualization/pve/servers/:id/guests/:guestType/:vmid/network', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await getVirtualizationPveGuestNetwork(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao obter rede';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/pve/servers/:id/guests/:guestType/:vmid/console', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await createVirtualizationPveConsoleSession(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao abrir consola';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/pve/servers/:id/guests/:guestType/:vmid/ssh', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const body = z
+      .object({
+        host: z.string().min(1).max(255),
+        port: z.number().int().min(1).max(65535).optional(),
+        username: z.string().min(1).max(120),
+        password: z.string().max(500).optional(),
+        privateKey: z.string().max(20_000).optional(),
+        passphrase: z.string().max(500).optional(),
+      })
+      .parse(request.body);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await createVirtualizationPveSshSession(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid,
+        body
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao abrir SSH';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.get(
+    '/virtualization/pve/console-ws/:sessionId',
+    { websocket: true },
+    (socket, request) => {
+      void (async () => {
+        try {
+          const query = workspaceQuerySchema.parse(request.query);
+          const { sessionId } = request.params as { sessionId: string };
+          const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+            fastify,
+            request.user,
+            query.workspaceId
+          );
+          const session = getPveConsoleSession(sessionId, tenantId, workspaceId);
+          if (!session) {
+            socket.close(1008, 'Sessão de consola inválida ou expirada');
+            return;
+          }
+          proxyPveConsoleWebsocket(socket, session);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Erro WS consola';
+          try {
+            socket.close(1011, message.slice(0, 100));
+          } catch {
+            // ignore
+          }
+        }
+      })();
+    }
+  );
+
+  fastify.get(
+    '/virtualization/pve/ssh-ws/:sessionId',
+    { websocket: true },
+    (socket, request) => {
+      void (async () => {
+        try {
+          const query = workspaceQuerySchema.parse(request.query);
+          const { sessionId } = request.params as { sessionId: string };
+          const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+            fastify,
+            request.user,
+            query.workspaceId
+          );
+          const session = getPveSshSession(sessionId, tenantId, workspaceId);
+          if (!session) {
+            socket.close(1008, 'Sessão SSH inválida ou expirada');
+            return;
+          }
+          proxyPveSshWebsocket(socket, session);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : 'Erro WS SSH';
+          try {
+            socket.close(1011, message.slice(0, 100));
+          } catch {
+            // ignore
+          }
+        }
+      })();
+    }
+  );
 
   fastify.get('/virtualization/zerotier/accounts', async (request, reply) => {
     const query = workspaceQuerySchema.parse(request.query);

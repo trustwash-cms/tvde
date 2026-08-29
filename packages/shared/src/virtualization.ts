@@ -62,6 +62,48 @@ export interface VirtualizationPveStorageSummary {
   plugintype?: string;
 }
 
+export type VirtualizationPveGuestType = 'qemu' | 'lxc';
+
+export interface VirtualizationPveGuest {
+  vmid: number;
+  name: string;
+  node: string;
+  type: VirtualizationPveGuestType;
+  status: string;
+  cpu?: number;
+  mem?: number;
+  maxmem?: number;
+}
+
+export interface VirtualizationPveGuestNetworkAddress {
+  address: string;
+  family: 'ipv4' | 'ipv6';
+  interfaceName?: string;
+}
+
+export interface VirtualizationPveGuestNetwork {
+  ips: VirtualizationPveGuestNetworkAddress[];
+  reason?: string;
+}
+
+export interface VirtualizationPveConsoleSession {
+  sessionId: string;
+  mode: 'vnc' | 'term';
+  guestType: VirtualizationPveGuestType;
+  vmid: number;
+  node: string;
+  name: string;
+  websocketPath: string;
+}
+
+export interface VirtualizationPveSshSession {
+  sessionId: string;
+  host: string;
+  port: number;
+  username: string;
+  websocketPath: string;
+}
+
 export interface VirtualizationPveDashboardSummary {
   serverId: string;
   serverLabel: string;

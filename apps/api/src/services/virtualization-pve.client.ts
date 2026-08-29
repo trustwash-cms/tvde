@@ -34,6 +34,16 @@ export interface PveClusterResource {
   plugintype?: string;
   content?: string;
   shared?: number;
+  cpu?: number;
+  mem?: number;
+  maxmem?: number;
+}
+
+export interface PveConsoleProxyResult {
+  port: string | number;
+  ticket: string;
+  user?: string;
+  cert?: string;
 }
 
 export interface PveStorageResource {
@@ -53,22 +63,30 @@ function normalizeBaseUrl(baseUrl: string): string {
 async function pveRequest<T>(
   config: PveClientConfig,
   path: string,
-  init?: { method?: string }
+  init?: { method?: string; body?: string; contentType?: string }
 ): Promise<T> {
   const base = normalizeBaseUrl(config.baseUrl);
   const url = new URL(`${base}/api2/json${path.startsWith('/') ? path : `/${path}`}`);
   const isHttps = url.protocol === 'https:';
   const transport = isHttps ? https : http;
+  const method = init?.method ?? 'GET';
+  const requestBody = init?.body;
 
   const body = await new Promise<string>((resolve, reject) => {
+    const headers: Record<string, string> = {
+      Authorization: formatPveAuthorizationHeader(config.apiToken),
+      Accept: 'application/json',
+    };
+    if (requestBody != null) {
+      headers['Content-Type'] = init?.contentType ?? 'application/x-www-form-urlencoded';
+      headers['Content-Length'] = String(Buffer.byteLength(requestBody));
+    }
+
     const req = transport.request(
       url,
       {
-        method: init?.method ?? 'GET',
-        headers: {
-          Authorization: formatPveAuthorizationHeader(config.apiToken),
-          Accept: 'application/json',
-        },
+        method,
+        headers,
         ...(isHttps && !config.verifySsl ? { rejectUnauthorized: false } : {}),
       },
       (res) => {
@@ -92,11 +110,11 @@ async function pveRequest<T>(
           }
 
           if (payload && 'data' in payload) {
-            resolve(JSON.stringify(payload.data));
+            resolve(JSON.stringify(payload.data ?? null));
             return;
           }
 
-          resolve(text || '{}');
+          resolve(text || 'null');
         });
       }
     );
@@ -118,10 +136,17 @@ async function pveRequest<T>(
       reject(err);
     });
     applyHttpRequestTimeout(req, 'PVE');
+    if (requestBody != null) {
+      req.write(requestBody);
+    }
     req.end();
   });
 
   return JSON.parse(body) as T;
+}
+
+export function pveNormalizeBaseUrl(baseUrl: string): string {
+  return normalizeBaseUrl(baseUrl);
 }
 
 export async function pveTestConnection(
@@ -171,4 +196,90 @@ export async function pveListStorageResources(config: PveClientConfig): Promise<
       plugintype: resource.plugintype,
       content: resource.content,
     }));
+}
+
+function guestApiPath(guestType: 'qemu' | 'lxc', node: string, vmid: number, suffix: string): string {
+  return `/nodes/${encodeURIComponent(node)}/${guestType}/${vmid}${suffix}`;
+}
+
+export async function pveCreateVncProxy(
+  config: PveClientConfig,
+  node: string,
+  guestType: 'qemu' | 'lxc',
+  vmid: number
+): Promise<PveConsoleProxyResult> {
+  const data = await pveRequest<PveConsoleProxyResult>(
+    config,
+    guestApiPath(guestType, node, vmid, '/vncproxy'),
+    { method: 'POST', body: 'websocket=1' }
+  );
+  if (!data?.ticket || data.port == null) {
+    throw new Error('PVE não devolveu ticket de consola VNC');
+  }
+  return data;
+}
+
+export async function pveCreateTermProxy(
+  config: PveClientConfig,
+  node: string,
+  guestType: 'qemu' | 'lxc',
+  vmid: number
+): Promise<PveConsoleProxyResult> {
+  const data = await pveRequest<PveConsoleProxyResult>(
+    config,
+    guestApiPath(guestType, node, vmid, '/termproxy'),
+    { method: 'POST', body: '' }
+  );
+  if (!data?.ticket || data.port == null) {
+    throw new Error('PVE não devolveu ticket de terminal');
+  }
+  return data;
+}
+
+export async function pveGuestAgentNetworkInterfaces(
+  config: PveClientConfig,
+  node: string,
+  vmid: number
+): Promise<unknown> {
+  return pveRequest<unknown>(
+    config,
+    guestApiPath('qemu', node, vmid, '/agent/network-get-interfaces')
+  );
+}
+
+export async function pveLxcInterfaces(
+  config: PveClientConfig,
+  node: string,
+  vmid: number
+): Promise<unknown> {
+  return pveRequest<unknown>(config, guestApiPath('lxc', node, vmid, '/interfaces'));
+}
+
+export async function pveLxcConfig(
+  config: PveClientConfig,
+  node: string,
+  vmid: number
+): Promise<Record<string, string>> {
+  const data = await pveRequest<Record<string, string>>(
+    config,
+    guestApiPath('lxc', node, vmid, '/config')
+  );
+  return data ?? {};
+}
+
+export function buildPveConsoleWebsocketUrl(
+  config: PveClientConfig,
+  node: string,
+  guestType: 'qemu' | 'lxc',
+  vmid: number,
+  port: string | number,
+  ticket: string
+): string {
+  const base = new URL(normalizeBaseUrl(config.baseUrl));
+  const wsProtocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  const path = `/api2/json/nodes/${encodeURIComponent(node)}/${guestType}/${vmid}/vncwebsocket`;
+  const url = new URL(`${wsProtocol}//${base.host}${path}`);
+  url.searchParams.set('port', String(port));
+  url.searchParams.set('vncticket', ticket);
+  return url.toString();
 }

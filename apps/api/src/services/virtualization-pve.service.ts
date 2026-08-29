@@ -1,5 +1,9 @@
 import { prisma } from '@tvde/database';
 import type {
+  VirtualizationPveGuest,
+  VirtualizationPveGuestNetwork,
+  VirtualizationPveGuestNetworkAddress,
+  VirtualizationPveGuestType,
   VirtualizationPveNodeSummary,
   VirtualizationPveServerDetail,
   VirtualizationPveServerPublic,
@@ -7,13 +11,16 @@ import type {
 import { extractPveApiTokenId, normalizePveApiTokenValue } from '@tvde/shared';
 import { decrypt, encrypt } from '../lib/crypto';
 import {
+  pveGuestAgentNetworkInterfaces,
   pveListClusterResources,
   pveListNodes,
   pveListStorageResources,
+  pveLxcConfig,
+  pveLxcInterfaces,
   pveTestConnection,
   type PveClientConfig,
 } from './virtualization-pve.client';
-import { buildPveDashboardSummary, mapPveStorageResource } from './virtualization-pve.mappers';
+import { filterLocalPveStorages, mapPveGuestResource, mapPveStorageResource } from './virtualization-pve.mappers';
 
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -236,7 +243,7 @@ export async function getVirtualizationPveServerDetail(
       ...base,
       version: versionData.version,
       nodes: nodeSummaries,
-      storages: storages.map(mapPveStorageResource),
+      storages: filterLocalPveStorages(storages).map(mapPveStorageResource),
       vmCount,
       ctCount,
     };
@@ -256,3 +263,148 @@ export async function getVirtualizationPveServerDetail(
     };
   }
 }
+
+async function loadPveServerOrThrow(tenantId: string, workspaceId: string, serverId: string) {
+  const server = await prisma.virtualizationPveServer.findFirst({
+    where: { id: serverId, tenantId, workspaceId },
+  });
+  if (!server) {
+    throw new Error('Servidor PVE não encontrado');
+  }
+  return server;
+}
+
+export async function listVirtualizationPveGuests(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string
+): Promise<VirtualizationPveGuest[]> {
+  const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const resources = await pveListClusterResources(getClientConfig(server));
+  return resources
+    .map(mapPveGuestResource)
+    .filter((guest): guest is VirtualizationPveGuest => guest != null)
+    .sort((a, b) => a.vmid - b.vmid || a.name.localeCompare(b.name, 'pt'));
+}
+
+function extractIpv4FromAgentPayload(payload: unknown): VirtualizationPveGuestNetworkAddress[] {
+  const root = payload as { result?: unknown } | unknown[];
+  const list = Array.isArray(root)
+    ? root
+    : Array.isArray((root as { result?: unknown }).result)
+      ? ((root as { result: unknown[] }).result)
+      : [];
+
+  const ips: VirtualizationPveGuestNetworkAddress[] = [];
+  for (const iface of list) {
+    if (!iface || typeof iface !== 'object') continue;
+    const row = iface as {
+      name?: string;
+      'ip-addresses'?: Array<{ 'ip-address'?: string; 'ip-address-type'?: string }>;
+    };
+    const addresses = row['ip-addresses'] ?? [];
+    for (const addr of addresses) {
+      const ip = addr['ip-address']?.trim();
+      const familyRaw = (addr['ip-address-type'] ?? '').toLowerCase();
+      if (!ip || ip.startsWith('127.') || ip === '::1') continue;
+      if (familyRaw.includes('ipv6') || ip.includes(':')) {
+        ips.push({ address: ip, family: 'ipv6', interfaceName: row.name });
+      } else {
+        ips.push({ address: ip, family: 'ipv4', interfaceName: row.name });
+      }
+    }
+  }
+  return ips;
+}
+
+function extractIpsFromLxcInterfaces(payload: unknown): VirtualizationPveGuestNetworkAddress[] {
+  const list = Array.isArray(payload) ? payload : [];
+  const ips: VirtualizationPveGuestNetworkAddress[] = [];
+  for (const iface of list) {
+    if (!iface || typeof iface !== 'object') continue;
+    const row = iface as { name?: string; inet?: string; inet6?: string; hwaddr?: string };
+    if (row.inet) {
+      const ip = row.inet.split('/')[0]?.trim();
+      if (ip && !ip.startsWith('127.')) {
+        ips.push({ address: ip, family: 'ipv4', interfaceName: row.name });
+      }
+    }
+    if (row.inet6) {
+      const ip = row.inet6.split('/')[0]?.trim();
+      if (ip && ip !== '::1') {
+        ips.push({ address: ip, family: 'ipv6', interfaceName: row.name });
+      }
+    }
+  }
+  return ips;
+}
+
+function extractIpsFromLxcConfig(config: Record<string, string>): VirtualizationPveGuestNetworkAddress[] {
+  const ips: VirtualizationPveGuestNetworkAddress[] = [];
+  for (const [key, value] of Object.entries(config)) {
+    if (!/^net\d+$/i.test(key) || typeof value !== 'string') continue;
+    const ipMatch = value.match(/(?:^|,)ip=([^,]+)/i);
+    const raw = ipMatch?.[1]?.trim();
+    if (!raw || raw.toLowerCase() === 'dhcp' || raw.toLowerCase() === 'manual') continue;
+    const ip = raw.split('/')[0]?.trim();
+    if (ip && !ip.startsWith('127.')) {
+      ips.push({ address: ip, family: ip.includes(':') ? 'ipv6' : 'ipv4', interfaceName: key });
+    }
+  }
+  return ips;
+}
+
+export async function getVirtualizationPveGuestNetwork(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string,
+  guestType: VirtualizationPveGuestType,
+  vmid: number
+): Promise<VirtualizationPveGuestNetwork> {
+  const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const config = getClientConfig(server);
+  const guests = await listVirtualizationPveGuests(tenantId, workspaceId, serverId);
+  const guest = guests.find((item) => item.type === guestType && item.vmid === vmid);
+  if (!guest) {
+    return { ips: [], reason: 'Guest não encontrado neste servidor PVE.' };
+  }
+  if (guest.status !== 'running') {
+    return { ips: [], reason: 'A máquina está parada — ligue-a para obter IPs.' };
+  }
+
+  try {
+    if (guestType === 'qemu') {
+      const payload = await pveGuestAgentNetworkInterfaces(config, guest.node, vmid);
+      const ips = extractIpv4FromAgentPayload(payload);
+      if (ips.length === 0) {
+        return {
+          ips: [],
+          reason:
+            'Sem IPs via qemu-guest-agent. Confirme que o agent está instalado e a correr na VM.',
+        };
+      }
+      return { ips };
+    }
+
+    try {
+      const ifaces = await pveLxcInterfaces(config, guest.node, vmid);
+      const fromIfaces = extractIpsFromLxcInterfaces(ifaces);
+      if (fromIfaces.length > 0) return { ips: fromIfaces };
+    } catch {
+      // fallback to config
+    }
+
+    const lxcConfig = await pveLxcConfig(config, guest.node, vmid);
+    const fromConfig = extractIpsFromLxcConfig(lxcConfig);
+    if (fromConfig.length === 0) {
+      return { ips: [], reason: 'Sem IPs nas interfaces/config do CT.' };
+    }
+    return { ips: fromConfig };
+  } catch (err) {
+    return {
+      ips: [],
+      reason: err instanceof Error ? err.message : 'Não foi possível obter a rede do guest.',
+    };
+  }
+}
+

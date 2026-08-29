@@ -29,6 +29,7 @@ if (process.argv.includes('build')) {
 const nextConfig = {
   reactStrictMode: true,
   output: 'standalone',
+  transpilePackages: ['@novnc/novnc'],
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
     NEXT_PUBLIC_SHOW_DEMO_HINT: process.env.NEXT_PUBLIC_SHOW_DEMO_HINT,
