@@ -1,5 +1,5 @@
 import { Client as SshClient } from 'ssh2';
-import WebSocket from 'ws';
+import WebSocket, { type RawData } from 'ws';
 import { formatPveAuthorizationHeader } from '@tvde/shared';
 import type { PveConsoleSessionRecord, PveSshSessionRecord } from './virtualization-pve-sessions.service';
 
@@ -41,7 +41,7 @@ export function proxyPveConsoleWebsocket(
     }
   });
 
-  upstream.on('message', (data, isBinary) => {
+  upstream.on('message', (data: RawData, isBinary: boolean) => {
     if (browser.readyState !== WebSocket.OPEN) return;
     if (isBinary || Buffer.isBuffer(data)) {
       const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -51,13 +51,13 @@ export function proxyPveConsoleWebsocket(
     }
   });
 
-  upstream.on('error', (err) => {
+  upstream.on('error', (err: Error) => {
     closeBoth(1011, err.message.slice(0, 100));
   });
 
   upstream.on('close', () => closeBoth());
 
-  browser.on('message', (data, isBinary) => {
+  browser.on('message', (data: RawData, isBinary: boolean) => {
     if (upstream.readyState !== WebSocket.OPEN) return;
     if (isBinary || Buffer.isBuffer(data)) {
       const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -110,7 +110,7 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
         });
         stream.on('close', () => closeBoth());
 
-        browser.on('message', (data, isBinary) => {
+        browser.on('message', (data: RawData, isBinary: boolean) => {
           if (!stream.writable) return;
           if (!isBinary && typeof data === 'string') {
             try {
@@ -140,7 +140,7 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
         });
       });
     })
-    .on('error', (err) => {
+    .on('error', (err: Error) => {
       closeBoth(1011, err.message.slice(0, 100));
     })
     .on('close', () => closeBoth());

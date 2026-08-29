@@ -218,8 +218,6 @@ const settingsBodySchema = z.object({
 });
 
 export async function virtualizationRoutes(fastify: FastifyInstance) {
-  await fastify.register(import('@fastify/websocket'));
-
   fastify.addHook('onRequest', async (request) => {
     const query = request.query as { token?: string };
     if (typeof query.token === 'string' && query.token.trim() && !request.headers.authorization) {

@@ -89,6 +89,7 @@ export async function buildApp() {
 
   await fastify.register(authPlugin);
   await fastify.register(modulePlugin);
+  await fastify.register(import('@fastify/websocket'));
 
   fastify.get(getHealthPath(), async () => {
     const playwright = env.portalRpaMock

@@ -46,6 +46,7 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$HOST" 'set -e
     echo "==== playwright:libs OK (já presente) ===="
   fi
 
+  npm install --no-audit --no-fund
   npm run build --workspace=@tvde/shared
   npm run build --workspace=apps/api
   npm run build --workspace=apps/web
