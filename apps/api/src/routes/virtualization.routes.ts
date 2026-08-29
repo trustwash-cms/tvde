@@ -49,6 +49,10 @@ import {
   updateVirtualizationZerotierAccount,
 } from '../services/zerotier.service';
 import { startZerotierJoinTargetProvision } from '../services/zerotier-provision.service';
+import {
+  getLocalZerotierHostStatus,
+  provisionLocalZerotierHost,
+} from '../services/zerotier-local.service';
 
 const workspaceQuerySchema = z.object({
   workspaceId: z.string().uuid().optional(),
@@ -813,6 +817,42 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
       throw fastify.httpErrors.badRequest(
         err instanceof Error ? err.message : 'Falha ao iniciar provisioning'
       );
+    }
+  });
+
+  fastify.get('/virtualization/zerotier/local-host', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    await resolveWorkspaceTenantScope(fastify, request.user, query.workspaceId);
+    const data = await getLocalZerotierHostStatus();
+    return reply.send({ success: true, data });
+  });
+
+  fastify.post('/virtualization/zerotier/local-host/provision', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const body = z
+      .object({
+        networkRowId: z.string().uuid(),
+      })
+      .parse(request.body);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await provisionLocalZerotierHost(tenantId, workspaceId, body.networkRowId);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha no provisionamento local';
+      const provisionLog =
+        err && typeof err === 'object' && 'provisionLog' in err
+          ? String((err as { provisionLog: unknown }).provisionLog)
+          : undefined;
+      return reply.status(502).send({
+        success: false,
+        error: message,
+        data: provisionLog ? { provisionLog } : null,
+      });
     }
   });
 }

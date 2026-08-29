@@ -252,6 +252,7 @@ export {
   type VirtualizationZerotierRemoteNetwork,
   type VirtualizationZerotierMemberPublic,
   type VirtualizationZerotierJoinTargetPublic,
+  type VirtualizationZerotierLocalHostPublic,
   type VirtualizationZerotierJoinTargetKind,
   type VirtualizationZerotierSshAuthMode,
   type VirtualizationZerotierJoinStatus,

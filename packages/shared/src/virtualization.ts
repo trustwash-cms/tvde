@@ -203,6 +203,25 @@ export type VirtualizationZerotierJoinStatus =
   | 'authorized'
   | 'failed';
 
+export interface VirtualizationZerotierLocalHostPublic {
+  hostname: string;
+  username: string;
+  isRoot: boolean;
+  sudoPasswordless: boolean;
+  cliPath: string | null;
+  installed: boolean;
+  online: boolean;
+  nodeId: string | null;
+  version: string | null;
+  networks: Array<{
+    networkId: string;
+    status: string;
+    name: string | null;
+  }>;
+  lastError: string | null;
+  hint: string | null;
+}
+
 export interface VirtualizationZerotierJoinTargetPublic {
   id: string;
   accountId: string;

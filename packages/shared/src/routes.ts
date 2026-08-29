@@ -529,6 +529,8 @@ export const API_PATHS = {
     zerotierJoinTargetById: (id: string) => `/virtualization/zerotier/join-targets/${id}`,
     zerotierJoinTargetProvision: (id: string) =>
       `/virtualization/zerotier/join-targets/${id}/provision`,
+    zerotierLocalHost: '/virtualization/zerotier/local-host',
+    zerotierLocalHostProvision: '/virtualization/zerotier/local-host/provision',
   },
   billing: {
     moloniStatus: '/billing/moloni/status',

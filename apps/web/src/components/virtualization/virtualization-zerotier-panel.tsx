@@ -10,6 +10,7 @@ import {
   type VirtualizationSettingsPublic,
   type VirtualizationZerotierAccountPublic,
   type VirtualizationZerotierJoinTargetPublic,
+  type VirtualizationZerotierLocalHostPublic,
   type VirtualizationZerotierMemberPublic,
   type VirtualizationZerotierNetworkPublic,
   type VirtualizationZerotierRemoteNetwork,
@@ -73,6 +74,10 @@ export function VirtualizationZerotierPanel() {
   const [accounts, setAccounts] = useState<VirtualizationZerotierAccountPublic[]>([]);
   const [networks, setNetworks] = useState<VirtualizationZerotierNetworkPublic[]>([]);
   const [joinTargets, setJoinTargets] = useState<VirtualizationZerotierJoinTargetPublic[]>([]);
+  const [localHost, setLocalHost] = useState<VirtualizationZerotierLocalHostPublic | null>(null);
+  const [localNetworkRowId, setLocalNetworkRowId] = useState('');
+  const [localProvisioning, setLocalProvisioning] = useState(false);
+  const [localProvisionLog, setLocalProvisionLog] = useState('');
   const [pbsServers, setPbsServers] = useState<VirtualizationPbsServerPublic[]>([]);
   const [pveServers, setPveServers] = useState<VirtualizationPveServerPublic[]>([]);
   const [workspaceSettings, setWorkspaceSettings] = useState<VirtualizationSettingsPublic | null>(null);
@@ -96,7 +101,8 @@ export function VirtualizationZerotierPanel() {
 
   const loadAll = useCallback(async () => {
     if (!workspaceId) return;
-    const [accountsRes, networksRes, targetsRes, pbsRes, pveRes, settingsRes] = await Promise.all([
+    const [accountsRes, networksRes, targetsRes, pbsRes, pveRes, settingsRes, localRes] =
+      await Promise.all([
       apiFetch<VirtualizationZerotierAccountPublic[]>(
         withWorkspaceQuery(API_PATHS.virtualization.zerotierAccounts, workspaceId),
         {},
@@ -127,13 +133,22 @@ export function VirtualizationZerotierPanel() {
         {},
         getStoredToken()
       ),
+      apiFetch<VirtualizationZerotierLocalHostPublic>(
+        withWorkspaceQuery(API_PATHS.virtualization.zerotierLocalHost, workspaceId),
+        {},
+        getStoredToken()
+      ),
     ]);
     if (accountsRes.data) setAccounts(accountsRes.data);
-    if (networksRes.data) setNetworks(networksRes.data);
+    if (networksRes.data) {
+      setNetworks(networksRes.data);
+      setLocalNetworkRowId((prev) => prev || networksRes.data![0]?.id || '');
+    }
     if (targetsRes.data) setJoinTargets(targetsRes.data);
     if (pbsRes.data) setPbsServers(pbsRes.data);
     if (pveRes.data) setPveServers(pveRes.data);
     if (settingsRes.data) setWorkspaceSettings(settingsRes.data);
+    if (localRes.data) setLocalHost(localRes.data);
     if (!accountsRes.data && !networksRes.data) {
       setError(getApiErrorMessage(accountsRes) || getApiErrorMessage(networksRes));
     }
@@ -512,6 +527,42 @@ export function VirtualizationZerotierPanel() {
     await loadAll();
   };
 
+  const handleLocalProvision = async () => {
+    if (!workspaceId || localProvisioning) return;
+    if (!localNetworkRowId) {
+      setError('Seleccione uma rede ZeroTier para o servidor da app.');
+      return;
+    }
+    setLocalProvisioning(true);
+    setLocalProvisionLog('');
+    setError('');
+    setMessage('A instalar/join ZeroTier neste servidor (API)…');
+    const res = await apiFetch<{
+      local: VirtualizationZerotierLocalHostPublic;
+      nodeId: string | null;
+      provisionLog: string;
+    }>(
+      withWorkspaceQuery(API_PATHS.virtualization.zerotierLocalHostProvision, workspaceId),
+      {
+        method: 'POST',
+        body: JSON.stringify({ networkRowId: localNetworkRowId }),
+      },
+      getStoredToken()
+    );
+    setLocalProvisioning(false);
+    if (res.data?.provisionLog) setLocalProvisionLog(res.data.provisionLog);
+    if (res.data?.local) setLocalHost(res.data.local);
+    if (!res.success || !res.data) {
+      const errData = res.data as { provisionLog?: string } | undefined;
+      if (errData?.provisionLog) setLocalProvisionLog(errData.provisionLog);
+      setError(getApiErrorMessage(res));
+      await loadAll();
+      return;
+    }
+    setMessage(`Servidor da app no ZeroTier — node ${res.data.nodeId}.`);
+    await loadAll();
+  };
+
   const handleDeleteJoinTarget = async (targetId: string) => {
     if (!workspaceId || !window.confirm('Remover este alvo de instalação?')) return;
     setBusy(true);
@@ -570,6 +621,90 @@ export function VirtualizationZerotierPanel() {
 
       {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       {message ? <p className="mt-3 text-sm text-emerald-700">{message}</p> : null}
+
+      {localHost ? (
+        <div
+          className={`mt-4 rounded-lg border p-4 ${
+            localHost.online
+              ? 'border-emerald-200 bg-emerald-50/60'
+              : 'border-amber-200 bg-amber-50/60'
+          }`}
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Este servidor (API)</p>
+              <p className="mt-1 font-mono text-xs text-slate-600">
+                {localHost.username}@{localHost.hostname}
+                {localHost.cliPath ? ` · ${localHost.cliPath}` : ''}
+              </p>
+              <p className="mt-1 text-xs text-slate-700">
+                Estado:{' '}
+                <strong>
+                  {!localHost.installed
+                    ? 'não instalado'
+                    : localHost.online
+                      ? `online · node ${localHost.nodeId}${localHost.version ? ` · v${localHost.version}` : ''}`
+                      : 'instalado mas offline / sem root'}
+                </strong>
+                {' · '}
+                sudo sem password: {localHost.sudoPasswordless ? 'sim' : 'não'}
+              </p>
+              {localHost.networks.length > 0 ? (
+                <ul className="mt-2 space-y-0.5 font-mono text-xs text-slate-600">
+                  {localHost.networks.map((net) => (
+                    <li key={net.networkId}>
+                      {net.networkId} · {net.status}
+                      {net.name ? ` · ${net.name}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {localHost.hint ? <p className="mt-2 text-xs text-amber-800">{localHost.hint}</p> : null}
+              {localHost.lastError ? (
+                <p className="mt-1 text-xs text-red-600">{localHost.lastError}</p>
+              ) : null}
+            </div>
+            <div className="flex min-w-[220px] flex-col gap-2">
+              <select
+                className="input w-full text-sm"
+                value={localNetworkRowId}
+                onChange={(e) => setLocalNetworkRowId(e.target.value)}
+                disabled={networks.length === 0 || localProvisioning}
+              >
+                <option value="">Rede para join…</option>
+                {networks.map((network) => (
+                  <option key={network.id} value={network.id}>
+                    {network.label} ({network.networkId})
+                  </option>
+                ))}
+              </select>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary text-sm"
+                  disabled={busy || localProvisioning}
+                  onClick={() => void loadAll()}
+                >
+                  Verificar
+                </button>
+                <button
+                  type="button"
+                  className="btn-primary text-sm"
+                  disabled={localProvisioning || !localNetworkRowId}
+                  onClick={() => void handleLocalProvision()}
+                >
+                  {localProvisioning ? 'A instalar…' : 'Instalar / join aqui'}
+                </button>
+              </div>
+            </div>
+          </div>
+          {localProvisionLog ? (
+            <pre className="mt-3 max-h-40 overflow-auto rounded bg-slate-900/90 p-2 text-[11px] text-slate-100">
+              {localProvisionLog}
+            </pre>
+          ) : null}
+        </div>
+      ) : null}
 
       {accounts.length === 0 ? (
         <p className="mt-4 text-sm text-slate-500">Nenhuma conta ZeroTier configurada.</p>

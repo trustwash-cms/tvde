@@ -2,6 +2,7 @@ import { prisma } from '@tvde/database';
 import { parseSshEndpoint, type VirtualizationZerotierJoinTargetPublic } from '@tvde/shared';
 import { decrypt } from '../lib/crypto';
 import { getWorkspaceSshCredentials } from './virtualization.service';
+import { getLocalZerotierHostStatus } from './zerotier-local.service';
 import {
   buildSshExecOptionsFromJoinTarget,
   buildZerotierInstallJoinScript,
@@ -169,6 +170,19 @@ export async function provisionZerotierJoinTarget(
       });
       target.sshHost = sshHost;
       target.sshPort = sshPort;
+    }
+
+    try {
+      const local = await getLocalZerotierHostStatus();
+      if (!local.online) {
+        appendLog(
+          `[aviso] ZeroTier neste servidor (API: ${local.hostname}) não está online — hosts só na rede ZT podem falhar. Use «Instalar / join aqui» no painel.`
+        );
+      } else {
+        appendLog(`[local] API host ZT OK · node ${local.nodeId}`);
+      }
+    } catch {
+      /* ignore local probe errors */
     }
 
     appendLog(`[ssh] ${target.sshUsername}@${sshHost}:${sshPort} (${target.sshAuthMode})`);
