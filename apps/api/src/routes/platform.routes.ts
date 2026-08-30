@@ -47,6 +47,7 @@ import {
   getWhatsappActiveProvider,
   setWhatsappActiveProvider,
 } from '../modules/whatsapp-business/whatsapp-provider.service';
+import { getPlatformHostStats } from '../services/platform-host-stats.service';
 
 const featuresSchema = z.object({
   sms2faEnabled: z.boolean().optional(),
@@ -108,6 +109,11 @@ export async function platformRoutes(fastify: FastifyInstance) {
         },
       },
     });
+  });
+
+  fastify.get('/platform/host-stats', masterOnly, async (_request, reply) => {
+    const stats = await getPlatformHostStats();
+    return reply.send({ success: true, data: stats });
   });
 
   fastify.patch('/platform/features', masterOnly, async (request, reply) => {

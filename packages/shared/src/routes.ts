@@ -779,6 +779,7 @@ export const API_PATHS = {
   },
   platform: {
     features: '/platform/features',
+    hostStats: '/platform/host-stats',
     smsConfig: '/platform/sms-config',
     smsFeatures: '/platform/sms-config/features',
     smsTest: '/platform/sms-config/test',

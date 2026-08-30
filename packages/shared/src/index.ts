@@ -437,6 +437,7 @@ export {
   type UberSyncOptions,
   type UberReportListItem,
 } from './portal-rpa';
+export type { PlatformHostStats } from './platform-host';
 export {
   PT_MONTH_LABELS,
   currentMonthKey,

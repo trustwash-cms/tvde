@@ -18,6 +18,7 @@ import {
 } from '@/components/dashboard-module-cards';
 import { DashboardUpcomingPanel } from '@/components/dashboard-upcoming-panel';
 import { DriverDashboard } from '@/components/driver-dashboard';
+import { MasterHostStatsCards } from '@/components/dashboard/master-host-stats-cards';
 
 interface MeUser {
   role: Role;
@@ -144,6 +145,8 @@ export default function DashboardPage() {
           )}
         </p>
       </div>
+
+      {me?.role === 'master' && <MasterHostStatsCards />}
 
       <DashboardGlobalSearch showClients={showClients} />
 
