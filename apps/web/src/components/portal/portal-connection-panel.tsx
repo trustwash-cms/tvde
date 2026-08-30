@@ -706,7 +706,7 @@ export function PortalConnectionPanel({
               Último sync: {new Date(connection.lastSyncAt).toLocaleString('pt-PT')}
             </p>
           ) : null}
-          {connection?.usernameMasked ||
+          {(connection?.usernameMasked ||
             connection?.hasPassword ||
             connection?.hasSession ||
             status !== 'disconnected') ? (
