@@ -38,7 +38,11 @@ import {
   resolveCommunicationFeatures,
   updateCommunicationFeaturesForActor,
 } from '../services/tenant-features.service';
-import { resolveWhatsappTenantId, whatsappTenantAccess } from '../lib/whatsapp-tenant';
+import {
+  platformWhatsappTenantExcludeWhere,
+  resolveWhatsappTenantId,
+  whatsappTenantAccess,
+} from '../lib/whatsapp-tenant';
 import {
   getWhatsappActiveProvider,
   setWhatsappActiveProvider,
@@ -226,7 +230,7 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/platform/whatsapp/settings', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const features = await resolveCommunicationFeatures(
       request.user.role as Role,
       tenantId
@@ -244,7 +248,7 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/platform/whatsapp/settings', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const body = z.object({ whatsapp2faEnabled: z.boolean() }).parse(request.body);
     if (body.whatsapp2faEnabled) {
       await setWhatsappActiveProvider(tenantId, 'generic');
@@ -275,19 +279,19 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/platform/whatsapp/status', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const status = await getWhatsappBridgeStatus(tenantId);
     return reply.send({ success: true, data: status });
   });
 
   fastify.get('/platform/whatsapp/qr', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const qr = await getWhatsappBridgeQr(tenantId);
     return reply.send({ success: true, data: qr });
   });
 
   fastify.post('/platform/whatsapp/logout', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     try {
       const result = await logoutWhatsappBridge(tenantId);
 
@@ -307,7 +311,7 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/platform/whatsapp/restart', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     try {
       const result = await restartWhatsappBridge(tenantId);
 
@@ -327,13 +331,13 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/platform/whatsapp/templates', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const templates = await listWhatsappTemplates(tenantId);
     return reply.send({ success: true, data: templates });
   });
 
   fastify.put('/platform/whatsapp/templates/:key', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const { key } = request.params as { key: string };
     if (!Object.values(WHATSAPP_TEMPLATE_KEYS).includes(key as WhatsappTemplateKey)) {
       return reply.status(400).send({ success: false, error: 'Template inválido' });
@@ -355,7 +359,7 @@ export async function platformRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/platform/whatsapp/test', whatsappAccess, async (request, reply) => {
-    const tenantId = resolveWhatsappTenantId(request);
+    const tenantId = await resolveWhatsappTenantId(request);
     const body = z
       .object({
         to: z.string().min(8),
@@ -388,7 +392,19 @@ export async function platformRoutes(fastify: FastifyInstance) {
 
   fastify.get('/platform/whatsapp/tenants', masterOnly, async (_request, reply) => {
     const tenants = await prisma.tenant.findMany({
-      where: { tenantModules: { some: { moduleKey: 'whatsapp', allowed: true } } },
+      where: {
+        ...platformWhatsappTenantExcludeWhere,
+        OR: [
+          { tenantModules: { some: { moduleKey: 'whatsapp', allowed: true } } },
+          {
+            workspaces: {
+              some: {
+                workspaceModules: { some: { moduleKey: 'whatsapp', enabled: true } },
+              },
+            },
+          },
+        ],
+      },
       select: { id: true, name: true, siteId: true },
       orderBy: { name: 'asc' },
     });

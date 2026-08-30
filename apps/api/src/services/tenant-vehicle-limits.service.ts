@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@tvde/database';
+import { platformWhatsappTenantExcludeWhere } from '../lib/whatsapp-tenant';
 import {
   DEFAULT_LIMITS,
   VEHICLE_LIMIT_PLANS,
@@ -89,6 +90,7 @@ export async function listAllTenantVehicleLimits(
 ): Promise<TenantVehicleLimits[]> {
   const [tenants, vehicles] = await Promise.all([
     db.tenant.findMany({
+      where: platformWhatsappTenantExcludeWhere,
       select: { id: true, limitsJson: true, plan: true, siteId: true, name: true },
       orderBy: { name: 'asc' },
     }),

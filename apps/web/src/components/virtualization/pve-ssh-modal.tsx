@@ -1,6 +1,8 @@
 'use client';
 
 import { FormEvent, useEffect, useRef, useState } from 'react';
+import { ClipboardPaste } from 'lucide-react';
+import type { Terminal } from '@xterm/xterm';
 import type {
   VirtualizationPveGuest,
   VirtualizationPveGuestNetwork,
@@ -11,6 +13,7 @@ import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { Modal } from '@/components/modal';
 import { NoAutofillSecretInput } from '@/components/whatsapp/no-autofill-field';
 import { buildVirtualizationWsUrl } from './pve-ws-url';
+import { attachXtermClipboard, pasteIntoXterm } from './xterm-clipboard';
 
 interface PveSshModalProps {
   open: boolean;
@@ -18,6 +21,14 @@ interface PveSshModalProps {
   workspaceId: string | null | undefined;
   serverId: string;
   guest: VirtualizationPveGuest | null;
+}
+
+const TERM_HEIGHT = 'h-[min(65vh,520px)]';
+
+function sendTerminalResize(socket: WebSocket, term: Terminal) {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  if (term.cols < 1 || term.rows < 1) return;
+  socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
 }
 
 export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: PveSshModalProps) {
@@ -32,11 +43,14 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const cleanupRef = useRef<(() => void) | null>(null);
+  const termInstanceRef = useRef<Terminal | null>(null);
+  const [pasteHint, setPasteHint] = useState('');
 
   useEffect(() => {
     if (!open || !guest || !workspaceId) return;
     setError('');
     setConnected(false);
+    setPasteHint('');
     setPassword('');
     setPrivateKey('');
     setNetwork(null);
@@ -67,19 +81,27 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         setError(getApiErrorMessage(res) || 'Não foi possível obter IPs');
       }
     })();
-
-    return () => {
-      cleanupRef.current?.();
-      cleanupRef.current = null;
-    };
   }, [open, guest, serverId, workspaceId]);
+
+  useEffect(() => {
+    if (open) return;
+    cleanupRef.current?.();
+    cleanupRef.current = null;
+    termInstanceRef.current = null;
+    setConnected(false);
+    setBusy(false);
+    setPasteHint('');
+  }, [open]);
 
   const handleConnect = async (event: FormEvent) => {
     event.preventDefault();
     if (!guest || !workspaceId) return;
     setBusy(true);
     setError('');
+    setPasteHint('');
     cleanupRef.current?.();
+    cleanupRef.current = null;
+    termInstanceRef.current = null;
 
     try {
       const res = await apiFetch<VirtualizationPveSshSession>(
@@ -106,9 +128,19 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         return;
       }
 
-      const hostEl = termRef.current;
+      setConnected(true);
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+
+      let hostEl = termRef.current;
+      for (let attempt = 0; attempt < 12 && (!hostEl || hostEl.offsetHeight < 8); attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        hostEl = termRef.current;
+      }
       if (!hostEl) {
         setError('Terminal indisponível');
+        setConnected(false);
         setBusy(false);
         return;
       }
@@ -120,21 +152,28 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
       const term = new Terminal({
         cursorBlink: true,
         fontSize: 13,
+        scrollback: 5000,
         theme: { background: '#0f172a', foreground: '#e2e8f0' },
       });
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.open(hostEl);
       fit.fit();
+      termInstanceRef.current = term;
 
       const wsUrl = buildVirtualizationWsUrl(res.data.websocketPath, workspaceId);
       const socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';
 
+      const syncSize = () => {
+        fit.fit();
+        sendTerminalResize(socket, term);
+      };
+
       socket.onopen = () => {
-        setConnected(true);
         setBusy(false);
-        socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+        syncSize();
+        term.focus();
       };
       socket.onmessage = (ev) => {
         if (typeof ev.data === 'string') term.write(ev.data);
@@ -150,16 +189,15 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         if (socket.readyState === WebSocket.OPEN) socket.send(data);
       });
 
-      const onResize = () => {
-        fit.fit();
-        if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
-        }
-      };
-      window.addEventListener('resize', onResize);
+      const detachClipboard = attachXtermClipboard(hostEl, term);
+
+      const ro = new ResizeObserver(() => syncSize());
+      ro.observe(hostEl);
 
       cleanupRef.current = () => {
-        window.removeEventListener('resize', onResize);
+        ro.disconnect();
+        detachClipboard();
+        termInstanceRef.current = null;
         try {
           socket.close();
         } catch {
@@ -169,6 +207,7 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
       };
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha SSH');
+      setConnected(false);
       setBusy(false);
     }
   };
@@ -176,7 +215,19 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
   const handleClose = () => {
     cleanupRef.current?.();
     cleanupRef.current = null;
+    termInstanceRef.current = null;
     onClose();
+  };
+
+  const handlePasteClick = async () => {
+    setPasteHint('');
+    const term = termInstanceRef.current;
+    if (!term) {
+      setPasteHint('Terminal ainda não está pronto.');
+      return;
+    }
+    const ok = await pasteIntoXterm(term);
+    setPasteHint(ok ? 'Texto colado no SSH.' : 'Não foi possível ler a área de transferência.');
   };
 
   return (
@@ -188,6 +239,19 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
       scrollBody
       showCloseButton
       overlayClassName="z-[60]"
+      headerActions={
+        connected ? (
+          <button
+            type="button"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Colar da área de transferência"
+            title="Colar (Ctrl/Cmd+V)"
+            onClick={() => void handlePasteClick()}
+          >
+            <ClipboardPaste size={18} />
+          </button>
+        ) : null
+      }
       footer={
         !connected ? (
           <div className="flex justify-end gap-2">
@@ -219,7 +283,7 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
       ) : null}
 
       {!connected ? (
-        <form id="pve-ssh-connect-form" onSubmit={(e) => void handleConnect(e)} className="grid gap-3 md:grid-cols-2">
+        <form id="pve-ssh-connect-form" onSubmit={(e) => void handleConnect(e)} className="mb-4 grid gap-3 md:grid-cols-2">
           <label className="block text-sm md:col-span-2">
             <span className="mb-1 block text-slate-700">IP / host</span>
             {guest?.manualIp || (network && network.ips.length > 0) ? (
@@ -292,10 +356,21 @@ export function PveSshModal({ open, onClose, workspaceId, serverId, guest }: Pve
         </form>
       ) : null}
 
+      {pasteHint ? (
+        <div className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+          {pasteHint}
+        </div>
+      ) : null}
+
       <div
         ref={termRef}
-        className={`overflow-hidden rounded-lg bg-slate-900 p-2 ${connected ? 'mt-0 h-[min(65vh,520px)]' : 'mt-3 h-0'}`}
+        className={`overflow-hidden rounded-lg bg-slate-900 p-2 ${TERM_HEIGHT} ${connected ? '' : 'hidden'}`}
       />
+      {connected ? (
+        <p className="mt-2 text-xs text-slate-500">
+          Clique no terminal. Ctrl/Cmd+V ou o botão Colar no canto superior.
+        </p>
+      ) : null}
     </Modal>
   );
 }

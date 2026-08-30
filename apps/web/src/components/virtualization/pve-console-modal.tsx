@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Maximize2, Minimize2 } from 'lucide-react';
+import { ClipboardPaste, Maximize2, Minimize2 } from 'lucide-react';
 import type { VirtualizationPveConsoleSession } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { buildVirtualizationWsUrl } from './pve-ws-url';
+import { attachXtermClipboard, pasteIntoXterm } from './xterm-clipboard';
+import { attachVncClipboard, pasteIntoVnc } from './vnc-type-text';
 
 interface PveConsoleModalProps {
   open: boolean;
@@ -19,22 +21,35 @@ type RfbInstance = {
   resizeSession: boolean;
   focus: () => void;
   sendCredentials: (creds: { password?: string }) => void;
-  addEventListener: (type: string, fn: (e: { detail?: { reason?: string; status?: string } }) => void) => void;
+  sendKey: (keysym: number, code: string, down?: boolean) => void;
+  clipboardPasteFrom: (text: string) => void;
+  addEventListener: (
+    type: string,
+    fn: (e: { detail?: { reason?: string; status?: string; text?: string } }) => void
+  ) => void;
+};
+
+type TermInstance = {
+  focus: () => void;
+  paste: (text: string) => void;
 };
 
 export function PveConsoleModal({ open, onClose, workspaceId, session }: PveConsoleModalProps) {
   const screenRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<HTMLDivElement>(null);
   const fitRef = useRef<(() => void) | null>(null);
+  const rfbRef = useRef<RfbInstance | null>(null);
+  const vncConnectedRef = useRef(false);
+  const termRefInstance = useRef<TermInstance | null>(null);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [pasteHint, setPasteHint] = useState('');
 
   useEffect(() => {
     if (!open) setExpanded(false);
   }, [open]);
 
-  // Reajustar VNC/xterm quando o utilizador amplia ou a janela muda.
   useEffect(() => {
     if (!open) return;
     const id = window.setTimeout(() => fitRef.current?.(), 50);
@@ -53,7 +68,11 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
     let cleanup: (() => void) | undefined;
     setError('');
     setStatus('A ligar…');
+    setPasteHint('');
     fitRef.current = null;
+    rfbRef.current = null;
+    vncConnectedRef.current = false;
+    termRefInstance.current = null;
 
     void (async () => {
       try {
@@ -77,11 +96,26 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
             wsProtocols: ['binary'],
             credentials: { password: session.ticket },
           }) as unknown as RfbInstance;
+          rfbRef.current = rfb;
           rfb.scaleViewport = true;
           rfb.resizeSession = true;
 
+          const detachClipboard = attachVncClipboard(
+            host,
+            () => rfbRef.current,
+            () => vncConnectedRef.current
+          );
+
+          const onClipboard = (e: { detail?: { text?: string } }) => {
+            const text = e.detail?.text;
+            if (!text) return;
+            void navigator.clipboard.writeText(text).catch(() => {
+              // ignore
+            });
+          };
+          rfb.addEventListener('clipboard', onClipboard);
+
           const ro = new ResizeObserver(() => {
-            // scaleViewport reage ao tamanho do contentor no próximo frame
             requestAnimationFrame(() => {
               try {
                 rfb.focus();
@@ -101,7 +135,8 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
 
           rfb.addEventListener('connect', () => {
             if (!disposed) {
-              setStatus('Ligado — clique na consola para focar o teclado');
+              vncConnectedRef.current = true;
+              setStatus('Ligado — clique na consola e use Ctrl/Cmd+V ou o botão Colar');
               try {
                 rfb.focus();
               } catch {
@@ -124,6 +159,7 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
           });
           rfb.addEventListener('disconnect', (e) => {
             if (!disposed) {
+              vncConnectedRef.current = false;
               setError(e.detail?.reason || 'Consola desligada');
               setStatus('');
             }
@@ -132,6 +168,9 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
           cleanup = () => {
             ro.disconnect();
             fitRef.current = null;
+            rfbRef.current = null;
+            vncConnectedRef.current = false;
+            detachClipboard();
             try {
               rfb.disconnect();
             } catch {
@@ -155,19 +194,21 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
         const term = new Terminal({
           cursorBlink: true,
           fontSize: expanded ? 15 : 13,
+          scrollback: 5000,
           theme: { background: '#0f172a', foreground: '#e2e8f0' },
         });
         const fit = new FitAddon();
         term.loadAddon(fit);
         term.open(host);
         fit.fit();
+        termRefInstance.current = term;
 
         const socket = new WebSocket(wsUrl);
         socket.binaryType = 'arraybuffer';
 
         const doFit = () => {
           fit.fit();
-          if (socket.readyState === WebSocket.OPEN) {
+          if (socket.readyState === WebSocket.OPEN && term.cols > 0 && term.rows > 0) {
             socket.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
           }
         };
@@ -178,8 +219,9 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
 
         socket.onopen = () => {
           if (!disposed) {
-            setStatus('Ligado');
+            setStatus('Ligado — Ctrl/Cmd+V ou botão Colar');
             doFit();
+            term.focus();
           }
         };
         socket.onmessage = (ev) => {
@@ -198,10 +240,13 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
         term.onData((data) => {
           if (socket.readyState === WebSocket.OPEN) socket.send(data);
         });
+        const detachClipboard = attachXtermClipboard(host, term);
 
         cleanup = () => {
           ro.disconnect();
           fitRef.current = null;
+          termRefInstance.current = null;
+          detachClipboard();
           try {
             socket.close();
           } catch {
@@ -228,6 +273,35 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
     onClose();
   };
 
+  const handlePasteClick = async () => {
+    setPasteHint('');
+    if (session?.mode === 'vnc') {
+      const rfb = rfbRef.current;
+      if (!rfb) {
+        setPasteHint('Consola ainda não está pronta.');
+        return;
+      }
+      const result = await pasteIntoVnc(rfb, () => vncConnectedRef.current);
+      setPasteHint(
+        result === 'ok'
+          ? 'Texto enviado para a consola.'
+          : result === 'not-connected'
+            ? 'Aguarde a consola ligar antes de colar.'
+            : result === 'denied'
+              ? 'Permissão de clipboard negada pelo browser.'
+              : 'Área de transferência vazia.'
+      );
+      return;
+    }
+    const term = termRefInstance.current;
+    if (!term) {
+      setPasteHint('Terminal ainda não está pronto.');
+      return;
+    }
+    const ok = await pasteIntoXterm(term);
+    setPasteHint(ok ? 'Texto colado no terminal.' : 'Não foi possível ler a área de transferência.');
+  };
+
   const consoleHeight = expanded
     ? 'h-[calc(98vh-9rem)] min-h-[420px]'
     : 'h-[min(75vh,640px)]';
@@ -251,23 +325,40 @@ export function PveConsoleModal({ open, onClose, workspaceId, session }: PveCons
       overlayClassName="z-[60]"
       closeOnBackdrop={!expanded}
       headerActions={
-        <button
-          type="button"
-          className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-          aria-label={expanded ? 'Reduzir consola' : 'Ampliar consola'}
-          title={expanded ? 'Reduzir' : 'Ampliar'}
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-        </button>
+        <>
+          <button
+            type="button"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Colar da área de transferência"
+            title="Colar (Ctrl/Cmd+V)"
+            onClick={() => void handlePasteClick()}
+          >
+            <ClipboardPaste size={18} />
+          </button>
+          <button
+            type="button"
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            aria-label={expanded ? 'Reduzir consola' : 'Ampliar consola'}
+            title={expanded ? 'Reduzir' : 'Ampliar'}
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+          </button>
+        </>
       }
     >
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-slate-500">
-          Clique na área escura para focar. Use o botão ampliar no canto para ecrã quase completo.
+          Clique na consola para focar. Ctrl/Cmd+V ou o botão Colar enviam o texto da área de
+          transferência. Em VNC, o texto é digitado directamente (ideal para comandos).
         </p>
         {status ? <p className="text-xs text-slate-600">{status}</p> : null}
       </div>
+      {pasteHint ? (
+        <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+          {pasteHint}
+        </div>
+      ) : null}
       {error ? (
         <div className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
           {error}

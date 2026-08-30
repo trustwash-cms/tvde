@@ -17,6 +17,7 @@ import type { Role } from '@tvde/shared';
 import { isSmsConfigured, maskPhone, sendOtpSms } from './sms.service';
 import { getWhatsappBridgeStatus } from './whatsapp-bridge.client';
 import { sendOtpWhatsappWithTemplate } from './whatsapp-template.service';
+import { resolveWhatsappSessionTenantId } from '../lib/whatsapp-tenant';
 
 const BACKUP_CODE_COUNT = 8;
 const OTP_EXPIRY_MS: Record<string, number> = {
@@ -110,9 +111,17 @@ export async function get2faMethodOptions(userId: string, role: string): Promise
     select: { tenantId: true },
   });
   const features = await resolveCommunicationFeatures(role as Role, user?.tenantId ?? null);
-  const wa = user?.tenantId
-    ? await getWhatsappBridgeStatus(user.tenantId)
-    : { connected: false, state: 'disconnected' as const, qrAvailable: false };
+  let wa: Awaited<ReturnType<typeof getWhatsappBridgeStatus>> = {
+    connected: false,
+    state: 'disconnected',
+    qrAvailable: false,
+  };
+  try {
+    const sessionTenantId = await resolveWhatsappSessionTenantId(role, user?.tenantId ?? null);
+    wa = await getWhatsappBridgeStatus(sessionTenantId);
+  } catch {
+    // MASTER sem tenant interno, ou tenant em falta — 2FA WhatsApp fica indisponível.
+  }
 
   let smsOk = false;
   try {
@@ -303,9 +312,9 @@ export async function setup2fa(
 
   if (method === 'whatsapp') {
     if (!phone) throw new Error('Telefone obrigatório para 2FA WhatsApp');
-    if (!user.tenantId) throw new Error('Tenant não definido');
+    const sessionTenantId = await resolveWhatsappSessionTenantId(user.role, user.tenantId);
     const normalized = normalizeE164(phone);
-    await sendOtpWhatsappWithTemplate(user.tenantId, normalized, code);
+    await sendOtpWhatsappWithTemplate(sessionTenantId, normalized, code);
     await prisma.user.update({
       where: { id: userId },
       data: { twoFaSecret: null, twoFaMethod: null, backupCodes: [], phone: normalized },
@@ -433,8 +442,8 @@ export async function sendLogin2faCode(userId: string) {
 
   if (method === 'whatsapp') {
     if (!user.phone) throw new Error('Telefone não configurado');
-    if (!user.tenantId) throw new Error('Tenant não definido');
-    await sendOtpWhatsappWithTemplate(user.tenantId, user.phone, code);
+    const sessionTenantId = await resolveWhatsappSessionTenantId(user.role, user.tenantId);
+    await sendOtpWhatsappWithTemplate(sessionTenantId, user.phone, code);
     return { method, maskedPhone: maskPhone(user.phone) };
   }
 

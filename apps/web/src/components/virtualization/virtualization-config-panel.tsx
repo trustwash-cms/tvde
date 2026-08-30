@@ -76,6 +76,24 @@ export function VirtualizationConfigPanel() {
     setBusy(false);
   };
 
+  const handleTestAlert = async () => {
+    if (!workspaceId) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    const res = await apiFetch<{ email: number; whatsapp: number }>(
+      withWorkspaceQuery(API_PATHS.virtualization.alertsTest, workspaceId),
+      { method: 'POST' },
+      getStoredToken()
+    );
+    if (res.data) {
+      setMessage(`Teste enviado: ${res.data.email} email(s), ${res.data.whatsapp} WhatsApp.`);
+    } else {
+      setError(getApiErrorMessage(res));
+    }
+    setBusy(false);
+  };
+
   if (!workspaceId) {
     return <p className="text-sm text-slate-500">Seleccione um workspace.</p>;
   }
@@ -199,7 +217,8 @@ export function VirtualizationConfigPanel() {
             <div className="space-y-4 border-t border-slate-100 pt-6">
               <h3 className="text-sm font-semibold text-slate-900">Notificações e intervalos</h3>
               <p className="text-sm text-slate-500">
-                Alertas automáticos quando um backup falhar (worker em fase posterior).
+                O worker avalia nodes, storage, backups e VMs paradas. Email e WhatsApp usam os destinos
+                abaixo; a inbox na app recebe sempre os incidentes.
               </p>
 
               <label className="flex items-center gap-2 text-sm text-slate-700">
@@ -306,7 +325,7 @@ export function VirtualizationConfigPanel() {
               </label>
 
               <label className="block text-sm">
-                <span className="mb-1 block text-slate-700">Alertas de backup (minutos)</span>
+                <span className="mb-1 block text-slate-700">Intervalo do worker de alertas (minutos)</span>
                 <select
                   className="input w-full max-w-xs"
                   value={settings.pollIntervalMinutes}
@@ -323,6 +342,15 @@ export function VirtualizationConfigPanel() {
                   ))}
                 </select>
               </label>
+
+              <button
+                type="button"
+                className="btn-secondary text-sm"
+                disabled={busy}
+                onClick={() => void handleTestAlert()}
+              >
+                Enviar alerta de teste
+              </button>
             </div>
 
             <button type="submit" className="btn-primary" disabled={busy}>

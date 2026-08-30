@@ -2,6 +2,7 @@ import { prisma } from '@tvde/database';
 import type { SearchResult } from '@tvde/shared';
 import { canAccessDashboardArea, canAccessClientsDashboard, canManageUser, type Role } from '@tvde/shared';
 import { getModuleCapabilities } from './tenant-modules.service';
+import { platformWhatsappTenantExcludeWhere } from '../lib/whatsapp-tenant';
 
 const PER_TYPE_LIMIT = 6;
 export const MIN_SEARCH_LENGTH = 2;
@@ -22,7 +23,7 @@ interface SearchContext {
 
 async function searchTenants(q: string): Promise<SearchResult[]> {
   const rows = await prisma.tenant.findMany({
-    where: textOr(q, ['name', 'siteId']),
+    where: { AND: [platformWhatsappTenantExcludeWhere, textOr(q, ['name', 'siteId'])] },
     take: PER_TYPE_LIMIT,
     orderBy: { name: 'asc' },
     select: { id: true, name: true, siteId: true, plan: true },

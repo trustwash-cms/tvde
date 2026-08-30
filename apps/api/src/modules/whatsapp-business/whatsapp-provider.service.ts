@@ -1,10 +1,12 @@
 import { prisma } from '@tvde/database';
 import type { WhatsappProvider } from '@tvde/shared';
 import { getServerConfig } from '@tvde/shared/server';
+import { isPlatformWhatsappTenantId } from '../../lib/whatsapp-tenant';
 import {
   getTenantCommunicationFeatures,
   updateTenantCommunicationFeatures,
 } from '../../services/tenant-features.service';
+import { getPlatformFeatures, updatePlatformFeatures } from '../../services/platform-features.service';
 
 const PROVIDER_KEY = 'whatsapp_active_provider';
 
@@ -26,7 +28,11 @@ export async function setWhatsappActiveProvider(
   });
 
   if (provider === 'official') {
-    await updateTenantCommunicationFeatures(tenantId, { whatsapp2faEnabled: false });
+    if (isPlatformWhatsappTenantId(tenantId)) {
+      await updatePlatformFeatures({ whatsapp2faEnabled: false });
+    } else {
+      await updateTenantCommunicationFeatures(tenantId, { whatsapp2faEnabled: false });
+    }
     const existing = await prisma.whatsappBusinessConfig.findUnique({ where: { tenantId } });
     if (existing) {
       await prisma.whatsappBusinessConfig.update({
@@ -67,7 +73,9 @@ export async function assertWhatsappProviderActive(
 
 export async function getWhatsappProviderStatus(tenantId: string) {
   const provider = await getWhatsappActiveProvider(tenantId);
-  const comms = await getTenantCommunicationFeatures(tenantId);
+  const comms = isPlatformWhatsappTenantId(tenantId)
+    ? await getPlatformFeatures()
+    : await getTenantCommunicationFeatures(tenantId);
   const business = await prisma.whatsappBusinessConfig.findUnique({
     where: { tenantId },
     select: { enabled: true, portalPublicUrl: true },

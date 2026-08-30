@@ -134,7 +134,7 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
           if (!isBinary && typeof data === 'string') {
             try {
               const parsed = JSON.parse(data) as { type?: string; cols?: number; rows?: number };
-              if (parsed?.type === 'resize' && parsed.cols && parsed.rows) {
+              if (parsed?.type === 'resize' && parsed.cols && parsed.rows && parsed.cols > 0 && parsed.rows > 0) {
                 stream.setWindow(parsed.rows, parsed.cols, 0, 0);
                 return;
               }
@@ -148,7 +148,7 @@ export function proxyPveSshWebsocket(browser: WebSocket, session: PveSshSessionR
           const asText = buf.toString('utf8');
           try {
             const parsed = JSON.parse(asText) as { type?: string; cols?: number; rows?: number };
-            if (parsed?.type === 'resize' && parsed.cols && parsed.rows) {
+            if (parsed?.type === 'resize' && parsed.cols && parsed.rows && parsed.cols > 0 && parsed.rows > 0) {
               stream.setWindow(parsed.rows, parsed.cols, 0, 0);
               return;
             }

@@ -100,6 +100,9 @@ model Tenant {
   virtualizationZerotierNetworks VirtualizationZerotierNetwork[]
   virtualizationZerotierJoinTargets VirtualizationZerotierJoinTarget[]
   virtualizationSettings    VirtualizationSetting[]
+  virtualizationAlertIncidents VirtualizationAlertIncident[]
+  virtualizationAlertEvents    VirtualizationAlertEvent[]
+  virtualizationAlertSnapshots VirtualizationAlertSnapshot[]
 
   @@map("tenants")
 }
@@ -182,6 +185,9 @@ model Workspace {
   virtualizationZerotierNetworks VirtualizationZerotierNetwork[]
   virtualizationZerotierJoinTargets VirtualizationZerotierJoinTarget[]
   virtualizationSettings  VirtualizationSetting?
+  virtualizationAlertIncidents VirtualizationAlertIncident[]
+  virtualizationAlertEvents    VirtualizationAlertEvent[]
+  virtualizationAlertSnapshots VirtualizationAlertSnapshot[]
 
   @@unique([tenantId, slug])
   @@index([tenantId])
@@ -2007,6 +2013,77 @@ model VirtualizationSetting {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@map("virtualization_settings")
+}
+
+model VirtualizationAlertIncident {
+  id               String    @id @default(uuid()) @db.Uuid
+  tenantId         String    @map("tenant_id") @db.Uuid
+  workspaceId      String    @map("workspace_id") @db.Uuid
+  fingerprint      String    @db.VarChar(400)
+  kind             String    @db.VarChar(60)
+  level            String    @db.VarChar(20)
+  status           String    @default("open") @db.VarChar(20)
+  title            String    @db.VarChar(300)
+  message          String    @db.Text
+  sourceType       String    @map("source_type") @db.VarChar(20)
+  sourceId         String?   @map("source_id") @db.Uuid
+  sourceLabel      String    @map("source_label") @db.VarChar(200)
+  metricValue      Float?    @map("metric_value")
+  payload          Json      @default("{}")
+  occurrenceCount  Int       @default(1) @map("occurrence_count")
+  firstSeenAt      DateTime  @map("first_seen_at")
+  lastSeenAt       DateTime  @map("last_seen_at")
+  lastNotifiedAt   DateTime? @map("last_notified_at")
+  acknowledgedAt   DateTime? @map("acknowledged_at")
+  silencedUntil    DateTime? @map("silenced_until")
+  resolvedAt       DateTime? @map("resolved_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
+
+  tenant    Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  events    VirtualizationAlertEvent[]
+
+  @@unique([workspaceId, fingerprint])
+  @@index([workspaceId, status, lastSeenAt])
+  @@index([tenantId, workspaceId])
+  @@map("virtualization_alert_incidents")
+}
+
+model VirtualizationAlertEvent {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String   @map("tenant_id") @db.Uuid
+  workspaceId   String   @map("workspace_id") @db.Uuid
+  incidentId    String   @map("incident_id") @db.Uuid
+  channel       String   @db.VarChar(20)
+  destination   String?  @db.VarChar(255)
+  ok            Boolean
+  error         String?  @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  tenant    Tenant                      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  incident  VirtualizationAlertIncident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([incidentId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("virtualization_alert_events")
+}
+
+model VirtualizationAlertSnapshot {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  workspaceId String   @map("workspace_id") @db.Uuid
+  snapshotKey String   @map("snapshot_key") @db.VarChar(400)
+  value       String   @db.VarChar(200)
+  observedAt  DateTime @map("observed_at")
+
+  tenant    Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, snapshotKey])
+  @@index([workspaceId])
+  @@map("virtualization_alert_snapshots")
 }
 
 model VirtualizationZerotierAccount {

@@ -22,12 +22,22 @@ import {
   updateVirtualizationSettings,
 } from '../services/virtualization.service';
 import {
+  acknowledgeVirtualizationAlert,
+  evaluateVirtualizationAlerts,
+  getVirtualizationAlertSummary,
+  listVirtualizationAlerts,
+  resolveVirtualizationAlert,
+  sendVirtualizationAlertTest,
+  silenceVirtualizationAlert,
+} from '../services/virtualization-alerts.service';
+import {
   createVirtualizationPveServer,
   deleteVirtualizationPveServer,
   getVirtualizationPveGuestNetwork,
   getVirtualizationPveServerDetail,
   listVirtualizationPveGuests,
   listVirtualizationPveServers,
+  pingVirtualizationPveGuest,
   powerVirtualizationPveGuest,
   setVirtualizationPveGuestManualIp,
   testVirtualizationPveServer,
@@ -265,6 +275,106 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
     );
     const data = await updateVirtualizationSettings(tenantId, workspaceId, body);
     return reply.send({ success: true, data });
+  });
+
+  fastify.get('/virtualization/alerts', async (request, reply) => {
+    const query = workspaceQuerySchema
+      .extend({ filter: z.enum(['open', 'all']).optional() })
+      .parse(request.query);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    const data = await listVirtualizationAlerts(tenantId, workspaceId, query.filter ?? 'open');
+    return reply.send({ success: true, data });
+  });
+
+  fastify.get('/virtualization/alerts/summary', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    const data = await getVirtualizationAlertSummary(tenantId, workspaceId);
+    return reply.send({ success: true, data });
+  });
+
+  fastify.post('/virtualization/alerts/test', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await sendVirtualizationAlertTest(tenantId, workspaceId);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha no teste de alerta';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/alerts/evaluate', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    const data = await evaluateVirtualizationAlerts(tenantId, workspaceId);
+    return reply.send({ success: true, data });
+  });
+
+  fastify.post('/virtualization/alerts/:id/acknowledge', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await acknowledgeVirtualizationAlert(tenantId, workspaceId, id);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      throw fastify.httpErrors.notFound(err instanceof Error ? err.message : 'Alerta não encontrado');
+    }
+  });
+
+  fastify.post('/virtualization/alerts/:id/silence', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const body = z.object({ hours: z.number().int().min(1).max(168).optional() }).parse(request.body ?? {});
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await silenceVirtualizationAlert(tenantId, workspaceId, id, body.hours ?? 24);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      throw fastify.httpErrors.notFound(err instanceof Error ? err.message : 'Alerta não encontrado');
+    }
+  });
+
+  fastify.post('/virtualization/alerts/:id/resolve', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const { id } = z.object({ id: z.string().uuid() }).parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await resolveVirtualizationAlert(tenantId, workspaceId, id);
+      return reply.send({ success: true, data });
+    } catch (err) {
+      throw fastify.httpErrors.notFound(err instanceof Error ? err.message : 'Alerta não encontrado');
+    }
   });
 
   fastify.get('/virtualization/pbs/servers', async (request, reply) => {
@@ -715,6 +825,35 @@ export async function virtualizationRoutes(fastify: FastifyInstance) {
       return reply.send({ success: true, data });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erro ao guardar IP';
+      throw fastify.httpErrors.badRequest(message);
+    }
+  });
+
+  fastify.post('/virtualization/pve/servers/:id/guests/:guestType/:vmid/ping', async (request, reply) => {
+    const query = workspaceQuerySchema.parse(request.query);
+    const params = z
+      .object({
+        id: z.string().uuid(),
+        guestType: guestTypeSchema,
+        vmid: z.coerce.number().int().positive(),
+      })
+      .parse(request.params);
+    const { tenantId, workspaceId } = await resolveWorkspaceTenantScope(
+      fastify,
+      request.user,
+      query.workspaceId
+    );
+    try {
+      const data = await pingVirtualizationPveGuest(
+        tenantId,
+        workspaceId,
+        params.id,
+        params.guestType,
+        params.vmid
+      );
+      return reply.send({ success: true, data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao fazer ping';
       throw fastify.httpErrors.badRequest(message);
     }
   });

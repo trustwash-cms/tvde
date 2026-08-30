@@ -10,13 +10,17 @@ import {
   formatProxmoxAuthError,
   getVirtualizationBackupStatusLabel,
   virtualizationBackupStatusClass,
+  getVirtualizationAlertLevelLabel,
+  virtualizationAlertLevelClass,
   type VirtualizationDashboardData,
   type VirtualizationSettingsPublic,
+  type VirtualizationAlertSummary,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { PveGuestsModal } from './pve-guests-modal';
+import { VirtualizationAlertsInbox } from './virtualization-alerts-inbox';
 
 function formatBackupTime(iso: string | null): string {
   if (!iso) return '—';
@@ -57,6 +61,7 @@ export function VirtualizationDashboardPanel() {
   const [guestsModal, setGuestsModal] = useState<{ serverId: string; serverLabel: string } | null>(
     null
   );
+  const [alertSummary, setAlertSummary] = useState<VirtualizationAlertSummary | null>(null);
   const hasLoadedRef = useRef(false);
 
   const loadDashboard = useCallback(
@@ -76,6 +81,12 @@ export function VirtualizationDashboardPanel() {
         } else {
           setError(getApiErrorMessage(res));
         }
+        const alertsRes = await apiFetch<VirtualizationAlertSummary>(
+          withWorkspaceQuery(API_PATHS.virtualization.alertsSummary, workspaceId),
+          {},
+          getStoredToken()
+        );
+        if (alertsRes.data) setAlertSummary(alertsRes.data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Erro ao carregar dashboard';
         setError(
@@ -170,6 +181,27 @@ export function VirtualizationDashboardPanel() {
         </div>
       ) : null}
 
+      {alertSummary && alertSummary.openCount > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+          <p className="text-sm text-slate-800">
+            <span
+              className={`mr-2 inline-flex rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                alertSummary.worstLevel ? virtualizationAlertLevelClass(alertSummary.worstLevel) : ''
+              }`}
+            >
+              {alertSummary.worstLevel
+                ? getVirtualizationAlertLevelLabel(alertSummary.worstLevel)
+                : 'Alertas'}
+            </span>
+            {alertSummary.openCount} alerta{alertSummary.openCount === 1 ? '' : 's'} aberto
+            {alertSummary.critical > 0 ? ` · ${alertSummary.critical} crítico${alertSummary.critical === 1 ? '' : 's'}` : ''}
+          </p>
+          <Link href={WEB_ROUTES.dashboard.virtualization.alertas} className="text-xs font-medium text-[var(--color-primary)] hover:underline">
+            Ver todos
+          </Link>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-3">
         <div className="card overflow-hidden border-blue-100 bg-gradient-to-br from-blue-50 to-white p-5">
           <p className="text-sm font-medium text-blue-800">Espaço usado</p>
@@ -206,6 +238,21 @@ export function VirtualizationDashboardPanel() {
           <p className="mt-4 text-xs text-violet-700">Média entre datastores activos</p>
         </div>
       </div>
+
+      {alertSummary && alertSummary.openCount > 0 && workspaceId ? (
+        <div className="card p-5">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold text-slate-900">Alertas abertos</h2>
+            <Link
+              href={WEB_ROUTES.dashboard.virtualization.alertas}
+              className="text-xs font-medium text-[var(--color-primary)] hover:underline"
+            >
+              Ver todos
+            </Link>
+          </div>
+          <VirtualizationAlertsInbox workspaceId={workspaceId} compact />
+        </div>
+      ) : null}
 
       {(data.datastores.length > 0 || data.pveServers.length > 0) ? (
         <div className="card p-5">

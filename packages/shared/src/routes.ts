@@ -86,6 +86,7 @@ export const WEB_ROUTES = {
       root: '/dashboard/virtualization',
       pve: '/dashboard/virtualization/pve',
       pbs: '/dashboard/virtualization/pbs',
+      alertas: '/dashboard/virtualization/alertas',
       configuracao: '/dashboard/virtualization/configuracao',
     },
     billing: {
@@ -504,6 +505,14 @@ export const API_PATHS = {
   virtualization: {
     dashboard: '/virtualization/dashboard',
     settings: '/virtualization/settings',
+    alerts: '/virtualization/alerts',
+    alertsSummary: '/virtualization/alerts/summary',
+    alertsTest: '/virtualization/alerts/test',
+    alertsEvaluate: '/virtualization/alerts/evaluate',
+    alertById: (id: string) => `/virtualization/alerts/${id}`,
+    alertAcknowledge: (id: string) => `/virtualization/alerts/${id}/acknowledge`,
+    alertSilence: (id: string) => `/virtualization/alerts/${id}/silence`,
+    alertResolve: (id: string) => `/virtualization/alerts/${id}/resolve`,
     pbsServers: '/virtualization/pbs/servers',
     pbsServerById: (id: string) => `/virtualization/pbs/servers/${id}`,
     pbsServerTest: (id: string) => `/virtualization/pbs/servers/${id}/test`,
@@ -525,6 +534,8 @@ export const API_PATHS = {
       `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/stop`,
     pveServerGuestIp: (id: string, guestType: string, vmid: number) =>
       `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/ip`,
+    pveServerGuestPing: (id: string, guestType: string, vmid: number) =>
+      `/virtualization/pve/servers/${id}/guests/${guestType}/${vmid}/ping`,
     pveConsoleWs: (sessionId: string) => `/virtualization/pve/console-ws/${sessionId}`,
     pveSshWs: (sessionId: string) => `/virtualization/pve/ssh-ws/${sessionId}`,
     zerotierAccounts: '/virtualization/zerotier/accounts',

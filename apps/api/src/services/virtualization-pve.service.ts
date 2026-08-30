@@ -1,12 +1,16 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { prisma } from '@tvde/database';
 import type {
   VirtualizationPveGuest,
   VirtualizationPveGuestNetwork,
   VirtualizationPveGuestNetworkAddress,
+  VirtualizationPveGuestPingResult,
   VirtualizationPveGuestType,
   VirtualizationPveNodeSummary,
   VirtualizationPveServerDetail,
   VirtualizationPveServerPublic,
+  VirtualizationPveStorageSummary,
 } from '@tvde/shared';
 import { extractPveApiTokenId, normalizePveApiTokenValue } from '@tvde/shared';
 import { decrypt, encrypt } from '../lib/crypto';
@@ -265,6 +269,60 @@ export async function getVirtualizationPveServerDetail(
   }
 }
 
+export async function getVirtualizationPveAlertContext(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string
+): Promise<{
+  serverLabel: string;
+  error?: string;
+  nodes: VirtualizationPveNodeSummary[];
+  storages: VirtualizationPveStorageSummary[];
+  guests: VirtualizationPveGuest[];
+}> {
+  const server = await prisma.virtualizationPveServer.findFirst({
+    where: { id: serverId, tenantId, workspaceId, isActive: true },
+  });
+  if (!server) {
+    return { serverLabel: serverId, error: 'Servidor PVE não encontrado', nodes: [], storages: [], guests: [] };
+  }
+
+  const config = getClientConfig(server);
+  try {
+    const [nodes, resources, storages] = await Promise.all([
+      pveListNodes(config),
+      pveListClusterResources(config),
+      pveListStorageResources(config),
+    ]);
+    const guests = resources
+      .map(mapPveGuestResource)
+      .filter((guest): guest is VirtualizationPveGuest => guest != null);
+
+    return {
+      serverLabel: server.label,
+      nodes: nodes.map((node) => ({
+        node: node.node,
+        status: node.status ?? 'unknown',
+        cpu: node.cpu ?? 0,
+        maxcpu: node.maxcpu ?? 0,
+        mem: node.mem ?? 0,
+        maxmem: node.maxmem ?? 0,
+        uptime: node.uptime ?? 0,
+      })),
+      storages: filterLocalPveStorages(storages).map(mapPveStorageResource),
+      guests,
+    };
+  } catch (err) {
+    return {
+      serverLabel: server.label,
+      error: err instanceof Error ? err.message : 'Erro ao consultar PVE',
+      nodes: [],
+      storages: [],
+      guests: [],
+    };
+  }
+}
+
 async function loadPveServerOrThrow(tenantId: string, workspaceId: string, serverId: string) {
   const server = await prisma.virtualizationPveServer.findFirst({
     where: { id: serverId, tenantId, workspaceId },
@@ -482,6 +540,93 @@ export async function getVirtualizationPveGuestNetwork(
       ips: [],
       reason: err instanceof Error ? err.message : 'Não foi possível obter a rede do guest.',
     };
+  }
+}
+
+const execFileAsync = promisify(execFile);
+const PING_HOST_PATTERN = /^[\d.:a-fA-F]+$/;
+
+function parsePingOutput(output: string, host: string): VirtualizationPveGuestPingResult {
+  const lines = output.split('\n');
+  const statsLine = lines.find(
+    (line) => line.includes('packet loss') || line.includes('packets transmitted')
+  );
+
+  let packetsSent = 0;
+  let packetsReceived = 0;
+  let packetLossPercent = 100;
+
+  const txRx = statsLine?.match(/(\d+)\s+packets transmitted,\s*(\d+)\s+(?:packets )?received/);
+  if (txRx) {
+    packetsSent = Number(txRx[1]);
+    packetsReceived = Number(txRx[2]);
+  }
+  const loss = statsLine?.match(/([\d.]+)%\s*packet loss/);
+  if (loss) packetLossPercent = Number(loss[1]);
+
+  let minMs: number | undefined;
+  let avgMs: number | undefined;
+  let maxMs: number | undefined;
+
+  const rttLine = lines.find(
+    (line) => line.includes('min/avg/max') || line.includes('round-trip')
+  );
+  const rtt = rttLine?.match(/= ([\d.]+)\/([\d.]+)\/([\d.]+)/);
+  if (rtt) {
+    minMs = Number(rtt[1]);
+    avgMs = Number(rtt[2]);
+    maxMs = Number(rtt[3]);
+  }
+
+  return {
+    host,
+    success: packetsReceived > 0,
+    packetsSent,
+    packetsReceived,
+    packetLossPercent,
+    minMs,
+    avgMs,
+    maxMs,
+    output: output.trim(),
+  };
+}
+
+export async function pingVirtualizationPveGuest(
+  tenantId: string,
+  workspaceId: string,
+  serverId: string,
+  guestType: VirtualizationPveGuestType,
+  vmid: number
+): Promise<VirtualizationPveGuestPingResult> {
+  const server = await loadPveServerOrThrow(tenantId, workspaceId, serverId);
+  const host = parseGuestManualIps(server.guestManualIps)[guestManualIpKey(guestType, vmid)];
+  if (!host) {
+    throw new Error('Defina um IP manual antes de fazer ping');
+  }
+  if (!PING_HOST_PATTERN.test(host) || host.length > 45) {
+    throw new Error('IP manual inválido');
+  }
+
+  const isDarwin = process.platform === 'darwin';
+  const args = isDarwin ? ['-c', '4', '-W', '2000', host] : ['-c', '4', '-W', '2', host];
+
+  try {
+    const { stdout, stderr } = await execFileAsync('ping', args, {
+      timeout: 20_000,
+      maxBuffer: 64 * 1024,
+    });
+    return parsePingOutput(`${stdout}\n${stderr}`.trim(), host);
+  } catch (err) {
+    const execErr = err as { stdout?: string; stderr?: string; message?: string };
+    const output = [execErr.stdout, execErr.stderr].filter(Boolean).join('\n').trim();
+    if (output) {
+      const parsed = parsePingOutput(output, host);
+      return {
+        ...parsed,
+        error: parsed.success ? undefined : 'Sem resposta ao ping',
+      };
+    }
+    throw new Error(execErr.message || 'Falha ao executar ping no servidor API');
   }
 }
 

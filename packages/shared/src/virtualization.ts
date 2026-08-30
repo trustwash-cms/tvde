@@ -108,6 +108,19 @@ export interface VirtualizationPveSshSession {
   websocketPath: string;
 }
 
+export interface VirtualizationPveGuestPingResult {
+  host: string;
+  success: boolean;
+  packetsSent: number;
+  packetsReceived: number;
+  packetLossPercent: number;
+  minMs?: number;
+  avgMs?: number;
+  maxMs?: number;
+  output: string;
+  error?: string;
+}
+
 export interface VirtualizationPveDashboardSummary {
   serverId: string;
   serverLabel: string;
@@ -551,5 +564,158 @@ export function virtualizationBackupStatusClass(status: VirtualizationBackupStat
       return 'text-blue-700 font-semibold';
     default:
       return 'text-slate-600';
+  }
+}
+
+export const VIRTUALIZATION_ALERT_LEVELS = [
+  'info',
+  'notice',
+  'warning',
+  'high',
+  'critical',
+  'security',
+] as const;
+export type VirtualizationAlertLevel = (typeof VIRTUALIZATION_ALERT_LEVELS)[number];
+
+export const VIRTUALIZATION_ALERT_STATUSES = [
+  'open',
+  'acknowledged',
+  'silenced',
+  'resolved',
+] as const;
+export type VirtualizationAlertStatus = (typeof VIRTUALIZATION_ALERT_STATUSES)[number];
+
+export const VIRTUALIZATION_ALERT_KINDS = [
+  'server_unreachable',
+  'node_offline',
+  'node_cpu_high',
+  'node_ram_high',
+  'storage_unavailable',
+  'storage_usage',
+  'backup_failed',
+  'backup_stale',
+  'vm_unexpected_stop',
+] as const;
+export type VirtualizationAlertKind = (typeof VIRTUALIZATION_ALERT_KINDS)[number];
+
+export const VIRTUALIZATION_ALERT_LEVEL_RANK: Record<VirtualizationAlertLevel, number> = {
+  info: 0,
+  notice: 1,
+  warning: 2,
+  high: 3,
+  critical: 4,
+  security: 5,
+};
+
+export const VIRTUALIZATION_ALERT_COOLDOWN_MINUTES: Record<VirtualizationAlertLevel, number> = {
+  info: 1440,
+  notice: 720,
+  warning: 240,
+  high: 60,
+  critical: 30,
+  security: 15,
+};
+
+export interface VirtualizationAlertIncidentPublic {
+  id: string;
+  fingerprint: string;
+  kind: VirtualizationAlertKind;
+  level: VirtualizationAlertLevel;
+  status: VirtualizationAlertStatus;
+  title: string;
+  message: string;
+  sourceType: 'pve' | 'pbs' | 'app';
+  sourceId: string | null;
+  sourceLabel: string;
+  metricValue: number | null;
+  occurrenceCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  lastNotifiedAt: string | null;
+  acknowledgedAt: string | null;
+  silencedUntil: string | null;
+  resolvedAt: string | null;
+}
+
+export interface VirtualizationAlertSummary {
+  openCount: number;
+  critical: number;
+  high: number;
+  warning: number;
+  security: number;
+  worstLevel: VirtualizationAlertLevel | null;
+}
+
+export function getVirtualizationAlertLevelLabel(level: VirtualizationAlertLevel): string {
+  switch (level) {
+    case 'info':
+      return 'Info';
+    case 'notice':
+      return 'Notice';
+    case 'warning':
+      return 'Warning';
+    case 'high':
+      return 'High';
+    case 'critical':
+      return 'Critical';
+    case 'security':
+      return 'Security';
+  }
+}
+
+export function getVirtualizationAlertKindLabel(kind: VirtualizationAlertKind): string {
+  switch (kind) {
+    case 'server_unreachable':
+      return 'Servidor inacessível';
+    case 'node_offline':
+      return 'Node offline';
+    case 'node_cpu_high':
+      return 'CPU elevado';
+    case 'node_ram_high':
+      return 'RAM elevada';
+    case 'storage_unavailable':
+      return 'Storage indisponível';
+    case 'storage_usage':
+      return 'Storage cheio';
+    case 'backup_failed':
+      return 'Backup falhou';
+    case 'backup_stale':
+      return 'Backup atrasado';
+    case 'vm_unexpected_stop':
+      return 'VM parada inesperadamente';
+  }
+}
+
+export function virtualizationAlertLevelClass(level: VirtualizationAlertLevel): string {
+  switch (level) {
+    case 'info':
+      return 'bg-emerald-100 text-emerald-800';
+    case 'notice':
+      return 'bg-blue-100 text-blue-800';
+    case 'warning':
+      return 'bg-amber-100 text-amber-900';
+    case 'high':
+      return 'bg-orange-100 text-orange-900';
+    case 'critical':
+      return 'bg-red-100 text-red-800';
+    case 'security':
+      return 'bg-violet-100 text-violet-900';
+  }
+}
+
+export function virtualizationAlertLevelDotClass(level: VirtualizationAlertLevel): string {
+  switch (level) {
+    case 'info':
+      return 'bg-emerald-500';
+    case 'notice':
+      return 'bg-blue-500';
+    case 'warning':
+      return 'bg-amber-400';
+    case 'high':
+      return 'bg-orange-500';
+    case 'critical':
+      return 'bg-red-600';
+    case 'security':
+      return 'bg-violet-600';
   }
 }

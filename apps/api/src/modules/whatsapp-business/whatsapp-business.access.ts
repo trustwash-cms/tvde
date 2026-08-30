@@ -4,11 +4,7 @@ import { resolveWhatsappTenantId } from '../../lib/whatsapp-tenant';
 
 export function whatsappBusinessAccess(fastify: FastifyInstance) {
   return async (request: FastifyRequest) => {
-    if (request.user.role === 'master') {
-      throw fastify.httpErrors.forbidden(
-        'WhatsApp Business API é configurada pelo superadmin de cada tenant'
-      );
-    }
+    if (request.user.role === 'master') return;
     if (!hasMinRole(request.user.role, 'superadmin')) {
       throw fastify.httpErrors.forbidden('Permissões insuficientes');
     }
@@ -19,6 +15,6 @@ export function whatsappBusinessAccess(fastify: FastifyInstance) {
   };
 }
 
-export function resolveWhatsappBusinessTenantId(request: FastifyRequest): string {
+export async function resolveWhatsappBusinessTenantId(request: FastifyRequest): Promise<string> {
   return resolveWhatsappTenantId(request);
 }

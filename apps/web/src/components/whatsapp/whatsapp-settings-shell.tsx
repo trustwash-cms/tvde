@@ -29,7 +29,7 @@ export function WhatsappSettingsShell({ children }: { children: React.ReactNode 
   }, []);
 
   useEffect(() => {
-    if (!loading && role && role !== 'master') {
+    if (!loading && role) {
       const path = window.location.pathname;
       if (path === WEB_ROUTES.dashboard.settings.whatsapp) {
         router.replace(
@@ -45,12 +45,14 @@ export function WhatsappSettingsShell({ children }: { children: React.ReactNode 
     return <p className="text-sm text-slate-500">A carregar…</p>;
   }
 
-  if (role === 'master') {
-    return <SettingsWhatsappMasterPanel />;
-  }
-
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {role === 'master' && (
+        <p className="text-sm text-slate-500">
+          Sessão WhatsApp da plataforma (MASTER): QR, templates, 2FA e API oficial. As ligações dos
+          clientes continuam independentes.
+        </p>
+      )}
       <WhatsappProviderSelector
         provider={provider}
         onChange={(next) => {
@@ -62,6 +64,7 @@ export function WhatsappSettingsShell({ children }: { children: React.ReactNode 
       />
       <WhatsappSettingsTabs activeProvider={provider} />
       {children}
+      {role === 'master' && <SettingsWhatsappMasterPanel />}
     </div>
   );
 }

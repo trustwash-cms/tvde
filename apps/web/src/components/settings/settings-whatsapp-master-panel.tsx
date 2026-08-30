@@ -33,27 +33,24 @@ export function SettingsWhatsappMasterPanel() {
   return (
     <section className="card space-y-4">
       <div>
-        <h2 className="text-lg font-semibold">WhatsApp (visão MASTER)</h2>
+        <h2 className="text-lg font-semibold">Sessões dos clientes</h2>
         <p className="mt-1 text-sm text-slate-500">
-          Cada tenant gere a sua própria sessão WhatsApp (QR, templates, 2FA). O MASTER não partilha nem
-          controla ligações de clientes — apenas supervisiona o estado.
+          Estado das ligações WhatsApp de cada tenant. A sessão da plataforma é configurada acima — não
+          substitui nem partilha o QR dos clientes.
         </p>
       </div>
 
-      <div className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-950">
-        <p className="font-medium">Configuração feita pelo superadmin do cliente</p>
-        <p className="mt-1 text-xs">
-          Autorize o módulo em{' '}
-          <Link href={WEB_ROUTES.dashboard.tenants} className="font-medium underline">
-            Tenants
-          </Link>
-          , active em{' '}
-          <Link href={WEB_ROUTES.dashboard.workspaces} className="font-medium underline">
-            Workspaces
-          </Link>
-          , e o superadmin emparelha o QR em Configurações → WhatsApp.
-        </p>
-      </div>
+      <p className="text-xs text-slate-500">
+        Autorize o módulo em{' '}
+        <Link href={WEB_ROUTES.dashboard.tenants} className="font-medium text-sky-800 underline">
+          Tenants
+        </Link>
+        {' '}e active em{' '}
+        <Link href={WEB_ROUTES.dashboard.workspaces} className="font-medium text-sky-800 underline">
+          Workspaces
+        </Link>
+        . O superadmin do cliente emparelha o QR em Configurações → WhatsApp.
+      </p>
 
       {loading ? (
         <p className="text-sm text-slate-400">A carregar tenants…</p>

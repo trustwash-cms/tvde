@@ -1,4 +1,5 @@
 import type { PrismaClient } from '@tvde/database';
+import { platformWhatsappTenantExcludeWhere } from '../lib/whatsapp-tenant';
 import {
   DEFAULT_LIMITS,
   TENANT_COMPANY_LOGO_SETTING_KEY,
@@ -150,6 +151,7 @@ export async function listAllTenantStorageSummaries(
   db: PrismaClient
 ): Promise<TenantStorageSummary[]> {
   const tenants = await db.tenant.findMany({
+    where: platformWhatsappTenantExcludeWhere,
     select: { id: true },
     orderBy: { name: 'asc' },
   });

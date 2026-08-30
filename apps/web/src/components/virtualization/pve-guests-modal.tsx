@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Copy, Pencil, Play, Square } from 'lucide-react';
+import { Copy, Pencil, Play, Radio, Square } from 'lucide-react';
 import {
   WEB_ROUTES,
   formatVirtualizationBytes,
@@ -15,6 +15,7 @@ import { Modal } from '@/components/modal';
 import { usePromptDialog } from '@/hooks/use-prompt-dialog';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { PveConsoleModal } from './pve-console-modal';
+import { PveGuestPingModal } from './pve-guest-ping-modal';
 import { PveSshModal } from './pve-ssh-modal';
 
 interface PveGuestsModalProps {
@@ -45,6 +46,7 @@ export function PveGuestsModal({
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [consoleSession, setConsoleSession] = useState<VirtualizationPveConsoleSession | null>(null);
   const [sshGuest, setSshGuest] = useState<VirtualizationPveGuest | null>(null);
+  const [pingGuest, setPingGuest] = useState<VirtualizationPveGuest | null>(null);
 
   const loadGuests = useCallback(async () => {
     if (!workspaceId || !serverId) return;
@@ -69,6 +71,7 @@ export function PveGuestsModal({
       void loadGuests();
       setConsoleSession(null);
       setSshGuest(null);
+      setPingGuest(null);
       setMessage('');
       setError('');
     }
@@ -298,6 +301,19 @@ export function PveGuestsModal({
                               <Copy size={12} />
                             </button>
                           ) : null}
+                          <button
+                            type="button"
+                            className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            title={
+                              guest.manualIp
+                                ? 'Ping ao IP manual (servidor API)'
+                                : 'Defina um IP manual para ping'
+                            }
+                            disabled={!guest.manualIp || busy}
+                            onClick={() => setPingGuest(guest)}
+                          >
+                            <Radio size={12} />
+                          </button>
                         </div>
                       </td>
                       <td className="py-2 pr-3 text-xs text-slate-600">
@@ -365,6 +381,16 @@ export function PveGuestsModal({
         workspaceId={workspaceId}
         session={consoleSession}
       />
+
+      {serverId ? (
+        <PveGuestPingModal
+          open={Boolean(pingGuest)}
+          onClose={() => setPingGuest(null)}
+          workspaceId={workspaceId}
+          serverId={serverId}
+          guest={pingGuest}
+        />
+      ) : null}
 
       {serverId ? (
         <PveSshModal

@@ -75,13 +75,13 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   const access = { preHandler: [whatsappBusinessAccess(fastify)] };
 
   fastify.get('/whatsapp-business/provider', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const data = await getWhatsappProviderStatus(tenantId);
     return reply.send({ success: true, data });
   });
 
   fastify.patch('/whatsapp-business/provider', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const body = z.object({ provider: z.enum(WHATSAPP_PROVIDERS) }).parse(request.body);
     const data = await setWhatsappActiveProvider(tenantId, body.provider);
 
@@ -106,13 +106,13 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/config', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const data = await getWhatsappBusinessConfigPublic(tenantId);
     return reply.send({ success: true, data });
   });
 
   fastify.put('/whatsapp-business/config', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const body = configSchema.parse(request.body);
     await assertWhatsappProviderActive(tenantId, 'official');
     await upsertWhatsappBusinessConfig(tenantId, body);
@@ -133,7 +133,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/status', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const config = await getWhatsappBusinessConfigRecord(tenantId);
     if (!config) {
       return reply.send({
@@ -152,7 +152,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/whatsapp-business/messages/send', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const body = z
       .object({
@@ -188,7 +188,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/templates', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const config = await getWhatsappBusinessConfigRecord(tenantId);
     if (!config) {
@@ -213,7 +213,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/templates/manage', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const config = await getWhatsappBusinessConfigRecord(tenantId);
     if (!config) {
@@ -230,7 +230,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/whatsapp-business/templates', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const body = z
       .object({
@@ -286,7 +286,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.delete('/whatsapp-business/templates', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const query = z
       .object({
@@ -323,7 +323,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/whatsapp-business/templates/send', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     await assertWhatsappProviderActive(tenantId, 'official');
     const body = z
       .object({
@@ -401,7 +401,7 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/templates/header-url', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const query = z
       .object({
         templateName: z.string().min(1),
@@ -418,13 +418,13 @@ export async function whatsappBusinessRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/whatsapp-business/notification-events', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const data = await listWhatsappBusinessNotificationEvents(tenantId);
     return reply.send({ success: true, data });
   });
 
   fastify.put('/whatsapp-business/notification-events/:eventKey', access, async (request, reply) => {
-    const tenantId = resolveWhatsappBusinessTenantId(request);
+    const tenantId = await resolveWhatsappBusinessTenantId(request);
     const { eventKey } = request.params as { eventKey: string };
     const parsedEventKey = eventKeySchema.parse(eventKey) as WhatsappBusinessEventKey;
     const body = z

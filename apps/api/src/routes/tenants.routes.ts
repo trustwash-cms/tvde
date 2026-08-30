@@ -15,6 +15,10 @@ import {
   verifyTenantDeleteConfirmationCode,
 } from '../services/action-confirmation.service';
 import {
+  isPlatformWhatsappTenant,
+  platformWhatsappTenantExcludeWhere,
+} from '../lib/whatsapp-tenant';
+import {
   getTenantVehicleLimits,
   listAllTenantVehicleLimits,
 } from '../services/tenant-vehicle-limits.service';
@@ -28,7 +32,9 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   }, async (request, reply) => {
     const q = parseSearchQuery((request.query as { q?: string }).q);
     const tenants = await fastify.db.tenant.findMany({
-      where: q ? textOr(q, ['name', 'siteId']) : undefined,
+      where: q
+        ? { AND: [platformWhatsappTenantExcludeWhere, textOr(q, ['name', 'siteId'])] }
+        : platformWhatsappTenantExcludeWhere,
       include: {
         _count: { select: { workspaces: true, users: true } },
         tenantModules: { include: { module: true } },
@@ -233,6 +239,10 @@ export async function tenantRoutes(fastify: FastifyInstance) {
       throw fastify.httpErrors.notFound('Tenant não encontrado');
     }
 
+    if (isPlatformWhatsappTenant(tenant)) {
+      throw fastify.httpErrors.notFound('Tenant não encontrado');
+    }
+
     const moduleDef = await fastify.db.moduleRegistry.findUnique({ where: { key: moduleKey } });
     if (!moduleDef) {
       throw fastify.httpErrors.notFound('Módulo não encontrado');
@@ -267,6 +277,13 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     const tenant = await fastify.db.tenant.findUnique({ where: { id } });
     if (!tenant) {
       throw fastify.httpErrors.notFound('Tenant não encontrado');
+    }
+
+    if (isPlatformWhatsappTenant(tenant)) {
+      return reply.status(403).send({
+        success: false,
+        error: 'O tenant interno da plataforma não pode ser alterado',
+      });
     }
 
     const updated = await fastify.db.tenant.update({
@@ -304,6 +321,13 @@ export async function tenantRoutes(fastify: FastifyInstance) {
       throw fastify.httpErrors.notFound('Tenant não encontrado');
     }
 
+    if (isPlatformWhatsappTenant(tenant)) {
+      return reply.status(403).send({
+        success: false,
+        error: 'O tenant interno da plataforma não pode ser eliminado',
+      });
+    }
+
     try {
       const result = await sendTenantDeleteConfirmationCode(request.user.sub, tenant);
       return reply.send({ success: true, data: result });
@@ -325,6 +349,13 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     const tenant = await fastify.db.tenant.findUnique({ where: { id } });
     if (!tenant) {
       throw fastify.httpErrors.notFound('Tenant não encontrado');
+    }
+
+    if (isPlatformWhatsappTenant(tenant)) {
+      return reply.status(403).send({
+        success: false,
+        error: 'O tenant interno da plataforma não pode ser eliminado',
+      });
     }
 
     if (body.confirmSiteId.trim() !== tenant.siteId) {

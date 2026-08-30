@@ -18,6 +18,7 @@ import { UserRole, Prisma } from '@tvde/database';
 import { computeTempPasswordExpiresAt, generateSecurePasswordWithHibp, hashPassword, validatePasswordWithHibp } from '../lib/password';
 import { createAuditLog } from '../services/audit.service';
 import { parseSearchQuery, textOr } from '../services/search.service';
+import { platformWhatsappTenantExcludeWhere } from '../lib/whatsapp-tenant';
 import { resolveWorkspaceTenantScope } from '../lib/workspace-scope';
 import { getModulesHealth } from '../services/module-health.service';
 import {
@@ -111,7 +112,9 @@ export async function clientRoutes(fastify: FastifyInstance) {
         : undefined;
 
       const tenants = await fastify.db.tenant.findMany({
-        where: tenantWhere,
+        where: tenantWhere
+          ? { AND: [platformWhatsappTenantExcludeWhere, tenantWhere] }
+          : platformWhatsappTenantExcludeWhere,
         include: {
           users: { select: userSelect, orderBy: [{ role: 'asc' }, { email: 'asc' }] },
           _count: { select: { workspaces: true } },

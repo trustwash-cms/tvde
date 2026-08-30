@@ -1,25 +1,39 @@
 import { prisma } from '@tvde/database';
-import { getVirtualizationDashboard } from '../services/virtualization.service';
+import { evaluateVirtualizationAlerts } from '../services/virtualization-alerts.service';
 
-export async function runVirtualizationBackupAlertChecks(): Promise<
-  Array<{ workspaceId: string; failures: number }>
+export async function runVirtualizationAlertChecks(): Promise<
+  Array<{ workspaceId: string; opened: number; resolved: number; notified: number }>
 > {
-  const settingsRows = await prisma.virtualizationSetting.findMany({
-    where: { notifyOnBackupFailure: true },
-    select: { workspaceId: true, tenantId: true, pollIntervalMinutes: true },
-  });
+  const [settingsRows, pbsRows, pveRows] = await Promise.all([
+    prisma.virtualizationSetting.findMany({ select: { workspaceId: true, tenantId: true } }),
+    prisma.virtualizationPbsServer.findMany({
+      where: { isActive: true },
+      select: { workspaceId: true, tenantId: true },
+      distinct: ['workspaceId'],
+    }),
+    prisma.virtualizationPveServer.findMany({
+      where: { isActive: true },
+      select: { workspaceId: true, tenantId: true },
+      distinct: ['workspaceId'],
+    }),
+  ]);
 
-  const summary: Array<{ workspaceId: string; failures: number }> = [];
+  const byWorkspace = new Map<string, { workspaceId: string; tenantId: string }>();
+  for (const row of [...settingsRows, ...pbsRows, ...pveRows]) {
+    byWorkspace.set(row.workspaceId, row);
+  }
+  const settingsRowsUnique = [...byWorkspace.values()];
 
-  for (const row of settingsRows) {
+  const summary: Array<{ workspaceId: string; opened: number; resolved: number; notified: number }> =
+    [];
+
+  for (const row of settingsRowsUnique) {
     try {
-      const dashboard = await getVirtualizationDashboard(row.tenantId, row.workspaceId);
-      const failures = dashboard.recentFailures.length;
-      if (failures > 0) {
-        summary.push({ workspaceId: row.workspaceId, failures });
-        // WhatsApp/email dispatch will plug in here.
+      const result = await evaluateVirtualizationAlerts(row.tenantId, row.workspaceId);
+      if (result.opened > 0 || result.resolved > 0 || result.notified > 0) {
+        summary.push({ workspaceId: row.workspaceId, ...result });
         console.log(
-          `[virtualization-alerts] workspace ${row.workspaceId}: ${failures} falha(s) de backup recente(s)`
+          `[virtualization-alerts] workspace ${row.workspaceId}: opened=${result.opened} resolved=${result.resolved} notified=${result.notified}`
         );
       }
     } catch (err) {
@@ -36,7 +50,7 @@ export async function runVirtualizationBackupAlertChecks(): Promise<
 export function startVirtualizationAlertWorker() {
   const tick = async () => {
     try {
-      await runVirtualizationBackupAlertChecks();
+      await runVirtualizationAlertChecks();
     } catch (err) {
       console.error(
         '[virtualization-alerts] tick failed:',
