@@ -50,7 +50,7 @@ export interface PortalConnectionPublic {
   lastSyncAt: string | null;
   lastError: string | null;
   isEnabled: boolean;
-  /** Sync automático diário (Via Verde / MyPRIO). Default false — o sync manual não muda. */
+  /** Sync automático diário (Via Verde / MyPRIO / Uber). Default false — o sync manual não muda. */
   autoSyncEnabled: boolean;
   activeJobId: string | null;
   activeJobStatus: string | null;

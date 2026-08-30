@@ -706,8 +706,7 @@ export function PortalConnectionPanel({
               Último sync: {new Date(connection.lastSyncAt).toLocaleString('pt-PT')}
             </p>
           ) : null}
-          {portal !== 'uber' &&
-          (connection?.usernameMasked ||
+          {connection?.usernameMasked ||
             connection?.hasPassword ||
             connection?.hasSession ||
             status !== 'disconnected') ? (
@@ -723,8 +722,10 @@ export function PortalConnectionPanel({
                 <span className="font-medium">Sincronização automática diária</span>
                 <span className="mt-0.5 block text-xs text-slate-500">
                   {portal === 'myprio'
-                    ? 'Corre 1× por dia com a conta ligada. O sync manual mantém-se. Se a sessão expirar, o MyPRIO pede OTP — volte a Ligar conta.'
-                    : 'Corre 1× por dia com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
+                    ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, o MyPRIO pede OTP — volte a Ligar conta.'
+                    : portal === 'uber'
+                      ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta re-login automático; se a Uber pedir SMS OTP, volte a Ligar conta.'
+                      : 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
                 </span>
               </span>
             </label>
