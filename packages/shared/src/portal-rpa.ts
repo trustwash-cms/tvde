@@ -100,6 +100,103 @@ export interface UberSyncOptions {
    * (ex. «CAMINHOS TOLERANTES, LDA» ou «CAMINHOS TOLERANTES»).
    */
   organizationName?: string;
+  /**
+   * mode=generate: tipo no dropdown «Tipo de relatório» do portal.
+   * Default: Transação de pagamentos (`payments_order`).
+   */
+  reportTypeKey?: UberReportTypeKey;
+}
+
+export const UBER_REPORT_TYPE_CATALOG = [
+  {
+    key: 'REPORT_TYPE_PAYMENTS_ORDER',
+    label: 'Transação de pagamentos',
+    slug: 'payments_order',
+    filterText: 'Transação de pagamentos',
+  },
+  {
+    key: 'REPORT_TYPE_PAYMENTS_DRIVER',
+    label: 'Pagamentos do motorista',
+    slug: 'payments_driver',
+    filterText: 'Pagamentos do motorista',
+  },
+] as const;
+
+export type UberReportTypeKey = (typeof UBER_REPORT_TYPE_CATALOG)[number]['key'];
+
+export const DEFAULT_UBER_REPORT_TYPE: UberReportTypeKey = 'REPORT_TYPE_PAYMENTS_ORDER';
+
+export function resolveUberReportType(key?: string | null): UberReportTypeKey {
+  const hit = UBER_REPORT_TYPE_CATALOG.find((t) => t.key === key);
+  return hit?.key ?? DEFAULT_UBER_REPORT_TYPE;
+}
+
+export function uberReportTypeLabel(key: UberReportTypeKey): string {
+  return UBER_REPORT_TYPE_CATALOG.find((t) => t.key === key)?.label ?? key;
+}
+
+export function uberReportTypeFromReportName(
+  name: string,
+  type?: string | null
+): UberReportTypeKey | null {
+  const blob = `${name} ${type ?? ''}`;
+  if (
+    /payments_order|payments_orde|transa[cç][aã]o de pagamentos?|transacao de pagamentos|payment.?transaction/i.test(
+      blob
+    )
+  ) {
+    return 'REPORT_TYPE_PAYMENTS_ORDER';
+  }
+  if (/payments_driver|pagamentos? do?s? motoristas?|driver payments?/i.test(blob)) {
+    return 'REPORT_TYPE_PAYMENTS_DRIVER';
+  }
+  return null;
+}
+
+/** Tipos já vistos na lista Supplier; fallback ao catálogo completo. */
+export function guessUberReportTypesFromReports(reports: UberReportListItem[]): UberReportTypeKey[] {
+  const found = new Set<UberReportTypeKey>();
+  for (const r of reports) {
+    const k = uberReportTypeFromReportName(r.name, r.type);
+    if (k) found.add(k);
+  }
+  const seen = UBER_REPORT_TYPE_CATALOG.map((t) => t.key).filter((k) => found.has(k));
+  return seen.length > 0 ? seen : UBER_REPORT_TYPE_CATALOG.map((t) => t.key);
+}
+
+export function uberReportMatchesType(
+  report: UberReportListItem,
+  reportTypeKey: UberReportTypeKey
+): boolean {
+  const blob = `${report.name} ${report.type ?? ''}`;
+  if (reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER') {
+    return /payments_order|payments_orde|transa[cç][aã]o de pagamentos?|transacao de pagamentos|payment.?transaction/i.test(
+      blob
+    );
+  }
+  return /payments_driver|pagamentos? do?s? motoristas?|driver payments?/i.test(blob);
+}
+
+export function uberReportTypeOptionMatches(
+  reportTypeKey: UberReportTypeKey,
+  value: string,
+  text: string
+): boolean {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const v = value.trim();
+  if (reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER') {
+    if (v === 'REPORT_TYPE_PAYMENTS_ORDER') return true;
+    if (/^transa[cç][aã]o de pagamentos?$/i.test(t)) return true;
+    if (/^payment transactions?$/i.test(t)) return true;
+    if (/transa[cç][aã]o/i.test(t) && /pagamento/i.test(t) && !/motorista/i.test(t)) return true;
+    return false;
+  }
+  if (v === 'REPORT_TYPE_PAYMENTS_DRIVER') return true;
+  if (/^pagamentos? do?s? motoristas?$/i.test(t)) return true;
+  if (/^driver payments?$/i.test(t)) return true;
+  if (/pagamento/i.test(t) && /motorista/i.test(t) && !/transa[cç][aã]o/i.test(t)) return true;
+  if (/driver/i.test(t) && /payment/i.test(t) && !/order|transaction/i.test(t)) return true;
+  return false;
 }
 
 export interface UberReportListItem {
@@ -202,14 +299,10 @@ export function pickLatestUberReportForPeriod(
     r,
     index,
     t: r.createdAt ? Date.parse(r.createdAt) : Number.NaN,
-    preferDriver: /payments_driver|pagamentos? do?s? motoristas?|driver payments?/i.test(
-      `${r.name} ${r.type ?? ''}`
-    )
-      ? 1
-      : 0,
+    preferOrder: uberReportMatchesType(r, 'REPORT_TYPE_PAYMENTS_ORDER') ? 1 : 0,
   }));
   scored.sort((a, b) => {
-    if (a.preferDriver !== b.preferDriver) return b.preferDriver - a.preferDriver;
+    if (a.preferOrder !== b.preferOrder) return b.preferOrder - a.preferOrder;
     const aOk = !Number.isNaN(a.t);
     const bOk = !Number.isNaN(b.t);
     if (aOk && bOk && a.t !== b.t) return b.t - a.t;

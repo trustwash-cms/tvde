@@ -5,15 +5,23 @@ import { Loader2 } from 'lucide-react';
 import {
   defaultUberReportRange,
   guessUberOrganizationsFromReports,
+  guessUberReportTypesFromReports,
   isoToLisbonDatetimeLocal,
   lisbonDatetimeLocalToIso,
+  resolveUberReportType,
+  uberReportMatchesType,
+  uberReportTypeLabel,
+  UBER_REPORT_TYPE_CATALOG,
+  DEFAULT_UBER_REPORT_TYPE,
   type UberReportListItem,
+  type UberReportTypeKey,
   type UberSyncOptions,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
 import { Modal } from '@/components/modal';
 
 const ORG_STORAGE_KEY = 'tvde.uber.organizationName';
+const REPORT_TYPE_STORAGE_KEY = 'tvde.uber.reportTypeKey';
 const DEFAULT_ORG = 'CAMINHOS TOLERANTES, LDA';
 
 type Props = {
@@ -32,6 +40,15 @@ function readStoredOrg(): string {
   }
 }
 
+function readStoredReportType(): UberReportTypeKey {
+  if (typeof window === 'undefined') return DEFAULT_UBER_REPORT_TYPE;
+  try {
+    return resolveUberReportType(localStorage.getItem(REPORT_TYPE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_UBER_REPORT_TYPE;
+  }
+}
+
 export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
   const defaults = defaultUberReportRange();
   const [loadingList, setLoadingList] = useState(false);
@@ -39,6 +56,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
   const [reports, setReports] = useState<UberReportListItem[]>([]);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [organizationName, setOrganizationName] = useState(DEFAULT_ORG);
+  const [reportTypeKey, setReportTypeKey] = useState<UberReportTypeKey>(DEFAULT_UBER_REPORT_TYPE);
   const [rangeStartLocal, setRangeStartLocal] = useState(() =>
     isoToLisbonDatetimeLocal(defaults.rangeStart)
   );
@@ -59,6 +77,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
     setRangeEndLocal(isoToLisbonDatetimeLocal(range.rangeEnd));
     setSelectedName(null);
     setOrganizationName(readStoredOrg());
+    setReportTypeKey(readStoredReportType());
     setActionError('');
     setListError('');
     setLoadingList(true);
@@ -75,8 +94,16 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
         return;
       }
       setReports(res.data);
-      const firstDownloadable = res.data.find((r) => r.hasDownload);
-      if (firstDownloadable) setSelectedName(firstDownloadable.name);
+      const storedType = readStoredReportType();
+      const paymentReports = res.data.filter(
+        (r) => r.hasDownload && uberReportMatchesType(r, storedType)
+      );
+      const firstDownloadable =
+        paymentReports.find((r) => r.hasDownload)?.name ??
+        res.data.find((r) => r.hasDownload && /payments_order/i.test(r.name))?.name ??
+        res.data.find((r) => r.hasDownload && !/driver_activity/i.test(r.name))?.name ??
+        null;
+      if (firstDownloadable) setSelectedName(firstDownloadable);
 
       const guessed = guessUberOrganizationsFromReports(res.data.map((r) => r.name));
       const stored = readStoredOrg();
@@ -84,6 +111,12 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
         setOrganizationName(stored);
       } else if (guessed[0]) {
         setOrganizationName(guessed[0]);
+      }
+      const typeFromList = guessUberReportTypesFromReports(res.data);
+      if (typeFromList.includes(storedType)) {
+        setReportTypeKey(storedType);
+      } else if (typeFromList[0]) {
+        setReportTypeKey(typeFromList[0]);
       }
     })();
   }, [open]);
@@ -112,11 +145,18 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
       }
       try {
         localStorage.setItem(ORG_STORAGE_KEY, org);
+        localStorage.setItem(REPORT_TYPE_STORAGE_KEY, reportTypeKey);
       } catch {
         /* ignore */
       }
       setActionError('');
-      await onSync({ mode: 'generate', rangeStart, rangeEnd, organizationName: org });
+      await onSync({
+        mode: 'generate',
+        rangeStart,
+        rangeEnd,
+        organizationName: org,
+        reportTypeKey,
+      });
     } catch {
       setActionError('Datas inválidas');
     }
@@ -227,10 +267,25 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
         <section className="space-y-3 border-t border-slate-100 pt-4">
           <h3 className="text-sm font-semibold text-slate-800">Gerar novo</h3>
           <p className="text-xs text-slate-500">
-            Tipo: Transação de pagamentos · Intervalo personalizado (Europe/Lisbon). Default: semana
-            completa anterior (segunda 01:00 → domingo 23:30). A organização é obrigatória no portal
-            Uber (activa o botão Gerar).
+            Intervalo personalizado (Europe/Lisbon). Default: semana completa anterior (segunda
+            01:00 → domingo 23:30). A organização é obrigatória no portal Uber (activa o botão
+            Gerar).
           </p>
+          <label className="block text-xs text-slate-600">
+            Tipo de relatório
+            <select
+              className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm"
+              value={reportTypeKey}
+              disabled={busy}
+              onChange={(e) => setReportTypeKey(resolveUberReportType(e.target.value))}
+            >
+              {UBER_REPORT_TYPE_CATALOG.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="block text-xs text-slate-600">
             Organização
             <input

@@ -1,5 +1,13 @@
 import type { Page } from 'playwright';
-import { defaultUberReportRange, type UberReportListItem, type UberSyncOptions } from '@tvde/shared';
+import {
+  defaultUberReportRange,
+  resolveUberReportType,
+  uberReportTypeLabel,
+  uberReportTypeOptionMatches,
+  type UberReportListItem,
+  type UberReportTypeKey,
+  type UberSyncOptions,
+} from '@tvde/shared';
 import type { PortalAdapter, PortalLoginPhase, PortalSyncOptions, PortalSyncPhase } from './types';
 import { captureStorageState } from './types';
 import { env } from '../../config/env';
@@ -10,7 +18,7 @@ import { env } from '../../config/env';
  * - Auth: auth.uber.com/v2 (Breeze)
  * - OTP SMS: 4 dígitos (#PHONE_SMS_OTP-0..3) via modal TVDE
  * - Pós-OTP: «Iniciar sessão com a palavra-passe» (não passkey)
- * - Sync: lista/escolha relatório ou Gerar «Pagamentos do motorista» (líquidos) com intervalo → poll
+ * - Sync: lista/escolha relatório ou Gerar «Transação de pagamentos» (`payments_order`) com intervalo → poll
  */
 
 const SUPPLIER_HOME = 'https://supplier.uber.com/';
@@ -1172,15 +1180,17 @@ async function gotoReports(page: Page): Promise<'ok' | 'expired' | 'failed'> {
 /** Descarregar um relatório existente (por nome) ou o de pagamentos mais recente. */
 async function downloadExistingPaymentReport(
   page: Page,
-  reportName?: string
+  reportName?: string,
+  reportTypeKey: UberReportTypeKey = 'REPORT_TYPE_PAYMENTS_ORDER'
 ): Promise<{ filename: string; buffer: Buffer } | null> {
   const rows = await readReportRows(page);
   const match = reportName
     ? rows.find((r) => r.name === reportName || r.name.startsWith(reportName.slice(0, 24))) ||
       rows.find((r) => reportName.startsWith(r.name.slice(0, 20)))
-    : rows.find((r) => r.hasDownload && /payments_driver/i.test(r.name)) ||
-      rows.find((r) => r.hasDownload && /pagamentos? do?s? motoristas?/i.test(r.type || '')) ||
-      rows.find((r) => r.hasDownload && /payments/i.test(r.name)) ||
+    : rows.find((r) => r.hasDownload && reportRowMatchesType(r, reportTypeKey)) ||
+      rows.find((r) => r.hasDownload && /payments_order/i.test(r.name)) ||
+      rows.find((r) => r.hasDownload && /transa[cç][aã]o de pagamentos?/i.test(r.type || '')) ||
+      rows.find((r) => r.hasDownload && /payments/i.test(r.name) && !/driver_activity/i.test(r.name)) ||
       rows.find((r) => r.hasDownload && /pagament|transação|transacao/i.test(r.name)) ||
       rows.find((r) => r.hasDownload);
 
@@ -1398,21 +1408,19 @@ async function openGenerateDrawer(page: Page): Promise<void> {
   throw new Error('Sync Uber: não abri o painel «Gerar relatório».');
 }
 
-function isUberDriverPaymentsLabel(text: string, value = ''): boolean {
-  const t = text.replace(/\s+/g, ' ').trim();
-  const v = value.trim();
-  if (v === 'REPORT_TYPE_PAYMENTS_DRIVER') return true;
-  if (/^pagamentos? do?s? motoristas?$/i.test(t)) return true;
-  if (/^driver payments?$/i.test(t)) return true;
-  // Uber por vezes usa variantes («Pagamentos Motorista», «Driver payment»)
-  if (/pagamento/i.test(t) && /motorista/i.test(t) && !/transa[cç][aã]o/i.test(t)) return true;
-  if (/driver/i.test(t) && /payment/i.test(t) && !/order|transaction/i.test(t)) return true;
-  return false;
+function isUberReportTypeSelected(reportTypeKey: UberReportTypeKey, text: string, value = ''): boolean {
+  return uberReportTypeOptionMatches(reportTypeKey, value, text);
 }
 
-async function isDriverPaymentsTypeSelected(page: Page): Promise<boolean> {
+async function isReportTypeSelected(page: Page, reportTypeKey: UberReportTypeKey): Promise<boolean> {
   const panel = reportGeneratePanel(page);
-  if (await panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first().isVisible().catch(() => false)) {
+  if (
+    await panel
+      .locator(`[value="${reportTypeKey}"]`)
+      .first()
+      .isVisible()
+      .catch(() => false)
+  ) {
     return true;
   }
   const selectedText = await page.evaluate(`(() => {
@@ -1428,7 +1436,7 @@ async function isDriverPaymentsTypeSelected(page: Page): Promise<boolean> {
   })()`);
   try {
     const parsed = JSON.parse(String(selectedText || '{}')) as { t?: string; val?: string };
-    return isUberDriverPaymentsLabel(parsed.t || '', parsed.val || '');
+    return isUberReportTypeSelected(reportTypeKey, parsed.t || '', parsed.val || '');
   } catch {
     return false;
   }
@@ -1450,9 +1458,18 @@ async function listOpenReportTypeOptions(page: Page): Promise<string[]> {
   })()`) as Promise<string[]>;
 }
 
-async function clickDriverPaymentsOption(page: Page): Promise<string | null> {
+async function clickReportTypeOption(page: Page, reportTypeKey: UberReportTypeKey): Promise<string | null> {
+  const key = JSON.stringify(reportTypeKey);
   return page.evaluate(`(() => {
+    const reportTypeKey = ${key};
     const match = (val, t) => {
+      if (reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER') {
+        if (val === 'REPORT_TYPE_PAYMENTS_ORDER') return true;
+        if (/^transa[cç][aã]o de pagamentos?$/i.test(t)) return true;
+        if (/^payment transactions?$/i.test(t)) return true;
+        if (/transa[cç][aã]o/i.test(t) && /pagamento/i.test(t) && !/motorista/i.test(t)) return true;
+        return false;
+      }
       if (val === 'REPORT_TYPE_PAYMENTS_DRIVER') return true;
       if (/^pagamentos? do?s? motoristas?$/i.test(t)) return true;
       if (/^driver payments?$/i.test(t)) return true;
@@ -1505,17 +1522,22 @@ async function dumpUberReportTypeFailure(page: Page): Promise<string> {
   return options.slice(0, 12).join(', ') || '(nenhuma opção listada)';
 }
 
-async function selectPaymentTransactionType(page: Page): Promise<void> {
+async function selectUberReportType(page: Page, reportTypeKey: UberReportTypeKey): Promise<void> {
+  const label = uberReportTypeLabel(reportTypeKey);
+  const filterText =
+    reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER'
+      ? 'Transação de pagamentos'
+      : 'Pagamentos do motorista';
+
   if (!(await isGenerateDrawerOpen(page))) await openGenerateDrawer(page);
   await scrollGenerateDrawerToTop(page);
 
-  if (await isDriverPaymentsTypeSelected(page)) {
-    console.log('[uber-sync] tipo já «Pagamentos do motorista»');
+  if (await isReportTypeSelected(page, reportTypeKey)) {
+    console.log(`[uber-sync] tipo já «${label}»`);
     return;
   }
 
   const panel = reportGeneratePanel(page);
-  // Abrir select via label for=report-type (topo do formulário)
   const typeSelect = panel
     .locator('label[for="report-type"]')
     .locator('xpath=following::*[@data-baseweb="select"][1]')
@@ -1527,32 +1549,29 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   await typeSelect.first().click({ timeout: 8000 });
   await page.waitForTimeout(500);
 
-  // Esperar listbox / opções (Base Web popover)
   for (let i = 0; i < 20; i += 1) {
     const n = await page.locator('[role="option"], [data-baseweb="menu"] li').count().catch(() => 0);
     if (n > 0) break;
     await page.waitForTimeout(150);
   }
 
-  // Filtrar por texto se o select tiver input de pesquisa
   const filterInput = page
     .locator('[data-baseweb="popover"] input, [data-baseweb="menu"] input, [role="listbox"] input, input[aria-autocomplete="list"]')
     .first();
   if (await filterInput.isVisible().catch(() => false)) {
-    await filterInput.fill('Pagamentos do motorista').catch(() => undefined);
+    await filterInput.fill(filterText).catch(() => undefined);
     await page.waitForTimeout(400);
-    console.log('[uber-sync] filtrei tipo por «Pagamentos do motorista»');
+    console.log(`[uber-sync] filtrei tipo por «${filterText}»`);
   }
 
-  let opted = await clickDriverPaymentsOption(page);
+  let opted = await clickReportTypeOption(page, reportTypeKey);
   if (!opted) {
-    // Lista longa — End / PageDown / ArrowDown até aparecer
     await page.keyboard.press('End').catch(() => undefined);
     await page.waitForTimeout(120);
     for (let i = 0; i < 40; i += 1) {
       await page.keyboard.press(i % 8 === 0 ? 'PageDown' : 'ArrowDown').catch(() => undefined);
       await page.waitForTimeout(35);
-      opted = await clickDriverPaymentsOption(page);
+      opted = await clickReportTypeOption(page, reportTypeKey);
       if (opted) break;
     }
   }
@@ -1560,7 +1579,10 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   if (!opted) {
     const roleOpt = page
       .getByRole('option', {
-        name: /pagamentos?.*motorista|driver\s*payments?/i,
+        name:
+          reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER'
+            ? /transa[cç][aã]o de pagamentos?|payment transactions?/i
+            : /pagamentos?.*motorista|driver\s*payments?/i,
       })
       .first();
     if (await roleOpt.isVisible().catch(() => false)) {
@@ -1573,19 +1595,18 @@ async function selectPaymentTransactionType(page: Page): Promise<void> {
   }
   await page.waitForTimeout(600);
 
-  if (!(await isDriverPaymentsTypeSelected(page))) {
-    // Pode ter ficado o menu aberto sem commit — tentar Enter
+  if (!(await isReportTypeSelected(page, reportTypeKey))) {
     await page.keyboard.press('Enter').catch(() => undefined);
     await page.waitForTimeout(400);
   }
 
-  if (!(await isDriverPaymentsTypeSelected(page))) {
+  if (!(await isReportTypeSelected(page, reportTypeKey))) {
     const sample = await dumpUberReportTypeFailure(page);
     throw new Error(
-      `Sync Uber: não seleccionei «Pagamentos do motorista» (REPORT_TYPE_PAYMENTS_DRIVER). Opções vistas: ${sample}`
+      `Sync Uber: não seleccionei «${label}» (${reportTypeKey}). Opções vistas: ${sample}`
     );
   }
-  console.log('[uber-sync] tipo = Pagamentos do motorista (rendimentos líquidos)');
+  console.log(`[uber-sync] tipo = ${label}`);
 }
 
 /** Snap minutos ao slot de 15 min do dropdown Uber (ex.: 1:00 AM, 11:30 PM). */
@@ -1854,15 +1875,14 @@ async function ensureOrganizationSelected(
 async function generatePaymentReport(
   page: Page,
   range?: { rangeStart: string; rangeEnd: string },
-  organizationName?: string
+  organizationName?: string,
+  reportTypeKey: UberReportTypeKey = 'REPORT_TYPE_PAYMENTS_ORDER'
 ): Promise<void> {
   const rangeToUse = range ?? defaultUberReportRange();
 
-  // Fluxo «de cima» (vídeo + DevTools):
-  // Gerar relatório → Tipo → Período (resumo) → datas → Org (input) → Gerar (testid)
   await openGenerateDrawer(page);
   await scrollGenerateDrawerToTop(page);
-  await selectPaymentTransactionType(page);
+  await selectUberReportType(page, reportTypeKey);
   await fillCustomReportRange(page, rangeToUse.rangeStart, rangeToUse.rangeEnd);
 
   if (!(await isGenerateDrawerOpen(page))) {
@@ -1932,9 +1952,26 @@ async function closeGenerateDrawerIfOpen(page: Page): Promise<void> {
   await page.waitForTimeout(400);
 }
 
-function isPaymentsReportRow(r: ReportRowSnapshot): boolean {
+function reportRowMatchesType(r: ReportRowSnapshot, reportTypeKey: UberReportTypeKey): boolean {
+  const blob = `${r.name} ${r.type || ''}`;
+  if (/driver_activity/i.test(blob)) return false;
+  if (reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER') {
+    return (
+      /payments_order|payments_orde/i.test(r.name) ||
+      /transa[cç][aã]o de pag|transacao de pag|payment.?transaction/i.test(blob)
+    );
+  }
   return (
-    /payments_driver|payments_orde|payments/i.test(r.name) ||
+    /payments_driver/i.test(r.name) ||
+    /pagamentos? do?s? motoristas?|driver payments?/i.test(blob)
+  );
+}
+
+function isPaymentsReportRow(r: ReportRowSnapshot, reportTypeKey?: UberReportTypeKey): boolean {
+  if (reportTypeKey) return reportRowMatchesType(r, reportTypeKey);
+  return (
+    (/payments_order|payments_orde|payments_driver|payments/i.test(r.name) &&
+      !/driver_activity/i.test(r.name)) ||
     /pagament/i.test(r.name) ||
     /pagamentos? do?s? motoristas?|transação de pag|transacao de pag|payment.?transaction|driver payments?/i.test(
       r.type || ''
@@ -2001,7 +2038,8 @@ async function downloadReportRowByName(
 async function pollForNewReportAndDownload(
   page: Page,
   before: ReportRowSnapshot[],
-  onProgress?: (msg: string) => void | Promise<void>
+  onProgress?: (msg: string) => void | Promise<void>,
+  reportTypeKey: UberReportTypeKey = 'REPORT_TYPE_PAYMENTS_ORDER'
 ): Promise<{ filename: string; buffer: Buffer } | null> {
   const beforeKeys = new Set(before.map((r) => `${r.name}|${r.createdAt}`));
   const beforeNames = new Set(before.map((r) => r.name));
@@ -2024,12 +2062,14 @@ async function pollForNewReportAndDownload(
 
     const rows = await readReportRows(page);
     const newRows = rows.filter(
-      (r) => isPaymentsReportRow(r) && (!beforeNames.has(r.name) || !beforeKeys.has(`${r.name}|${r.createdAt}`))
+      (r) =>
+        isPaymentsReportRow(r, reportTypeKey) &&
+        (!beforeNames.has(r.name) || !beforeKeys.has(`${r.name}|${r.createdAt}`))
     );
 
     const pendingRow: ReportRowSnapshot | undefined =
       newRows.find((r) => r.inProgress) ||
-      rows.find((r) => r.inProgress && isPaymentsReportRow(r) && !beforeNames.has(r.name));
+      rows.find((r) => r.inProgress && isPaymentsReportRow(r, reportTypeKey) && !beforeNames.has(r.name));
 
     const watchPrefix: string | null = trackedReportName
       ? trackedReportName.slice(0, 24)
@@ -2566,9 +2606,14 @@ export const uberAdapter: PortalAdapter = {
 
       const uberSync: UberSyncOptions | undefined = options?.uberSync;
       const mode = uberSync?.mode ?? 'existing';
+      const reportTypeKey = resolveUberReportType(uberSync?.reportTypeKey);
 
       if (mode === 'existing') {
-        const existing = await downloadExistingPaymentReport(page, uberSync?.reportName);
+        const existing = await downloadExistingPaymentReport(
+          page,
+          uberSync?.reportName,
+          reportTypeKey
+        );
         if (existing && existing.buffer.length >= 20) {
           return {
             status: 'ok',
@@ -2576,7 +2621,7 @@ export const uberAdapter: PortalAdapter = {
             warnings: [
               uberSync?.reportName
                 ? `Sync: download «${uberSync.reportName.slice(0, 48)}»`
-                : 'Sync: download de relatório existente (Pagamentos do motorista)',
+                : `Sync: download de relatório existente (${uberReportTypeLabel(reportTypeKey)})`,
             ],
           };
         }
@@ -2595,11 +2640,11 @@ export const uberAdapter: PortalAdapter = {
           ? { rangeStart: uberSync.rangeStart, rangeEnd: uberSync.rangeEnd }
           : defaultUberReportRange();
 
-      await generatePaymentReport(page, range, uberSync?.organizationName);
+      await generatePaymentReport(page, range, uberSync?.organizationName, reportTypeKey);
       console.log('[uber-sync] relatório pedido — a iniciar poll Criado em / Em curso');
       await options?.onProgress?.('Relatório pedido — à espera de «Em curso» → download…');
 
-      const file = await pollForNewReportAndDownload(page, before, options?.onProgress);
+      const file = await pollForNewReportAndDownload(page, before, options?.onProgress, reportTypeKey);
       if (!file) {
         if (isAuthUrl(page.url())) {
           return { status: 'expired', message: 'Sessão Uber expirada durante o sync' };
@@ -2620,7 +2665,7 @@ export const uberAdapter: PortalAdapter = {
         files: [file],
         warnings: [
           `ficheiro=${file.filename}`,
-          `Sync Relatórios: Pagamentos do motorista / líquidos (${range.rangeStart.slice(0, 16)} → ${range.rangeEnd.slice(0, 16)})`,
+          `Sync Relatórios: ${uberReportTypeLabel(reportTypeKey)} (${range.rangeStart.slice(0, 16)} → ${range.rangeEnd.slice(0, 16)})`,
         ],
       };
     } catch (err) {

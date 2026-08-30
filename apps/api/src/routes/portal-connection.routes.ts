@@ -194,6 +194,9 @@ export async function portalConnectionRoutes(fastify: FastifyInstance) {
               rangeStart: z.string().min(1).optional(),
               rangeEnd: z.string().min(1).optional(),
               organizationName: z.string().min(1).optional(),
+              reportTypeKey: z
+                .enum(['REPORT_TYPE_PAYMENTS_ORDER', 'REPORT_TYPE_PAYMENTS_DRIVER'])
+                .optional(),
             })
             .optional(),
         })

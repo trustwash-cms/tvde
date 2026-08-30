@@ -422,6 +422,14 @@ export {
   lisbonDatetimeLocalToIso,
   isoToLisbonDatetimeLocal,
   guessUberOrganizationsFromReports,
+  guessUberReportTypesFromReports,
+  uberReportTypeLabel,
+  uberReportTypeFromReportName,
+  uberReportMatchesType,
+  uberReportTypeOptionMatches,
+  resolveUberReportType,
+  UBER_REPORT_TYPE_CATALOG,
+  DEFAULT_UBER_REPORT_TYPE,
   ymdToUberCompact,
   uberReportMatchesPeriod,
   listUberPaymentReports,
@@ -435,6 +443,7 @@ export {
   type MyPrioSyncScope,
   type UberSyncMode,
   type UberSyncOptions,
+  type UberReportTypeKey,
   type UberReportListItem,
 } from './portal-rpa';
 export type { PlatformHostStats } from './platform-host';

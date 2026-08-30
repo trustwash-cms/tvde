@@ -18,8 +18,14 @@ import {
   lisbonDatetimeLocalToIso,
   listUberPaymentReports,
   uberReportMatchesPeriod,
+  uberReportMatchesType,
+  resolveUberReportType,
+  uberReportTypeLabel,
+  UBER_REPORT_TYPE_CATALOG,
+  DEFAULT_UBER_REPORT_TYPE,
   type PortalKind,
   type UberReportListItem,
+  type UberReportTypeKey,
   type UberSyncOptions,
 } from '@tvde/shared';
 import { Modal } from '@/components/modal';
@@ -71,7 +77,17 @@ function isJobConflictError(message: string): boolean {
 }
 
 const ORG_STORAGE_KEY = 'tvde.uber.organizationName';
+const REPORT_TYPE_STORAGE_KEY = 'tvde.uber.reportTypeKey';
 const DEFAULT_ORG = 'CAMINHOS TOLERANTES, LDA';
+
+function readUberReportType(): UberReportTypeKey {
+  if (typeof window === 'undefined') return DEFAULT_UBER_REPORT_TYPE;
+  try {
+    return resolveUberReportType(localStorage.getItem(REPORT_TYPE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_UBER_REPORT_TYPE;
+  }
+}
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -241,6 +257,9 @@ export function SyncPagamentosModal({
   const [uberReadyMode, setUberReadyMode] = useState<UberReadyMode>('existing');
   const [uberPeriodStart, setUberPeriodStart] = useState('');
   const [uberPeriodEnd, setUberPeriodEnd] = useState('');
+  const [uberReportTypeKey, setUberReportTypeKey] = useState<UberReportTypeKey>(
+    DEFAULT_UBER_REPORT_TYPE
+  );
   const uberPeriodRef = useRef({ start: '', end: '' });
   const uberSyncRef = useRef<UberSyncOptions | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -290,14 +309,19 @@ export function SyncPagamentosModal({
     }
     // Lista completa do Supplier (como no modal Uber antigo)
     setUberReports(res.data);
-    const paymentReports = listUberPaymentReports(res.data);
+    const reportTypeKey = readUberReportType();
+    const paymentReports = listUberPaymentReports(res.data).filter((r) =>
+      uberReportMatchesType(r, reportTypeKey)
+    );
     const matching = paymentReports.find((r) =>
       uberReportMatchesPeriod(r, periodStart, periodEnd)
     );
     const preselect =
       matching?.name ??
       paymentReports.find((r) => r.hasDownload)?.name ??
-      res.data.find((r) => r.hasDownload)?.name ??
+      listUberPaymentReports(res.data).find((r) => r.hasDownload && /payments_order/i.test(r.name))
+        ?.name ??
+      res.data.find((r) => r.hasDownload && !/driver_activity/i.test(r.name))?.name ??
       null;
     if (preselect) {
       setUberSelectedReport(preselect);
@@ -318,6 +342,7 @@ export function SyncPagamentosModal({
     const end = periodEndProp || week.periodEnd;
     setUberPeriodStart(start);
     setUberPeriodEnd(end);
+    setUberReportTypeKey(readUberReportType());
     uberPeriodRef.current = { start, end };
     setPhase('ready');
     void loadUberReports(start, end);
@@ -334,6 +359,7 @@ export function SyncPagamentosModal({
       rangeStart: lisbonDatetimeLocalToIso(`${uberPeriodStart}T01:00`),
       rangeEnd: lisbonDatetimeLocalToIso(`${uberPeriodEnd}T23:30`),
       organizationName: readUberOrg(),
+      reportTypeKey: uberReportTypeKey,
     };
   }
 
@@ -390,6 +416,7 @@ export function SyncPagamentosModal({
           rangeStart: lisbonDatetimeLocalToIso(`${start}T01:00`),
           rangeEnd: lisbonDatetimeLocalToIso(`${end}T23:30`),
           organizationName: org,
+          reportTypeKey: readUberReportType(),
         };
       }
 
@@ -648,8 +675,8 @@ export function SyncPagamentosModal({
             <div>
               <p className="text-xs font-medium text-slate-700">Uber — relatórios existentes</p>
               <p className="mt-1 text-xs text-slate-500">
-                Lista do Supplier. Preferir «Pagamentos do motorista» (rendimentos líquidos =
-                totais + reembolsos). Ou gere um novo com o período abaixo.
+                Lista do Supplier. Preferir «Transação de pagamentos» (`payments_order`). Ou gere um
+                novo com o período abaixo.
               </p>
             </div>
 
@@ -789,6 +816,32 @@ export function SyncPagamentosModal({
             >
               <p className="text-xs font-medium text-slate-700">
                 Período para gerar novo (se não usar a lista)
+              </p>
+              <label className="block text-sm">
+                <span className="mb-1 block text-slate-600">Tipo de relatório</span>
+                <select
+                  className="input w-full"
+                  value={uberReportTypeKey}
+                  disabled={uberReadyMode !== 'generate'}
+                  onChange={(e) => {
+                    const next = resolveUberReportType(e.target.value);
+                    setUberReportTypeKey(next);
+                    try {
+                      localStorage.setItem(REPORT_TYPE_STORAGE_KEY, next);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                >
+                  {UBER_REPORT_TYPE_CATALOG.map((t) => (
+                    <option key={t.key} value={t.key}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="text-xs text-slate-500">
+                Por defeito: {uberReportTypeLabel(DEFAULT_UBER_REPORT_TYPE)}.
               </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 <label className="block text-sm">
