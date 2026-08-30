@@ -1398,85 +1398,191 @@ async function openGenerateDrawer(page: Page): Promise<void> {
   throw new Error('Sync Uber: não abri o painel «Gerar relatório».');
 }
 
+function isUberDriverPaymentsLabel(text: string, value = ''): boolean {
+  const t = text.replace(/\s+/g, ' ').trim();
+  const v = value.trim();
+  if (v === 'REPORT_TYPE_PAYMENTS_DRIVER') return true;
+  if (/^pagamentos? do?s? motoristas?$/i.test(t)) return true;
+  if (/^driver payments?$/i.test(t)) return true;
+  // Uber por vezes usa variantes («Pagamentos Motorista», «Driver payment»)
+  if (/pagamento/i.test(t) && /motorista/i.test(t) && !/transa[cç][aã]o/i.test(t)) return true;
+  if (/driver/i.test(t) && /payment/i.test(t) && !/order|transaction/i.test(t)) return true;
+  return false;
+}
+
+async function isDriverPaymentsTypeSelected(page: Page): Promise<boolean> {
+  const panel = reportGeneratePanel(page);
+  if (await panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first().isVisible().catch(() => false)) {
+    return true;
+  }
+  const selectedText = await page.evaluate(`(() => {
+    const panel = document.querySelector('[data-tracking-name="report-management-v2"]');
+    if (!panel) return '';
+    const select =
+      panel.querySelector('label[for="report-type"]')?.parentElement?.querySelector('[data-baseweb="select"]') ||
+      panel.querySelector('[data-baseweb="select"]');
+    if (!select) return '';
+    const val = select.getAttribute('value') || select.querySelector('[value]')?.getAttribute('value') || '';
+    const t = (select.textContent || '').replace(/\\s+/g, ' ').trim();
+    return JSON.stringify({ t, val });
+  })()`);
+  try {
+    const parsed = JSON.parse(String(selectedText || '{}')) as { t?: string; val?: string };
+    return isUberDriverPaymentsLabel(parsed.t || '', parsed.val || '');
+  } catch {
+    return false;
+  }
+}
+
+async function listOpenReportTypeOptions(page: Page): Promise<string[]> {
+  return page.evaluate(`(() => {
+    const nodes = [
+      ...document.querySelectorAll('[role="option"], [data-baseweb="menu"] li, [data-baseweb="popover"] li, li[role="option"]'),
+    ];
+    return nodes
+      .map((n) => {
+        const val = n.getAttribute('value') || '';
+        const t = (n.textContent || '').replace(/\\s+/g, ' ').trim();
+        return val ? \`\${t} [\${val}]\` : t;
+      })
+      .filter(Boolean)
+      .slice(0, 80);
+  })()`) as Promise<string[]>;
+}
+
+async function clickDriverPaymentsOption(page: Page): Promise<string | null> {
+  return page.evaluate(`(() => {
+    const match = (val, t) => {
+      if (val === 'REPORT_TYPE_PAYMENTS_DRIVER') return true;
+      if (/^pagamentos? do?s? motoristas?$/i.test(t)) return true;
+      if (/^driver payments?$/i.test(t)) return true;
+      if (/pagamento/i.test(t) && /motorista/i.test(t) && !/transa[cç][aã]o/i.test(t)) return true;
+      if (/driver/i.test(t) && /payment/i.test(t) && !/order|transaction/i.test(t)) return true;
+      return false;
+    };
+    const nodes = [
+      ...document.querySelectorAll('[role="option"], [data-baseweb="menu"] li, [data-baseweb="popover"] li, li, div[value]'),
+    ];
+    for (const n of nodes) {
+      const val = n.getAttribute('value') || '';
+      const t = (n.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (!match(val, t)) continue;
+      const target = n.closest('[role="option"]') || n;
+      target.scrollIntoView({ block: 'center' });
+      target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      target.click();
+      return t || val;
+    }
+    return null;
+  })()`) as Promise<string | null>;
+}
+
+async function dumpUberReportTypeFailure(page: Page): Promise<string> {
+  const options = await listOpenReportTypeOptions(page).catch(() => [] as string[]);
+  console.log(`[uber-sync] opções tipo visíveis (${options.length}): ${options.slice(0, 40).join(' | ')}`);
+  try {
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const candidates = [
+      path.resolve(process.cwd(), '../../.tmp-uber-report-type'),
+      path.resolve(process.cwd(), '.tmp-uber-report-type'),
+      '/tmp/tvde-uber-report-type',
+    ];
+    for (const c of candidates) {
+      try {
+        await fs.mkdir(c, { recursive: true });
+        const file = path.join(c, `type-${Date.now()}.png`);
+        await page.screenshot({ path: file, fullPage: false });
+        console.log(`[uber-sync] screenshot tipo: ${file}`);
+        break;
+      } catch {
+        // try next
+      }
+    }
+  } catch (err) {
+    console.log('[uber-sync] screenshot tipo falhou:', err instanceof Error ? err.message : err);
+  }
+  return options.slice(0, 12).join(', ') || '(nenhuma opção listada)';
+}
+
 async function selectPaymentTransactionType(page: Page): Promise<void> {
   if (!(await isGenerateDrawerOpen(page))) await openGenerateDrawer(page);
   await scrollGenerateDrawerToTop(page);
 
-  const panel = reportGeneratePanel(page);
-  // Já REPORT_TYPE_PAYMENTS_DRIVER? (rendimentos líquidos)
-  const already = panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first();
-  if (await already.isVisible().catch(() => false)) {
-    console.log('[uber-sync] tipo já REPORT_TYPE_PAYMENTS_DRIVER');
-    return;
-  }
-  if (
-    (await panel
-      .getByText(/^pagamentos? do?s? motoristas?$/i)
-      .first()
-      .isVisible()
-      .catch(() => false)) &&
-    !(await panel.getByText(/^atividade do motorista$/i).first().isVisible().catch(() => false))
-  ) {
+  if (await isDriverPaymentsTypeSelected(page)) {
     console.log('[uber-sync] tipo já «Pagamentos do motorista»');
     return;
   }
 
+  const panel = reportGeneratePanel(page);
   // Abrir select via label for=report-type (topo do formulário)
   const typeSelect = panel
     .locator('label[for="report-type"]')
     .locator('xpath=following::*[@data-baseweb="select"][1]')
+    .or(panel.locator('#report-type').locator('xpath=ancestor::*[@data-baseweb="select"][1]'))
     .or(panel.locator('[data-baseweb="select"]').first())
-    .or(panel.getByText(/^atividade do motorista$/i).first());
+    .or(panel.getByText(/^atividade do motorista$|^driver activity$/i).first());
 
+  await typeSelect.first().scrollIntoViewIfNeeded().catch(() => undefined);
   await typeSelect.first().click({ timeout: 8000 });
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(500);
 
-  // Lista longa — descer até «Pagamentos do motorista»
-  for (let i = 0; i < 22; i += 1) {
-    await page.keyboard.press('ArrowDown').catch(() => undefined);
-    await page.waitForTimeout(40);
+  // Esperar listbox / opções (Base Web popover)
+  for (let i = 0; i < 20; i += 1) {
+    const n = await page.locator('[role="option"], [data-baseweb="menu"] li').count().catch(() => 0);
+    if (n > 0) break;
+    await page.waitForTimeout(150);
   }
 
-  const opted = await page.evaluate(`(() => {
-    const nodes = [...document.querySelectorAll('[role="option"], [data-baseweb="menu"] li, li, div[value]')];
-    for (const n of nodes) {
-      const val = n.getAttribute('value') || '';
-      const t = (n.textContent || '').replace(/\\s+/g, ' ').trim();
-      if (
-        val === 'REPORT_TYPE_PAYMENTS_DRIVER' ||
-        /^pagamentos? do?s? motoristas?$/i.test(t) ||
-        /^driver payments?$/i.test(t)
-      ) {
-        const target = n.closest('[role="option"]') || n;
-        target.scrollIntoView({ block: 'center' });
-        target.click();
-        return t || val;
-      }
+  // Filtrar por texto se o select tiver input de pesquisa
+  const filterInput = page
+    .locator('[data-baseweb="popover"] input, [data-baseweb="menu"] input, [role="listbox"] input, input[aria-autocomplete="list"]')
+    .first();
+  if (await filterInput.isVisible().catch(() => false)) {
+    await filterInput.fill('Pagamentos do motorista').catch(() => undefined);
+    await page.waitForTimeout(400);
+    console.log('[uber-sync] filtrei tipo por «Pagamentos do motorista»');
+  }
+
+  let opted = await clickDriverPaymentsOption(page);
+  if (!opted) {
+    // Lista longa — End / PageDown / ArrowDown até aparecer
+    await page.keyboard.press('End').catch(() => undefined);
+    await page.waitForTimeout(120);
+    for (let i = 0; i < 40; i += 1) {
+      await page.keyboard.press(i % 8 === 0 ? 'PageDown' : 'ArrowDown').catch(() => undefined);
+      await page.waitForTimeout(35);
+      opted = await clickDriverPaymentsOption(page);
+      if (opted) break;
     }
-    return null;
-  })()`);
+  }
 
   if (!opted) {
-    await page
-      .getByRole('option', { name: /pagamentos? do?s? motoristas?|driver payments?/i })
-      .first()
-      .click({ force: true, timeout: 8_000 })
-      .catch(() => undefined);
+    const roleOpt = page
+      .getByRole('option', {
+        name: /pagamentos?.*motorista|driver\s*payments?/i,
+      })
+      .first();
+    if (await roleOpt.isVisible().catch(() => false)) {
+      await roleOpt.click({ force: true, timeout: 6_000 }).catch(() => undefined);
+      opted = 'getByRole';
+      console.log('[uber-sync] tipo via getByRole');
+    }
   } else {
     console.log(`[uber-sync] tipo DOM: ${opted}`);
   }
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(600);
 
-  const ok =
-    (await panel.locator('[value="REPORT_TYPE_PAYMENTS_DRIVER"]').first().isVisible().catch(() => false)) ||
-    (await panel
-      .getByText(/^pagamentos? do?s? motoristas?$/i)
-      .first()
-      .isVisible()
-      .catch(() => false));
-  if (!ok) {
+  if (!(await isDriverPaymentsTypeSelected(page))) {
+    // Pode ter ficado o menu aberto sem commit — tentar Enter
+    await page.keyboard.press('Enter').catch(() => undefined);
+    await page.waitForTimeout(400);
+  }
+
+  if (!(await isDriverPaymentsTypeSelected(page))) {
+    const sample = await dumpUberReportTypeFailure(page);
     throw new Error(
-      'Sync Uber: não seleccionei «Pagamentos do motorista» (REPORT_TYPE_PAYMENTS_DRIVER).'
+      `Sync Uber: não seleccionei «Pagamentos do motorista» (REPORT_TYPE_PAYMENTS_DRIVER). Opções vistas: ${sample}`
     );
   }
   console.log('[uber-sync] tipo = Pagamentos do motorista (rendimentos líquidos)');
