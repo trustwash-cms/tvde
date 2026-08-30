@@ -573,13 +573,32 @@ export async function submitPortalOtp(
   if (!connection?.activeJobId) throw new Error('Nenhum desafio OTP activo');
 
   const job = await db.portalSyncJob.findUnique({ where: { id: connection.activeJobId } });
-  if (!job || job.status !== 'awaiting_otp') throw new Error('Job não está à espera de OTP');
+  if (!job) throw new Error('Job não está à espera de OTP');
+
+  if (job.status === 'running') {
+    const msg = job.message ?? '';
+    if (/OTP recebido/i.test(msg)) {
+      return getPortalConnectionDetail(db, tenantId, portal);
+    }
+    const startedAt = job.startedAt?.getTime() ?? job.updatedAt?.getTime() ?? 0;
+    if (startedAt > 0 && Date.now() - startedAt > 120_000) {
+      await db.portalSyncJob.update({
+        where: { id: job.id },
+        data: { status: 'awaiting_otp', message: 'OTP expirou — introduza o código SMS outra vez' },
+      });
+    } else {
+      throw new Error('OTP em validação no servidor — aguarde ~30s ou feche e use «Introduzir OTP»');
+    }
+  } else if (job.status !== 'awaiting_otp') {
+    throw new Error('Job não está à espera de OTP — use Desligar e Ligar conta outra vez');
+  }
 
   await db.portalSyncJob.update({
     where: { id: job.id },
     data: { message: 'OTP recebido — a continuar…', status: 'running' },
   });
 
+  console.log(`[portal-otp] ${portal} job=${job.id} código recebido (${code.replace(/\d/g, '•')})`);
   void continueOtpJob(db, job.id, code, actorUserId);
   return getPortalConnectionDetail(db, tenantId, portal);
 }
@@ -1654,42 +1673,45 @@ async function continueOtpJob(
       return;
     }
 
-    result = await adapter.submitOtp(live.page, code);
+    result = await withLivePageLock(jobId, async () => {
+      let phase = await adapter.submitOtp(live.page, code);
 
-    // Uber: após OTP → auto-fill password guardada (BUGFIX: antes só corria se status≠awaiting_otp,
-    // mas submitOtp devolvia awaiting_otp no ecrã password — nunca preenchia).
-    if (portal === 'uber' && result.status !== 'failed' && result.status !== 'connected') {
-      const pwd = connection.passwordEncrypted
-        ? decryptPortalField(connection.passwordEncrypted, 'password')
-        : '';
-      const onPassword =
-        result.status === 'awaiting_password' ||
-        (await isUberPasswordScreen(live.page).catch(() => false));
+      // Uber: após OTP → auto-fill password guardada
+      if (portal === 'uber' && phase.status !== 'failed' && phase.status !== 'connected') {
+        const pwd = connection.passwordEncrypted
+          ? decryptPortalField(connection.passwordEncrypted, 'password')
+          : '';
+        const onPassword =
+          phase.status === 'awaiting_password' ||
+          (await isUberPasswordScreen(live.page).catch(() => false));
 
-      if (onPassword && pwd) {
-        console.log('[uber-otp] pós-OTP → preferPasswordLogin (password guardada)');
-        await preferPasswordLogin(live.page, pwd);
-        const connected = await waitUberSupplierAfterPassword(live.page);
-        if (connected) {
-          result = {
-            status: 'connected' as const,
-            storageState: await captureStorageState(live.context),
-          };
-        } else if (await isUberPasswordScreen(live.page).catch(() => false)) {
-          result = {
+        if (onPassword && pwd) {
+          console.log('[uber-otp] pós-OTP → preferPasswordLogin (password guardada)');
+          await preferPasswordLogin(live.page, pwd);
+          const connected = await waitUberSupplierAfterPassword(live.page);
+          if (connected) {
+            phase = {
+              status: 'connected' as const,
+              storageState: await captureStorageState(live.context),
+            };
+          } else if (await isUberPasswordScreen(live.page).catch(() => false)) {
+            phase = {
+              status: 'awaiting_password' as const,
+              hint: 'OTP OK — password incorrecta ou ecrã ainda aberto. Introduza a password Uber.',
+              storageState: await captureStorageState(live.context),
+            };
+          }
+        } else if (onPassword) {
+          phase = {
             status: 'awaiting_password' as const,
-            hint: 'OTP OK — password incorrecta ou ecrã ainda aberto. Introduza a password Uber.',
+            hint: 'OTP OK — introduza a password Uber.',
             storageState: await captureStorageState(live.context),
           };
         }
-      } else if (onPassword) {
-        result = {
-          status: 'awaiting_password' as const,
-          hint: 'OTP OK — introduza a password Uber.',
-          storageState: await captureStorageState(live.context),
-        };
       }
-    }
+
+      return phase;
+    });
 
     if (result.status === 'connected') {
       const storageState =
@@ -1937,6 +1959,14 @@ async function watchLiveUberAuthChallenge(
 
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
+    const jobSnap = await db.portalSyncJob.findUnique({
+      where: { id: jobId },
+      select: { status: true },
+    });
+    if (jobSnap?.status === 'running') {
+      // OTP/password a ser processado — não competir com continueOtpJob no Playwright
+      continue;
+    }
     const live = getLiveOtpSession(jobId);
     if (!live || live.page.isClosed()) {
       await failJob(
@@ -2263,6 +2293,26 @@ export async function getPortalLiveFrame(
 
     // 2) Metadados leves (sem bloquear o JPEG se falharem)
     let challengeVisible: boolean | null = null;
+    if (portal === 'uber') {
+      try {
+        const liveState = await inspectUberLiveAuth(live.page).catch(() => 'unknown' as const);
+        if (liveState === 'otp') {
+          authChallenge = 'otp';
+          challengeVisible = false;
+        } else if (liveState === 'password') {
+          authChallenge = 'password';
+          challengeVisible = false;
+        } else if (liveState === 'connected') {
+          authChallenge = null;
+          challengeVisible = false;
+        }
+      } catch (liveStateErr) {
+        console.error(
+          '[live-frame] inspectUberLiveAuth falhou:',
+          liveStateErr instanceof Error ? liveStateErr.message : liveStateErr
+        );
+      }
+    }
     if (portal === 'uber' && authChallenge === 'bot') {
       try {
         const stuckIdentity = await isStuckOnEmptyIdentity(live.page);

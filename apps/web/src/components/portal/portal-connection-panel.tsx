@@ -76,6 +76,12 @@ function humanizePortalError(raw: string | null | undefined): string {
     return 'Portal RPA desactivado (PORTAL_RPA_ENABLED=false).';
   }
   // Mensagens nossas Sync Uber — mostrar limpas (não genericizar)
+  if (/^Job não está à espera de OTP/i.test(raw.trim())) {
+    return 'O login Uber ficou num passo intermédio. Clique em Desligar e volte a Ligar conta.';
+  }
+  if (/^OTP em validação/i.test(raw.trim())) {
+    return raw.trim();
+  }
   if (/^Sync Uber:/i.test(raw.trim()) || /Sync Uber:/i.test(raw)) {
     const cleaned = raw.replace(/\u001b\[[0-9;]*m/g, '').replace(/\s+/g, ' ').trim();
     return cleaned.length > 360 ? `${cleaned.slice(0, 357)}…` : cleaned;
@@ -177,8 +183,87 @@ export function PortalConnectionPanel({
   const syncButtonLabel = syncScope ? `Sincronizar ${syncLabel}` : 'Sincronizar';
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const otpSubmitStartedAt = useRef<number | null>(null);
+  /** Utilizador fechou o modal deste job — não reabrir até Ligar outra vez ou «Introduzir OTP». */
+  const [dismissedAuthJobId, setDismissedAuthJobId] = useState<string | null>(null);
+  const authModalAutoOpenedForJobRef = useRef<string | null>(null);
   /** Evita sair do spinner «A ligar…» com lastError/lastJobMessage de uma falha anterior. */
   const sawJobThisConnectRef = useRef(false);
+
+  function syncAuthModalsFromConnection(
+    c: PortalConnectionPublic,
+    opts?: { forceOpen?: boolean }
+  ) {
+    if (c.status !== 'awaiting_otp') return;
+    const jobId = c.activeJobId;
+    if (!jobId) return;
+
+    if (dismissedAuthJobId === jobId && !opts?.forceOpen) {
+      setBotOpen(false);
+      setPasskeyOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+      return;
+    }
+
+    if (!opts?.forceOpen && authModalAutoOpenedForJobRef.current === jobId) {
+      return;
+    }
+
+    if (c.authChallenge === 'bot') {
+      setBotOpen(true);
+      setPasskeyOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+    } else if (c.authChallenge === 'passkey' && c.challengeImageBase64) {
+      setPasskeyOpen(true);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+    } else if (isPasswordChallenge(c)) {
+      setPasskeyOpen(false);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(true);
+    } else if (c.activeJobStatus === 'running') {
+      // OTP já submetido — não reabrir popup; estado no painel
+      setPasskeyOpen(false);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+    } else {
+      setPasskeyOpen(false);
+      setBotOpen(false);
+      setPasswordOpen(false);
+      setOtpOpen(true);
+    }
+
+    if (!opts?.forceOpen) {
+      authModalAutoOpenedForJobRef.current = jobId;
+    }
+  }
+
+  function dismissAuthModal() {
+    setDismissedAuthJobId(connection?.activeJobId ?? null);
+    setOtpOpen(false);
+    setPasswordOpen(false);
+    setPasskeyOpen(false);
+    setBotOpen(false);
+    setPhase('idle');
+    setBusy(false);
+    otpSubmitStartedAt.current = null;
+  }
+
+  function openAuthModalManual() {
+    if (!connection) return;
+    setDismissedAuthJobId(null);
+    if (isPasswordChallenge(connection)) {
+      setPhase('awaiting_password');
+    } else if (connection.authChallenge !== 'bot') {
+      setPhase('awaiting_otp');
+    }
+    syncAuthModalsFromConnection(connection, { forceOpen: true });
+  }
 
   const load = useCallback(async (opts?: { preserveSubmittingOtp?: boolean }) => {
     const res = await apiFetch<PortalConnectionPublic>(
@@ -206,25 +291,21 @@ export function PortalConnectionPanel({
           }
         }
         if (res.data.authChallenge === 'bot') {
-          setBotOpen(true);
-          setPasskeyOpen(false);
-          setOtpOpen(false);
-          setPasswordOpen(false);
+          syncAuthModalsFromConnection(res.data);
         } else if (res.data.authChallenge === 'passkey' && res.data.challengeImageBase64) {
-          setPasskeyOpen(true);
-          setBotOpen(false);
-          setOtpOpen(false);
-          setPasswordOpen(false);
+          syncAuthModalsFromConnection(res.data);
         } else if (isPasswordChallenge(res.data)) {
-          setPasskeyOpen(false);
-          setBotOpen(false);
-          setOtpOpen(false);
-          setPasswordOpen(true);
+          syncAuthModalsFromConnection(res.data);
+        } else if (
+          res.data.activeJobStatus !== 'running' &&
+          dismissedAuthJobId !== res.data.activeJobId
+        ) {
+          syncAuthModalsFromConnection(res.data);
         } else {
           setPasskeyOpen(false);
           setBotOpen(false);
+          setOtpOpen(false);
           setPasswordOpen(false);
-          setOtpOpen(true);
         }
       }
       return res.data;
@@ -375,44 +456,46 @@ export function PortalConnectionPanel({
           setPhase('awaiting_otp');
           setBusy(false);
           setConnectOpen(false);
-          if (next.authChallenge === 'bot') {
-            setBotOpen(true);
-            setPasskeyOpen(false);
-            setOtpOpen(false);
-            setPasswordOpen(false);
-          } else if (next.authChallenge === 'passkey' && next.challengeImageBase64) {
-            setPasskeyOpen(true);
-            setBotOpen(false);
-            setOtpOpen(false);
-            setPasswordOpen(false);
-          } else {
-            setPasskeyOpen(false);
-            setBotOpen(false);
-            setPasswordOpen(false);
-            setOtpOpen(true);
-          }
+          syncAuthModalsFromConnection(next);
           return;
         }
 
         // Enquanto validamos OTP ou password, manter modal + loader
         if (currentPhase === 'submitting_otp' || currentPhase === 'submitting_password') {
           if (next.status === 'connected' || next.activeJobStatus === 'completed') {
+            otpSubmitStartedAt.current = null;
             clearBusyUi();
             return;
           }
           if (next.activeJobStatus === 'failed' || next.status === 'error') {
+            otpSubmitStartedAt.current = null;
             setError(
               humanizePortalError(next.lastError || next.lastJobMessage) ||
                 (currentPhase === 'submitting_password' ? 'Password inválida' : 'OTP inválido')
             );
-            setPhase(currentPhase === 'submitting_password' ? 'awaiting_password' : 'idle');
+            setPhase(currentPhase === 'submitting_password' ? 'awaiting_password' : 'awaiting_otp');
             setBusy(false);
             if (currentPhase === 'submitting_password') {
               setPasswordOpen(true);
-            } else {
-              setOtpOpen(false);
-              setOtp('');
+            } else if (dismissedAuthJobId !== next.activeJobId) {
+              setOtpOpen(true);
             }
+            return;
+          }
+          if (
+            currentPhase === 'submitting_otp' &&
+            next.activeJobStatus === 'running' &&
+            otpSubmitStartedAt.current != null &&
+            Date.now() - otpSubmitStartedAt.current > 120_000
+          ) {
+            otpSubmitStartedAt.current = null;
+            setError(
+              'Validação do SMS demorou demasiado. Use Desligar → Ligar conta ou «Introduzir OTP» para tentar outra vez.'
+            );
+            setPhase('idle');
+            setBusy(false);
+            dismissAuthModal();
+            return;
           }
           return;
         }
@@ -471,6 +554,8 @@ export function PortalConnectionPanel({
     setPhase('connecting');
     setError('');
     sawJobThisConnectRef.current = false;
+    setDismissedAuthJobId(null);
+    authModalAutoOpenedForJobRef.current = null;
     const body = useStoredCredentials
       ? { useStoredCredentials: true as const }
       : { username, password };
@@ -522,6 +607,7 @@ export function PortalConnectionPanel({
     e.preventDefault();
     setBusy(true);
     setPhase('submitting_otp');
+    otpSubmitStartedAt.current = Date.now();
     setError('');
     const res = await apiFetch(
       API_PATHS.portalConnections.otp(portal),
@@ -529,12 +615,14 @@ export function PortalConnectionPanel({
       getStoredToken()
     );
     if (!res.success) {
+      otpSubmitStartedAt.current = null;
       setBusy(false);
       setPhase('awaiting_otp');
       setError(humanizePortalError(res.error) || 'OTP inválido');
       return;
     }
-    // Manter modal + loader; o poll fecha quando o job terminar
+    // API aceitou — libertar botão; o poll fecha quando o job terminar
+    setBusy(false);
     await load({ preserveSubmittingOtp: true });
   }
 
@@ -663,7 +751,13 @@ export function PortalConnectionPanel({
   const status = connection?.status ?? 'disconnected';
   const statusLabel = PORTAL_CONNECTION_STATUS_LABELS[status];
   const rpaOff = connection && !connection.rpaEnabled;
-  const loadingMsg = phaseMessage(phase, portalLabel, syncLabel);
+  const loadingMsg =
+    phaseMessage(phase, portalLabel, syncLabel) ||
+    (status === 'awaiting_otp' && connection?.activeJobStatus === 'running'
+      ? 'A validar o código SMS na Uber… pode demorar até ~60s.'
+      : status === 'awaiting_otp' && dismissedAuthJobId === connection?.activeJobId
+        ? 'Login pendente — use «Introduzir OTP» quando quiser ou Desligar para recomeçar.'
+        : null);
   const showPanelLoader =
     busy ||
     jobInFlight ||
@@ -791,18 +885,7 @@ export function PortalConnectionPanel({
             <button
               type="button"
               className="btn-primary text-sm"
-              onClick={() => {
-                if (connection?.authChallenge === 'bot') {
-                  setBotOpen(true);
-                } else if (connection?.authChallenge === 'passkey' && connection.challengeImageBase64) {
-                  setPasskeyOpen(true);
-                } else if (isPasswordChallenge(connection)) {
-                  setPasswordOpen(true);
-                  setPhase('awaiting_password');
-                } else {
-                  setOtpOpen(true);
-                }
-              }}
+              onClick={() => openAuthModalManual()}
             >
               {connection?.authChallenge === 'bot'
                 ? 'Abrir desafio Uber'
@@ -1041,13 +1124,15 @@ export function PortalConnectionPanel({
         jobId={connection?.activeJobId ?? null}
         hint={connection?.otpHint}
         onCloseCancel={() => {
-          setBotOpen(false);
-          setPhase('idle');
-          setBusy(false);
+          dismissAuthModal();
           void load();
         }}
         onChallengeCleared={() => {
           setBotOpen(false);
+          if (connection) {
+            authModalAutoOpenedForJobRef.current = null;
+            syncAuthModalsFromConnection(connection);
+          }
           void load();
         }}
       />
@@ -1089,7 +1174,7 @@ export function PortalConnectionPanel({
         open={otpOpen}
         onClose={() => {
           if (busy || phase === 'submitting_otp') return;
-          setOtpOpen(false);
+          dismissAuthModal();
         }}
         title={
           portal === 'myprio' ? 'Código SMS MyPRIO' : portal === 'uber' ? 'Código SMS Uber' : 'Código OTP'
@@ -1155,7 +1240,7 @@ export function PortalConnectionPanel({
               type="button"
               className="btn-secondary"
               disabled={busy}
-              onClick={() => setOtpOpen(false)}
+              onClick={() => dismissAuthModal()}
             >
               Cancelar
             </button>

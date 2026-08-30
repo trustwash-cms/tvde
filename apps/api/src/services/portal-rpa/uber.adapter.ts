@@ -197,6 +197,9 @@ export async function isBotChallengeScreen(page: Page): Promise<boolean> {
  * (paint visual OU iframe bot com UI de desafio / form disabled a montar overlay).
  */
 export async function canHandoffBotChallenge(page: Page): Promise<boolean> {
+  if (await isOtpScreen(page)) return false;
+  if (await isUberPasswordScreen(page)) return false;
+  if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return false;
   if (await isStuckOnEmptyIdentity(page)) return false;
   if (!(await isBotChallengeSignalRaw(page))) return false;
 
@@ -205,7 +208,9 @@ export async function canHandoffBotChallenge(page: Page): Promise<boolean> {
   const identityVisible = await identity.isVisible().catch(() => false);
 
   if (!identityVisible) {
-    // Saiu do form — Continuar avançou; sinal bot já confirmado acima
+    // Saiu do form — pode ser OTP/password, não assumir bot
+    if (await isOtpScreen(page)) return false;
+    if (await isUberPasswordScreen(page)) return false;
     return true;
   }
 
@@ -230,6 +235,8 @@ const FUNCAPTCHA_PUZZLE_RE =
  * Em headless o iframe existe mas Arkose não pinta — JPEG = identidade por baixo.
  */
 export async function isBotChallengeVisuallyReady(page: Page): Promise<boolean> {
+  if (await isOtpScreen(page)) return false;
+  if (await isUberPasswordScreen(page)) return false;
   if (await page.getByText(BOT_CHALLENGE_TEXT_RE).first().isVisible().catch(() => false)) {
     return true;
   }
@@ -2432,6 +2439,9 @@ export async function inspectUberLiveAuth(
     await page.waitForTimeout(1200);
     if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
   }
+  // SMS / password têm prioridade sobre iframe Arkose residual
+  if (await isOtpScreen(page)) return 'otp';
+  if (await isPasswordScreen(page)) return 'password';
   // Identidade vazia / erro — NÃO reportar bot (evita OTP pendente falso)
   if (await isStuckOnEmptyIdentity(page) || (await isIdentityScreen(page))) {
     if (await canHandoffBotChallenge(page)) return 'bot';
@@ -2439,8 +2449,6 @@ export async function inspectUberLiveAuth(
   }
   if (await canHandoffBotChallenge(page)) return 'bot';
   if (await isBotChallengeVisuallyReady(page)) return 'bot';
-  if (await isOtpScreen(page)) return 'otp';
-  if (await isPasswordScreen(page)) return 'password';
 
   // Pós-OTP: palavra-passe em vez de chave de acesso
   if (password && (await isPostOtpPasswordChooser(page))) {
