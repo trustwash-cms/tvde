@@ -249,6 +249,81 @@ export function ymdToUberCompact(ymd: string): string {
   return ymd.trim().replace(/-/g, '').slice(0, 8);
 }
 
+const PT_MONTHS: Record<string, number> = {
+  janeiro: 1,
+  fevereiro: 2,
+  março: 3,
+  marco: 3,
+  abril: 4,
+  maio: 5,
+  junho: 6,
+  julho: 7,
+  agosto: 8,
+  setembro: 9,
+  outubro: 10,
+  novembro: 11,
+  dezembro: 12,
+};
+
+/** Datas Y-m-d extraídas do prefixo do nome (`20260824-20260831-payments_order-…`). */
+export function extractUberReportDatesFromName(name: string): {
+  startYmd: string;
+  endYmd: string;
+} | null {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{4})(\d{2})(\d{2})/.exec(name.trim());
+  if (!m) return null;
+  return {
+    startYmd: `${m[1]}-${m[2]}-${m[3]}`,
+    endYmd: `${m[4]}-${m[5]}-${m[6]}`,
+  };
+}
+
+function ymdUtcMs(ymd: string): number {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return Date.UTC(y, m - 1, d);
+}
+
+function daysBetweenYmd(a: string, b: string): number {
+  return Math.round((ymdUtcMs(b) - ymdUtcMs(a)) / 86_400_000);
+}
+
+function parsePortugueseIntervalDays(interval: string): {
+  startDay: number;
+  startMonth: number;
+  endDay: number;
+  endMonth: number;
+} | null {
+  const m = /(\d{1,2})\s+de\s+(\S+?)\s*[-–—]\s*(\d{1,2})\s+de\s+(\S+)/i.exec(
+    interval.replace(/\s+/g, ' ').trim()
+  );
+  if (!m) return null;
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const startMonth = PT_MONTHS[norm(m[2])];
+  const endMonth = PT_MONTHS[norm(m[4])];
+  if (!startMonth || !endMonth) return null;
+  return {
+    startDay: Number(m[1]),
+    startMonth,
+    endDay: Number(m[3]),
+    endMonth,
+  };
+}
+
+function intervalMatchesPeriodDays(
+  interval: string,
+  periodStartYmd: string,
+  periodEndYmd: string
+): boolean {
+  const parsed = parsePortugueseIntervalDays(interval);
+  if (!parsed) return false;
+  const [sy, sm, sd] = periodStartYmd.split('-').map(Number);
+  const [ey, em, ed] = periodEndYmd.split('-').map(Number);
+  if (parsed.startDay !== sd || parsed.startMonth !== sm) return false;
+  if (parsed.endDay === ed && parsed.endMonth === em) return true;
+  // Uber às vezes mostra fim no dia seguinte ao domingo (ex. 24–31 vs seg–dom 24–30)
+  return parsed.endMonth === em && Math.abs(parsed.endDay - ed) <= 1;
+}
+
 function isPaymentsUberReport(report: UberReportListItem): boolean {
   const blob = `${report.name} ${report.type ?? ''}`;
   return /payments_driver|payments_orde|pagamentos? do?s? motoristas?|transação de pagamentos|transacao de pagamentos|payment.?transaction|driver payments?/i.test(
@@ -277,22 +352,39 @@ export function uberReportMatchesPeriod(
 
   const name = report.name.trim();
   if (new RegExp(`^${start}-${end}[-_]payments`, 'i').test(name)) return true;
-  if (name.includes(start) && name.includes(end) && /payments/i.test(name)) return true;
+
+  const fromName = extractUberReportDatesFromName(name);
+  if (fromName) {
+    if (fromName.startYmd === periodStartYmd) {
+      const endDiff = Math.abs(daysBetweenYmd(fromName.endYmd, periodEndYmd));
+      if (endDiff <= 1) return true;
+    }
+    const nameStart = ymdToUberCompact(fromName.startYmd);
+    const nameEnd = ymdToUberCompact(fromName.endYmd);
+    if (nameStart === start && Math.abs(daysBetweenYmd(fromName.endYmd, periodEndYmd)) <= 1) {
+      return true;
+    }
+    if (name.includes(start) && /payments/i.test(name)) {
+      const endDiff = Math.abs(daysBetweenYmd(fromName.endYmd, periodEndYmd));
+      if (endDiff <= 1) return true;
+    }
+  }
 
   const interval = (report.interval ?? '').replace(/\s+/g, ' ');
-  if (!interval) return false;
-  // Intervalo UI: «13/07/2026 – 19/07/2026» ou «20260713 - 20260719»
-  const compact = interval.replace(/\D/g, '');
-  if (compact.includes(start) && compact.includes(end)) return true;
+  if (interval) {
+    if (intervalMatchesPeriodDays(interval, periodStartYmd, periodEndYmd)) return true;
+    const compact = interval.replace(/\D/g, '');
+    if (compact.includes(start) && compact.includes(end)) return true;
 
-  const dmy = (ymd: string) => {
-    const [y, m, d] = ymd.split('-');
-    return d && m && y ? `${Number(d)}/${Number(m)}/${y}` : '';
-  };
-  const startDmy = dmy(periodStartYmd);
-  const endDmy = dmy(periodEndYmd);
-  if (startDmy && endDmy && interval.includes(startDmy) && interval.includes(endDmy)) {
-    return true;
+    const dmy = (ymd: string) => {
+      const [y, m, d] = ymd.split('-');
+      return d && m && y ? `${Number(d)}/${Number(m)}/${y}` : '';
+    };
+    const startDmy = dmy(periodStartYmd);
+    const endDmy = dmy(periodEndYmd);
+    if (startDmy && endDmy && interval.includes(startDmy) && interval.includes(endDmy)) {
+      return true;
+    }
   }
   return false;
 }

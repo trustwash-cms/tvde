@@ -54,7 +54,7 @@ function readStoredReportType(): UberReportTypeKey {
 }
 
 export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
-  const defaults = defaultUberReportRange();
+  const defaultRange = useMemo(() => defaultUberReportRange(), [open]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState('');
   const [reports, setReports] = useState<UberReportListItem[]>([]);
@@ -62,10 +62,10 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
   const [organizationName, setOrganizationName] = useState(DEFAULT_ORG);
   const [reportTypeKey, setReportTypeKey] = useState<UberReportTypeKey>(DEFAULT_UBER_REPORT_TYPE);
   const [rangeStartLocal, setRangeStartLocal] = useState(() =>
-    isoToLisbonDatetimeLocal(defaults.rangeStart)
+    isoToLisbonDatetimeLocal(defaultRange.rangeStart)
   );
   const [rangeEndLocal, setRangeEndLocal] = useState(() =>
-    isoToLisbonDatetimeLocal(defaults.rangeEnd)
+    isoToLisbonDatetimeLocal(defaultRange.rangeEnd)
   );
   const [actionError, setActionError] = useState('');
 
@@ -87,11 +87,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
     const downloadable = items.filter((r) => r.hasDownload && uberReportMatchesType(r, typeKey));
     const startYmd = range.rangeStart.slice(0, 10);
     const endYmd = range.rangeEnd.slice(0, 10);
-    const match =
-      pickLatestUberReportForPeriod(downloadable, startYmd, endYmd) ??
-      downloadable.find((r) => uberReportMatchesPeriod(r, startYmd, endYmd)) ??
-      downloadable[0] ??
-      null;
+    const match = pickLatestUberReportForPeriod(downloadable, startYmd, endYmd) ?? null;
     setSelectedRowKey(match ? uberReportRowKey(match) : null);
   }
 
@@ -245,11 +241,10 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
                   {reports.map((r) => {
                     const disabled = !r.hasDownload;
                     const rowKey = uberReportRowKey(r);
-                    const range = defaultUberReportRange();
                     const matchesPeriod = uberReportMatchesPeriod(
                       r,
-                      range.rangeStart.slice(0, 10),
-                      range.rangeEnd.slice(0, 10)
+                      defaultRange.rangeStart.slice(0, 10),
+                      defaultRange.rangeEnd.slice(0, 10)
                     );
                     const matchesType = uberReportMatchesType(r, reportTypeKey);
                     return (

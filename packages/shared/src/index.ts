@@ -433,6 +433,7 @@ export {
   UBER_REPORT_TYPE_CATALOG,
   DEFAULT_UBER_REPORT_TYPE,
   ymdToUberCompact,
+  extractUberReportDatesFromName,
   uberReportMatchesPeriod,
   listUberPaymentReports,
   pickLatestUberReportForPeriod,

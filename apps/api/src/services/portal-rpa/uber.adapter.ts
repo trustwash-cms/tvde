@@ -1123,56 +1123,59 @@ type ReportRowSnapshot = {
 
 async function readReportRows(page: Page): Promise<ReportRowSnapshot[]> {
   return page.evaluate(`(() => {
+    const normalize = (s) => (s || '').replace(/\\s+/g, ' ').trim();
+
+    let nameIdx = 0;
+    let typeIdx = 1;
+    let intervalIdx = 2;
+    let createdIdx = 4;
+
+    const headerRow =
+      document.querySelector('table thead tr') ||
+      document.querySelector('table tr:has(th)');
+    if (headerRow) {
+      const headers = [...headerRow.querySelectorAll('th, td')].map((c) =>
+        normalize(c.innerText).toLowerCase()
+      );
+      const find = (re) => headers.findIndex((h) => re.test(h));
+      const ni = find(/nome (do )?relat|report name|^nome$|^name$/);
+      const ti = find(/tipo (de )?relat|report type|^tipo$|^type$/);
+      const ii = find(/intervalo|interval|time range|período|periodo/);
+      const ci = find(/criado|created/);
+      if (ni >= 0) nameIdx = ni;
+      if (ti >= 0) typeIdx = ti;
+      if (ii >= 0) intervalIdx = ii;
+      if (ci >= 0) createdIdx = ci;
+    }
+
     const rows = [];
-    const trs = [...document.querySelectorAll('table tbody tr, [role="row"]')];
+    const seen = new Set();
+    const trs = [...document.querySelectorAll('table tbody tr')];
+
     for (const tr of trs) {
-      const cells = [...tr.querySelectorAll('td, [role="cell"]')]
-        .map((c) => (c.innerText || c.textContent || '').replace(/\\s+/g, ' ').trim())
+      const cells = [...tr.querySelectorAll('td')]
+        .map((c) => normalize(c.innerText))
         .filter(Boolean);
       if (cells.length < 2) continue;
 
-      const text = cells.join(' | ');
-      let name = cells[0] || '';
-      let type = null;
-      let interval = null;
-      let createdAt = '';
+      const name = cells[nameIdx] || cells[0] || '';
+      if (!name || /^nome$/i.test(name)) continue;
 
-      // Tabela Uber: Nome | Tipo | Intervalo | Frequência | Criado em | Ações
-      if (cells.length >= 5 && !/^nome$/i.test(cells[0])) {
-        name = cells[0];
-        type = cells[1] || null;
-        interval = cells[2] || null;
+      const type = cells[typeIdx] || null;
+      let interval = cells[intervalIdx] || null;
+      let createdAt = cells[createdIdx] || '';
+
+      if (!createdAt) {
         const freqIdx = cells.findIndex((c) =>
           /manualmente|diariamente|semanalmente|mensalmente|daily|weekly|monthly/i.test(c)
         );
-        if (freqIdx >= 0 && cells[freqIdx + 1]) {
+        if (
+          freqIdx >= 0 &&
+          cells[freqIdx + 1] &&
+          !/faça o download|faca o download|\\bdownload\\b/i.test(cells[freqIdx + 1])
+        ) {
           createdAt = cells[freqIdx + 1];
-        } else if (cells.length >= 6) {
-          createdAt = cells[4] || '';
-        } else {
-          createdAt = cells[cells.length - 2] || '';
         }
-      } else {
-        type =
-          cells.find((c) =>
-            /transação|transacao|pagament|atividade|desempenho|qualidade|tempo/i.test(c)
-          ) || null;
-        interval =
-          cells.find((c) => /\\d{1,2}\\s+de\\s+\\w+.+\\d{1,2}\\s+de\\s+\\w+/i.test(c)) ||
-          cells.find((c) =>
-            /\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}.+\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(c)
-          ) ||
-          cells.find((c) => /\\d{8}\\s*[–-]\\s*\\d{8}/.test(c)) ||
-          null;
-        createdAt =
-          cells.find((c) =>
-            /\\b(January|February|March|April|May|June|July|August|September|October|November|December)\\b/i.test(
-              c
-            )
-          ) ||
-          cells.find((c) => /\\d{1,2}\\s+de\\s+\\w+\\s+de\\s+\\d{4}/i.test(c)) ||
-          cells.find((c) => /\\b\\d{1,2}\\/\\d{1,2}\\/\\d{4}\\b/.test(c)) ||
-          '';
       }
 
       if (
@@ -1187,10 +1190,15 @@ async function readReportRows(page: Page): Promise<ReportRowSnapshot[]> {
           null;
       }
 
+      const text = cells.join(' | ');
       const inProgress = /em curso|in progress|processing|a processar|generating/i.test(text);
       const hasDownload =
         /faça o download|faca o download|\\bdownload\\b/i.test(text) && !inProgress;
-      if (!name || /^nome$/i.test(name)) continue;
+
+      const key = name + '\\0' + (createdAt || '') + '\\0' + (type || '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+
       rows.push({ name, type, interval, createdAt, hasDownload, inProgress });
     }
     return rows;

@@ -322,10 +322,7 @@ export function SyncPagamentosModal({
       uberReportMatchesType(r, reportTypeKey)
     );
     const match =
-      pickLatestUberReportForPeriod(downloadable, periodStart, periodEnd) ??
-      downloadable.find((r) => uberReportMatchesPeriod(r, periodStart, periodEnd)) ??
-      downloadable[0] ??
-      null;
+      pickLatestUberReportForPeriod(downloadable, periodStart, periodEnd) ?? null;
     if (match) {
       setUberSelectedRowKey(uberReportRowKey(match));
       setUberReadyMode('existing');
@@ -853,12 +850,7 @@ export function SyncPagamentosModal({
                         downloadable,
                         uberPeriodStart,
                         uberPeriodEnd
-                      ) ??
-                      downloadable.find((r) =>
-                        uberReportMatchesPeriod(r, uberPeriodStart, uberPeriodEnd)
-                      ) ??
-                      downloadable[0] ??
-                      null;
+                      ) ?? null;
                     setUberSelectedRowKey(match ? uberReportRowKey(match) : null);
                     if (match) setUberReadyMode('existing');
                   }}
