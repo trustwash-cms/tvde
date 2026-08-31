@@ -245,10 +245,16 @@ export function PortalConnectionPanel({
       return;
     }
     if (c.authChallenge === 'passkey' && c.challengeImageBase64) {
-      setPasskeyOpen(true);
       setBotOpen(false);
       setOtpOpen(false);
       setPasswordOpen(false);
+      if (portal !== 'uber') {
+        setPasskeyOpen(true);
+      } else if (!isPasswordChallenge(c)) {
+        // Uber: servidor tenta SMS — não mostrar QR passkey
+        setPasskeyOpen(false);
+        setOtpOpen(true);
+      }
       return;
     }
     if (isPasswordChallenge(c)) {
@@ -834,7 +840,7 @@ export function PortalConnectionPanel({
   async function handleClearMessages() {
     setBusy(true);
     setError('');
-    const res = await apiFetch(
+    const res = await apiFetch<PortalConnectionPublic>(
       API_PATHS.portalConnections.clearMessages(portal),
       { method: 'POST', body: JSON.stringify({}) },
       getStoredToken()
@@ -844,7 +850,11 @@ export function PortalConnectionPanel({
       setError(humanizePortalError(res.error) || 'Não foi possível limpar a mensagem');
       return;
     }
-    await load();
+    dismissAuthModal();
+    setPhase('idle');
+    syncInFlightRef.current = false;
+    if (res.data) setConnection(res.data);
+    else await load();
   }
 
   async function handleAutoSync(nextEnabled: boolean) {
@@ -947,7 +957,8 @@ export function PortalConnectionPanel({
           {(connection?.usernameMasked ||
             connection?.hasPassword ||
             connection?.hasSession ||
-            status !== 'disconnected') ? (
+            status !== 'disconnected') &&
+          portal !== 'uber' ? (
             <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -961,9 +972,7 @@ export function PortalConnectionPanel({
                 <span className="mt-0.5 block text-xs text-slate-500">
                   {portal === 'myprio'
                     ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, o MyPRIO pede OTP — volte a Ligar conta.'
-                    : portal === 'uber'
-                      ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, volte a Ligar conta (SMS ou desafio anti-bot) antes de Sincronizar.'
-                      : 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
+                    : 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
                 </span>
               </span>
             </label>

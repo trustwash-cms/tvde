@@ -783,13 +783,23 @@ export async function withPlaywrightPage<T>(
         'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
     });
     const page = await context.newPage();
-    await page.addInitScript(() => {
-      try {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-      } catch {
-        // ignore
-      }
-    });
+    await page.addInitScript(
+      `(() => {
+        try {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        } catch (_) {}
+        try {
+          const fail = () => Promise.reject(new DOMException('NotAllowedError', 'NotAllowedError'));
+          if (window.PublicKeyCredential) {
+            window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => false;
+          }
+          if (navigator.credentials) {
+            navigator.credentials.get = fail;
+            navigator.credentials.create = fail;
+          }
+        } catch (_) {}
+      })()`
+    );
 
     const work = fn(browser, context, page);
     const result =

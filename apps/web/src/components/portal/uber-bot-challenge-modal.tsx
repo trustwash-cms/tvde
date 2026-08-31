@@ -11,7 +11,7 @@ type LiveFrame = {
   mimeType: string;
   viewportWidth: number;
   viewportHeight: number;
-  authChallenge: 'passkey' | 'otp' | 'bot' | null;
+  authChallenge: 'passkey' | 'otp' | 'bot' | 'password' | null;
   /** false = iframe detectado mas «Iniciar desafio» ainda não pintou (identidade por baixo) */
   challengeVisible?: boolean | null;
   capturedAt: string;
@@ -116,15 +116,13 @@ export function UberBotChallengeModal({
             typeof res.data.challengeVisible === 'boolean' ? res.data.challengeVisible : null
           );
           setError('');
-          if (res.data.authChallenge === 'otp') {
-            onChallengeCleared();
-          } else if (res.data.authChallenge != null && res.data.authChallenge !== 'bot') {
-            // Passkey / outro — sair do modal bot
+          if (res.data.authChallenge === 'otp' || res.data.authChallenge === 'password') {
             onChallengeCleared();
           } else if (res.data.authChallenge == null && res.data.challengeVisible === false) {
-            // Backend limpou bot (ainda na identidade) — fechar «Desafio Uber»
+            // Backend limpou bot (identidade / OTP) — fechar «Desafio Uber»
             onChallengeCleared();
           }
+          // passkey: manter modal; o servidor tenta SMS automaticamente
         } else {
           const msg = res.error || 'Sem imagem do ecrã live';
           failStreak.current += 1;
@@ -298,8 +296,7 @@ export function UberBotChallengeModal({
         </div>
         {error && !fatal ? <p className="text-sm text-amber-700">{error}</p> : null}
         <p className="text-xs text-slate-500">
-          Timeout ~10 min. Fechar ou cancelar encerra o browser no servidor com segurança. Sem VNC —
-          o stream é do Chromium Playwright no servidor (headed + display virtual se necessário).
+          Timeout ~10 min. Fechar ou cancelar encerra o browser no servidor com segurança.
         </p>
         <div className="flex justify-end gap-2">
           {fatal ? (

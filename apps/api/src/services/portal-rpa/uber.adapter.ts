@@ -860,6 +860,40 @@ async function isAuthMethodChooser(page: Page): Promise<boolean> {
     .catch(() => false);
 }
 
+/** Fecha o modal Uber «Não foi possível verificar a sua passkey» → Voltar. */
+export async function dismissPasskeyErrorDialog(page: Page): Promise<boolean> {
+  const voltar = page
+    .getByRole('button', { name: /^voltar$/i })
+    .or(page.getByRole('link', { name: /^voltar$/i }))
+    .or(page.getByText(/^voltar$/i))
+    .first();
+  if (await voltar.isVisible().catch(() => false)) {
+    console.log('[uber-login] passkey erro → Voltar');
+    await voltar.click({ timeout: 8000, force: true }).catch(() => undefined);
+    await page.waitForTimeout(900);
+    return true;
+  }
+  const back = page.getByRole('button', { name: /^back$/i }).first();
+  if (await back.isVisible().catch(() => false)) {
+    await back.click({ timeout: 8000, force: true }).catch(() => undefined);
+    await page.waitForTimeout(900);
+    return true;
+  }
+  return false;
+}
+
+/** Após bot/passkey: insistir SMS ou password (nunca ficar no QR passkey). */
+export async function nudgeUberPastPasskey(page: Page, password?: string): Promise<void> {
+  await dismissPasskeyErrorDialog(page);
+  await dismissSecurityKeyDialog(page);
+  if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
+    await preferSmsOverPasskey(page);
+  }
+  if (password && (await isPostOtpPasswordChooser(page))) {
+    await preferPasswordLogin(page, password);
+  }
+}
+
 /** Cancela o diálogo nativo «Use your security key» / WebAuthn. */
 async function dismissSecurityKeyDialog(page: Page): Promise<void> {
   for (let i = 0; i < 4; i += 1) {
@@ -906,6 +940,7 @@ async function blockWebAuthnForSmsPath(page: Page): Promise<void> {
 }
 
 async function preferSmsOverPasskey(page: Page): Promise<boolean> {
+  await dismissPasskeyErrorDialog(page);
   await dismissSecurityKeyDialog(page);
 
   // Nunca clicar #passkey-login-btn («Continuar com uma chave de acesso»).
@@ -2601,15 +2636,13 @@ export async function inspectUberLiveAuth(
     if (await isPasswordScreen(page)) return 'password';
   }
 
-  // No chooser inicial, insistir em SMS
-  if (await isAuthMethodChooser(page)) {
-    await preferSmsOverPasskey(page);
+  // No chooser inicial, insistir em SMS (não expor passkey à UI)
+  if (await isAuthMethodChooser(page) || (await isPasskeyScreen(page))) {
+    await nudgeUberPastPasskey(page, password);
     if (await isOtpScreen(page)) return 'otp';
-    return 'passkey';
-  }
-  if (await isPasskeyScreen(page)) {
-    if (password) await preferPasswordLogin(page, password);
-    return 'passkey';
+    if (await isPasswordScreen(page)) return 'password';
+    if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
+    return 'unknown';
   }
   // Sinal iframe sem handoff = ainda a montar / identidade
   if (await isBotChallengeSignalRaw(page)) return 'identity';

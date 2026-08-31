@@ -71,6 +71,7 @@ import {
   isUberPasswordScreen,
   listUberReportsFromSession,
   nudgeBotChallengePaint,
+  nudgeUberPastPasskey,
   preferPasswordLogin,
   canHandoffBotChallenge,
   hasActiveArkoseOverlay,
@@ -948,25 +949,41 @@ export async function clearPortalMessages(
   });
   if (!connection) return getPortalConnectionDetail(db, tenantId, portal);
 
-  let clearActiveJob = !connection.activeJobId;
   if (connection.activeJobId) {
     const job = await db.portalSyncJob.findUnique({
       where: { id: connection.activeJobId },
     });
-    const done =
-      !job || job.status === 'failed' || job.status === 'completed';
-    clearActiveJob = done;
-    // Não limpar se ainda há job a correr / OTP
-    if (!done) {
-      throw new Error('Há uma operação em curso — aguarde ou cancele antes de limpar');
+    if (
+      job &&
+      (job.status === 'awaiting_otp' ||
+        job.status === 'running' ||
+        job.status === 'pending')
+    ) {
+      await disposeLiveOtpSession(job.id);
+      await db.portalSyncJob.update({
+        where: { id: job.id },
+        data: {
+          status: 'failed',
+          completedAt: new Date(),
+          message: 'Cancelado — mensagem limpa pelo utilizador',
+        },
+      });
     }
   }
+
+  const nextStatus =
+    connection.status === 'awaiting_otp' || connection.status === 'error'
+      ? connection.sessionStateEncrypted
+        ? 'connected'
+        : 'expired'
+      : connection.status;
 
   await db.portalConnection.update({
     where: { id: connection.id },
     data: {
       lastError: null,
-      ...(clearActiveJob ? { activeJobId: null } : {}),
+      activeJobId: null,
+      status: nextStatus,
     },
   });
 
@@ -1251,12 +1268,29 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             data: { status: 'awaiting_otp', lastError: null },
           });
         }
-        const isBot = result.phase.kind === 'bot';
+        let isBot = result.phase.kind === 'bot';
+        if (portal === 'uber' && !isBot) {
+          const live = getLiveOtpSession(jobId);
+          if (live) {
+            await nudgeUberPastPasskey(live.page, password).catch(() => undefined);
+            const state = await inspectUberLiveAuth(live.page, password).catch(() => 'unknown');
+            if (state === 'bot' || (await canHandoffBotChallenge(live.page).catch(() => false))) {
+              isBot = true;
+            }
+          }
+        }
         const hint =
           result.phase.hint ??
           (isBot
             ? 'Resolva o desafio anti-bot Uber na janela Desafio Uber.'
-            : 'Digitalize o QR passkey com o telemóvel. Depois pode ser pedido OTP SMS.');
+            : portal === 'uber'
+              ? 'Use «Enviar código por SMS» (não chave de acesso). O servidor tenta automaticamente.'
+              : 'Digitalize o QR passkey com o telemóvel. Depois pode ser pedido OTP SMS.');
+        const uberAuthChallenge: 'bot' | 'otp' | 'passkey' = isBot
+          ? 'bot'
+          : portal === 'uber'
+            ? 'otp'
+            : 'passkey';
         await db.portalSyncJob.update({
           where: { id: jobId },
           data: {
@@ -1264,8 +1298,9 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             otpHint: hint,
             message: hint,
             resultJson: {
-              authChallenge: isBot ? 'bot' : 'passkey',
-              challengeImageBase64: result.phase.challengeImageBase64,
+              authChallenge: uberAuthChallenge,
+              challengeImageBase64:
+                uberAuthChallenge === 'passkey' ? result.phase.challengeImageBase64 : null,
             },
           },
         });
@@ -2299,18 +2334,10 @@ async function watchLiveUberAuthChallenge(
         return;
       }
 
-      if (state === 'passkey' && sawBot) {
-        // Bot cleared → passkey/chooser — keep watching (SMS preference inside inspect)
-        await db.portalSyncJob.update({
-          where: { id: jobId },
-          data: {
-            status: 'awaiting_otp',
-            otpHint:
-              'Desafio OK. Se aparecer QR passkey, digitalize; o servidor tenta SMS automaticamente.',
-            message: 'Após desafio — passkey/SMS',
-            resultJson: { authChallenge: 'passkey' },
-          },
-        });
+      if (state === 'passkey') {
+        await withLivePageLock(jobId, () => nudgeUberPastPasskey(live.page, password));
+        await live.page.waitForTimeout(1200);
+        continue;
       }
 
       if (state === 'password' && password) {
@@ -2503,6 +2530,9 @@ export async function getPortalLiveFrame(
         } else if (liveState === 'connected') {
           authChallenge = null;
           challengeVisible = false;
+        } else if (liveState === 'passkey') {
+          await nudgeUberPastPasskey(live.page).catch(() => undefined);
+          // Não mudar para passkey — evita fechar o modal bot à toa
         }
       } catch (liveStateErr) {
         console.error(
