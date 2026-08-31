@@ -17,6 +17,7 @@ interface BoltOrderRow {
   orderStatus: string | null;
   vehicleModel: string | null;
   ridePrice: string | null;
+  payoutAmount?: string | null;
   orderCreatedTimestamp: string | null;
   stopsCount: number;
   boltCompanyId: number | null;
@@ -211,9 +212,9 @@ export default function BoltOrdersPage() {
     <div className="space-y-6">
       {confirmDialog}
       <p className="text-sm text-slate-500">
-        Corridas <strong>finished</strong> com valor. Coluna «Preço» ={' '}
-        <code className="text-xs">ride_price</code> da Fleet API (valor da corrida para a
-        frota/motorista — não o total bruto ao passageiro com comissão Bolt).
+        Corridas com valor a pagar. Coluna «Preço» ={' '}
+        <strong>líquido</strong> Fleet (<code className="text-xs">net_earnings + tip + portagem</code>
+        ) — o que o motorista recebe, não o bruto da corrida.
       </p>
 
       <form onSubmit={onFilter} className="card flex flex-wrap items-end gap-3">
@@ -265,7 +266,7 @@ export default function BoltOrdersPage() {
           )}
         </p>
         <p className="text-sm font-semibold text-emerald-800">
-          Montante (ride_price):{' '}
+          Montante líquido:{' '}
           {Number(filteredTotal).toLocaleString('pt-PT', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
@@ -355,7 +356,12 @@ export default function BoltOrdersPage() {
                   </span>
                 </td>
                 <td className="px-6 py-3">{row.vehicleModel ?? '—'}</td>
-                <td className="px-6 py-3">{row.ridePrice ? `${Number(row.ridePrice).toFixed(2)}€` : '—'}</td>
+                <td className="px-6 py-3">
+                  {(() => {
+                    const v = row.payoutAmount ?? row.ridePrice;
+                    return v ? `${Number(v).toFixed(2)}€` : '—';
+                  })()}
+                </td>
                 <td className="px-6 py-3">
                   <span
                     className={`rounded-full px-2 py-0.5 text-xs font-medium ${

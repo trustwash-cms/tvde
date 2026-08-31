@@ -10,17 +10,61 @@ import { formatWeekDate, getMonthUtcRange, getWeekRange, parseWeekQuery } from '
 import { textOr } from './search.service';
 import { ensureBoltClient, getBoltConnection } from './bolt-connection.service';
 
-/** Corridas concluídas com valor — usado em listagens e dashboard. */
+/** Corridas com valor a pagar ao motorista (líquido Fleet). */
 export function boltBillableOrderWhere(
   workspaceId: string,
   extra?: Prisma.BoltOrderWhereInput
 ): Prisma.BoltOrderWhereInput {
+  const billable: Prisma.BoltOrderWhereInput = {
+    OR: [
+      {
+        orderStatus: 'finished',
+        OR: [{ payoutAmount: { gt: 0 } }, { ridePrice: { not: null, gt: 0 } }],
+      },
+      {
+        orderStatus: 'client_cancelled',
+        payoutAmount: { gt: 0 },
+      },
+    ],
+  };
   return {
     workspaceId,
-    orderStatus: 'finished',
-    ridePrice: { not: null, gt: 0 },
-    ...extra,
+    AND: extra ? [billable, extra] : [billable],
   };
+}
+
+/** Valor a pagar: net_earnings + tip + toll (fallback ride_price). */
+export function boltOrderPayoutDecimal(order: {
+  payoutAmount?: Prisma.Decimal | null;
+  netEarnings?: Prisma.Decimal | null;
+  tip?: Prisma.Decimal | null;
+  tollFee?: Prisma.Decimal | null;
+  ridePrice?: Prisma.Decimal | null;
+}): number {
+  if (order.payoutAmount != null) return Number(order.payoutAmount.toString());
+  const net = order.netEarnings != null ? Number(order.netEarnings.toString()) : null;
+  if (net != null) {
+    const tip = order.tip != null ? Number(order.tip.toString()) : 0;
+    const toll = order.tollFee != null ? Number(order.tollFee.toString()) : 0;
+    return net + tip + toll;
+  }
+  return order.ridePrice != null ? Number(order.ridePrice.toString()) : 0;
+}
+
+function computePayoutAmount(input: {
+  netEarnings: Prisma.Decimal | null;
+  tip: Prisma.Decimal | null;
+  tollFee: Prisma.Decimal | null;
+  ridePrice: Prisma.Decimal | null;
+}): Prisma.Decimal | null {
+  if (input.netEarnings != null) {
+    const tip = input.tip ? Number(input.tip.toString()) : 0;
+    const toll = input.tollFee ? Number(input.tollFee.toString()) : 0;
+    return new Prisma.Decimal(
+      (Math.round((Number(input.netEarnings.toString()) + tip + toll) * 100) / 100).toFixed(2)
+    );
+  }
+  return input.ridePrice;
 }
 
 function toDecimal(value: unknown): Prisma.Decimal | null {
@@ -76,6 +120,18 @@ export async function syncBoltOrders(workspaceId: string): Promise<BoltSyncCount
   for (const order of orders) {
     if (!order.order_reference) continue;
     const ridePrice = order.order_price?.ride_price ?? order.ride_price;
+    const bookingFee = toDecimal(order.order_price?.booking_fee);
+    const tollFee = toDecimal(order.order_price?.toll_fee);
+    const tip = toDecimal(order.order_price?.tip);
+    const commission = toDecimal(order.order_price?.commission);
+    const netEarnings = toDecimal(order.order_price?.net_earnings);
+    const ridePriceDec = toDecimal(ridePrice);
+    const payoutAmount = computePayoutAmount({
+      netEarnings,
+      tip,
+      tollFee,
+      ridePrice: ridePriceDec,
+    });
     const data = {
       boltCompanyId: companyId,
       driverName: order.driver_name ?? null,
@@ -85,9 +141,13 @@ export async function syncBoltOrders(workspaceId: string): Promise<BoltSyncCount
       vehicleModel: order.vehicle_model ?? null,
       vehicleLicensePlate: order.vehicle_license_plate ?? null,
       orderCreatedTimestamp: tsToDate(order.order_created_timestamp),
-      ridePrice: toDecimal(ridePrice),
-      bookingFee: toDecimal(order.order_price?.booking_fee),
-      tollFee: toDecimal(order.order_price?.toll_fee),
+      ridePrice: ridePriceDec,
+      bookingFee,
+      tollFee,
+      tip,
+      commission,
+      netEarnings,
+      payoutAmount,
       rawJson: order as unknown as Prisma.InputJsonValue,
       syncedAt: new Date(),
     };
@@ -399,7 +459,7 @@ export async function listBoltOrders(
     }),
     prisma.boltOrder.aggregate({
       where,
-      _sum: { ridePrice: true },
+      _sum: { payoutAmount: true, ridePrice: true },
     }),
   ]);
 
@@ -411,6 +471,8 @@ export async function listBoltOrders(
       orderStatus: o.orderStatus,
       vehicleModel: o.vehicleModel,
       ridePrice: o.ridePrice?.toString() ?? null,
+      payoutAmount: o.payoutAmount?.toString() ?? null,
+      netEarnings: o.netEarnings?.toString() ?? null,
       orderCreatedTimestamp: o.orderCreatedTimestamp,
       boltCompanyId: o.boltCompanyId,
       isPaid: o.isPaid,
@@ -418,8 +480,12 @@ export async function listBoltOrders(
       stopsCount: o._count.stops,
     })),
     total,
-    /** Soma ride_price de todos os registos do filtro (não só a página). */
-    filteredTotal: (sumAgg._sum.ridePrice ?? 0).toString(),
+    /** Soma do líquido a pagar (payout_amount; fallback ride_price se legado). */
+    filteredTotal: (
+      sumAgg._sum.payoutAmount ??
+      sumAgg._sum.ridePrice ??
+      0
+    ).toString(),
     page,
     limit,
   };
@@ -463,21 +529,21 @@ export async function getBoltDashboardStats(
         : prisma.boltVehicle.count({ where: { workspaceId } }),
       prisma.boltOrder.aggregate({
         where: billableWhere,
-        _sum: { ridePrice: true },
+        _sum: { payoutAmount: true, ridePrice: true },
       }),
       prisma.boltOrder.aggregate({
         where: {
           ...billableWhere,
           orderCreatedTimestamp: { gte: start, lt: endExclusive },
         },
-        _sum: { ridePrice: true },
+        _sum: { payoutAmount: true, ridePrice: true },
       }),
       prisma.boltOrder.aggregate({
         where: {
           ...billableWhere,
           orderCreatedTimestamp: { gte: weekRange.start, lt: weekRange.endExclusive },
         },
-        _sum: { ridePrice: true },
+        _sum: { payoutAmount: true, ridePrice: true },
       }),
       prisma.boltOrder.findMany({
         where: billableWhere,
@@ -490,6 +556,7 @@ export async function getBoltDashboardStats(
           orderStatus: true,
           vehicleModel: true,
           ridePrice: true,
+          payoutAmount: true,
           orderCreatedTimestamp: true,
           isPaid: true,
           _count: { select: { stops: true } },
@@ -497,21 +564,24 @@ export async function getBoltDashboardStats(
       }),
     ]);
 
+  const pickSum = (agg: { _sum: { payoutAmount: Prisma.Decimal | null; ridePrice: Prisma.Decimal | null } }) =>
+    (agg._sum.payoutAmount ?? agg._sum.ridePrice)?.toString() ?? '0';
+
   return {
     ordersCount,
     driversCount,
     vehiclesCount,
-    totalRevenue: revenueAgg._sum.ridePrice?.toString() ?? '0',
-    monthTotal: monthAgg._sum.ridePrice?.toString() ?? '0',
+    totalRevenue: pickSum(revenueAgg),
+    monthTotal: pickSum(monthAgg),
     selectedMonth: key,
     weekNumber: weekRange.week,
     weekYear: weekRange.year,
-    weekTotal: weekAgg._sum.ridePrice?.toString() ?? '0',
+    weekTotal: pickSum(weekAgg),
     weekStart: formatWeekDate(weekRange.start),
     weekEnd: formatWeekDate(weekRange.end),
     recentOrders: recentOrders.map((o) => ({
       ...o,
-      ridePrice: o.ridePrice?.toString() ?? null,
+      ridePrice: (o.payoutAmount ?? o.ridePrice)?.toString() ?? null,
       stopsCount: o._count.stops,
     })),
   };

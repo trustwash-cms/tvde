@@ -26,7 +26,7 @@ Regra de negócio herdada de [`ficheiros de exemplo/PAYMENT_CALCULATOR.md`](./fi
 | Toggle pago / pendente | **OK** | Modal método (MBWAY, TB, CC, NUM) — estado do **relatório** |
 | Eliminar relatório | **OK** | Repõe `is_paid=false` nos IDs guardados |
 | Conta corrente | Pendente | Coluna pronta; impacto = 0 |
-| Bolt «pago a si» | **N/A** | Usa `BoltOrder.ride_price` (líquido frota; ver §2) |
+| Bolt «pago a si» | **OK** | Usa `payout_amount` (net_earnings+tip+portagem) |
 | Email / anexos / ZIP | Pendente | Botões desactivados na UI |
 | PRIO elec vs combustão por viatura | Pendente | Config futura (checkbox / tipo energia) — ver §6 |
 
@@ -43,14 +43,14 @@ Default de intervalo: **última semana completa** segunda→domingo (Europe/Lisb
 | Componente | Fonte | Regra de datas | Em aberto |
 |------------|-------|----------------|-----------|
 | Uber | `uber_payments.amount` por `uuidUber` | `reportDate` no intervalo | `is_paid=false` |
-| Bolt | `bolt_orders.ride_price` por `uuidBolt` | `order_created_timestamp` · `finished` · `ride_price > 0` | `is_paid=false` |
+| Bolt | `bolt_orders.payout_amount` (= net_earnings+tip+portagem) por `uuidBolt` | `order_created_timestamp` · finished / cancelamentos com líquido | `is_paid=false` |
 | Via Verde | `via_verde_movements` | **Sem** filtro de data (matrículas activas hoje) | `is_paid=false` |
 | Eletricidade | `electricity_charges` | `chargeDate` no intervalo · cartão/nome | `is_paid=false` |
 | Combustível | `fuel_transactions` | `chargeDate` no intervalo · cartão | `is_paid=false` |
 | Comissão | `user_vehicles` (`fixa` / `%` / `slot`) | Viaturas activas hoje | — |
 | Conta corrente | — | 0 por agora | — |
 
-**Bolt `ride_price`:** campo Fleet API `order_price.ride_price`. No TVDE trata-se como valor **da corrida para a frota/motorista** (equivalente ao antigo CSV `pago_a_si`), **não** o total bruto pago pelo passageiro. A comissão Bolt não é descontada de novo no cálculo. Se a API passar a expor um campo líquido distinto, trocar a fonte aqui.
+**Bolt `payout_amount`:** `order_price.net_earnings + tip + toll_fee` da Fleet API (ganho líquido do motorista na app Bolt). Não usar `ride_price` (bruto da corrida antes da comissão). Cancelamentos com `net_earnings` também entram.
 
 Ao **confirmar** um pagamento: os IDs incluídos no cálculo (VV, elec, fuel, Uber, Bolt) passam a `is_paid=true` e ficam guardados no `payment_reports`. Ao **apagar** o relatório: os mesmos IDs voltam a `is_paid=false` — sem isto o próximo cálculo voltaria a somar (ou a omitir) valores incorrectos.
 

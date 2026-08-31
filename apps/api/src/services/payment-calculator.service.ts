@@ -189,22 +189,41 @@ export async function calculateDriverPayment(
         tenantId,
         isPaid: false,
         driverUuid: { equals: vehicle.uuidBolt!, mode: 'insensitive' },
-        orderStatus: 'finished',
-        ridePrice: { not: null, gt: 0 },
         orderCreatedTimestamp: {
           gte: periodStart,
           lte: endOfDayUtc(periodEnd),
         },
+        OR: [
+          {
+            orderStatus: 'finished',
+            OR: [{ payoutAmount: { gt: 0 } }, { ridePrice: { not: null, gt: 0 } }],
+          },
+          { orderStatus: 'client_cancelled', payoutAmount: { gt: 0 } },
+        ],
       },
-      select: { id: true, ridePrice: true, orderReference: true },
+      select: {
+        id: true,
+        payoutAmount: true,
+        netEarnings: true,
+        tip: true,
+        tollFee: true,
+        ridePrice: true,
+        orderReference: true,
+      },
     });
-    const sum = rows.reduce((acc, r) => acc + dec(r.ridePrice), 0);
+    const sum = rows.reduce((acc, r) => {
+      if (r.payoutAmount != null) return acc + dec(r.payoutAmount);
+      if (r.netEarnings != null) {
+        return acc + dec(r.netEarnings) + dec(r.tip) + dec(r.tollFee);
+      }
+      return acc + dec(r.ridePrice);
+    }, 0);
     boltTotal += sum;
     ids.boltOrderIds.push(...rows.map((r) => r.id));
     detalhes.bolt.push({
       label: `Bolt · ${vehicle.matricula} · ${vehicle.uuidBolt}`,
       amount: money(sum),
-      meta: `${rows.length} corridas (ride_price · em aberto)`,
+      meta: `${rows.length} corridas (líquido net+tip+portagem · em aberto)`,
     });
   }
   if (boltByUuid.size === 0 && vehicles.some((v) => v.uuidBolt?.trim())) {

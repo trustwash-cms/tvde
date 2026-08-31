@@ -33,6 +33,12 @@ export interface BoltOrderRow {
     ride_price?: number;
     booking_fee?: number;
     toll_fee?: number;
+    tip?: number;
+    commission?: number;
+    net_earnings?: number;
+    cancellation_fee?: number;
+    cash_discount?: number;
+    in_app_discount?: number;
   };
   ride_price?: number;
 }

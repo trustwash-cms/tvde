@@ -2745,6 +2745,17 @@ model BoltOrder {
   ridePrice              Decimal? @map("ride_price") @db.Decimal(12, 2)
   bookingFee             Decimal? @map("booking_fee") @db.Decimal(12, 2)
   tollFee                Decimal? @map("toll_fee") @db.Decimal(12, 2)
+  /** order_price.commission (Fleet) */
+  commission             Decimal? @map("commission") @db.Decimal(12, 2)
+  /** order_price.tip */
+  tip                    Decimal? @map("tip") @db.Decimal(12, 2)
+  /** order_price.net_earnings — após comissão Bolt */
+  netEarnings            Decimal? @map("net_earnings") @db.Decimal(12, 2)
+  /**
+   * Valor a pagar ao motorista: net_earnings + tip + toll_fee.
+   * Preferir este campo no calculador de pagamentos (não ride_price).
+   */
+  payoutAmount           Decimal? @map("payout_amount") @db.Decimal(12, 2)
   /** Incluído num payment_report (não voltar a somar até apagar o relatório). */
   isPaid                 Boolean  @default(false) @map("is_paid")
   paymentDate            DateTime? @map("payment_date")
