@@ -28,6 +28,7 @@ interface OrdersResponse {
   total: number;
   page: number;
   limit: number;
+  filteredTotal?: string;
 }
 
 const PAGE_SIZE = 50;
@@ -38,6 +39,7 @@ export default function BoltOrdersPage() {
   const [role, setRole] = useState<Role | null>(null);
   const [rows, setRows] = useState<BoltOrderRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [filteredTotal, setFilteredTotal] = useState('0');
   const [page, setPage] = useState(0);
   const [q, setQ] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
@@ -73,6 +75,7 @@ export default function BoltOrdersPage() {
         setRows(res.data.items);
         setTotal(res.data.total);
         setPage(res.data.page);
+        setFilteredTotal(res.data.filteredTotal ?? '0');
       } else if (res.error) {
         setError(res.error);
       }
@@ -248,6 +251,28 @@ export default function BoltOrdersPage() {
           Limpar
         </button>
       </form>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+        <p className="text-sm text-slate-600">
+          {appliedQ || appliedStartDate || appliedEndDate ? (
+            <>
+              Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
+            </>
+          ) : (
+            <>
+              Todos os registos · <span className="font-medium text-slate-800">{total}</span>
+            </>
+          )}
+        </p>
+        <p className="text-sm font-semibold text-emerald-800">
+          Montante (ride_price):{' '}
+          {Number(filteredTotal).toLocaleString('pt-PT', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}{' '}
+          €
+        </p>
+      </div>
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       {success ? <p className="text-sm text-emerald-700">{success}</p> : null}

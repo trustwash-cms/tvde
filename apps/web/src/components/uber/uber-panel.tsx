@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Upload } from 'lucide-react';
 import {
   currentMonthKey,
@@ -53,6 +53,13 @@ export function UberPanel() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
+  const [filteredTotal, setFilteredTotal] = useState('0');
+  const [q, setQ] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [appliedStartDate, setAppliedStartDate] = useState('');
+  const [appliedEndDate, setAppliedEndDate] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(currentMonthKey);
   const [selectedWeek, setSelectedWeek] = useState(getCurrentWeek);
   const [error, setError] = useState('');
@@ -72,22 +79,30 @@ export function UberPanel() {
       dashQs.set('weekYear', String(selectedWeek.year));
       dashQs.set('week', String(selectedWeek.week));
     }
+    const listQs = new URLSearchParams({ page: String(page) });
+    if (appliedQ) listQs.set('q', appliedQ);
+    if (appliedStartDate) listQs.set('startDate', appliedStartDate);
+    if (appliedEndDate) listQs.set('endDate', appliedEndDate);
+
     const [dash, list] = await Promise.all([
       apiFetch<Dashboard>(`${API_PATHS.uber.dashboard}?${dashQs.toString()}`, {}, token),
-      apiFetch<{ items: Item[]; total: number; totalPages: number; page: number }>(
-        `${API_PATHS.uber.payments}?page=${page}`,
-        {},
-        token
-      ),
+      apiFetch<{
+        items: Item[];
+        total: number;
+        totalPages: number;
+        page: number;
+        filteredTotal?: string;
+      }>(`${API_PATHS.uber.payments}?${listQs.toString()}`, {}, token),
     ]);
     if (dash.data) setDashboard(dash.data);
     if (list.data) {
       setItems(list.data.items);
       setTotal(list.data.total ?? list.data.items.length);
       setTotalPages(list.data.totalPages ?? 1);
+      setFilteredTotal(list.data.filteredTotal ?? '0');
     }
     if (!dash.success) setError(dash.error ?? 'Erro');
-  }, [selectedMonth, page, driverMode, selectedWeek]);
+  }, [selectedMonth, page, driverMode, selectedWeek, appliedQ, appliedStartDate, appliedEndDate]);
 
   useEffect(() => {
     apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
@@ -101,7 +116,7 @@ export function UberPanel() {
 
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [page]);
+  }, [page, appliedQ, appliedStartDate, appliedEndDate]);
 
   const selectableIds = useMemo(
     () => (canManage ? items.filter((item) => !item.isPaid).map((item) => item.id) : []),
@@ -110,6 +125,7 @@ export function UberPanel() {
   const selectedCount = selectedIds.size;
   const pageAllSelected =
     selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+  const hasActiveFilter = Boolean(appliedQ || appliedStartDate || appliedEndDate);
 
   function toggleRowSelection(id: string) {
     setSelectedIds((prev) => {
@@ -131,6 +147,24 @@ export function UberPanel() {
       selectableIds.forEach((id) => next.add(id));
       return next;
     });
+  }
+
+  function onFilter(e: FormEvent) {
+    e.preventDefault();
+    setAppliedQ(q.trim());
+    setAppliedStartDate(startDate);
+    setAppliedEndDate(endDate);
+    setPage(1);
+  }
+
+  function onClear() {
+    setQ('');
+    setAppliedQ('');
+    setStartDate('');
+    setEndDate('');
+    setAppliedStartDate('');
+    setAppliedEndDate('');
+    setPage(1);
   }
 
   async function handleImport(file: File) {
@@ -262,6 +296,64 @@ export function UberPanel() {
           }}
         />
       ) : null}
+
+      <form onSubmit={onFilter} className="card flex flex-wrap items-end gap-3">
+        <div className="min-w-[220px] flex-1">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Buscar</label>
+          <input
+            className="input w-full"
+            placeholder="UUID, motorista ou descrição"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+        <div className="min-w-[160px]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Data início</label>
+          <input
+            type="date"
+            className="input w-full"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+          />
+        </div>
+        <div className="min-w-[160px]">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Data fim</label>
+          <input
+            type="date"
+            className="input w-full"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+          />
+        </div>
+        <button type="submit" className="btn-primary">
+          Filtrar
+        </button>
+        <button type="button" className="btn-secondary" onClick={onClear}>
+          Limpar
+        </button>
+      </form>
+
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+        <p className="text-sm text-slate-600">
+          {hasActiveFilter ? (
+            <>
+              Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
+            </>
+          ) : (
+            <>
+              Todos os registos · <span className="font-medium text-slate-800">{total}</span>
+            </>
+          )}
+        </p>
+        <p className="text-sm font-semibold text-emerald-800">
+          Montante: {formatMoney(filteredTotal)}
+        </p>
+      </div>
+      <p className="text-xs text-slate-500">
+        Datas usam o corte Uber (segunda 04:00 Lisboa) — alinhado a «Rendimentos líquidos» e ao
+        calculador de pagamentos.
+      </p>
+
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       {success ? <p className="text-sm text-emerald-700">{success}</p> : null}
 

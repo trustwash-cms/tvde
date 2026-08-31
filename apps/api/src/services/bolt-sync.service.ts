@@ -388,7 +388,7 @@ export async function listBoltOrders(
     ...(orderCreatedTimestamp ? { orderCreatedTimestamp } : {}),
   });
 
-  const [total, orders] = await Promise.all([
+  const [total, orders, sumAgg] = await Promise.all([
     prisma.boltOrder.count({ where }),
     prisma.boltOrder.findMany({
       where,
@@ -396,6 +396,10 @@ export async function listBoltOrders(
       skip: page * limit,
       take: limit,
       include: { _count: { select: { stops: true } } },
+    }),
+    prisma.boltOrder.aggregate({
+      where,
+      _sum: { ridePrice: true },
     }),
   ]);
 
@@ -414,6 +418,8 @@ export async function listBoltOrders(
       stopsCount: o._count.stops,
     })),
     total,
+    /** Soma ride_price de todos os registos do filtro (não só a página). */
+    filteredTotal: (sumAgg._sum.ridePrice ?? 0).toString(),
     page,
     limit,
   };

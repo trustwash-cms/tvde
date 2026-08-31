@@ -49,7 +49,12 @@ export async function uberRoutes(fastify: FastifyInstance) {
     try {
       const tenantId = requireTenant(request);
       const query = z
-        .object({ q: z.string().optional(), page: z.coerce.number().optional() })
+        .object({
+          q: z.string().optional(),
+          page: z.coerce.number().optional(),
+          startDate: z.string().optional(),
+          endDate: z.string().optional(),
+        })
         .parse(request.query);
       const data = await listUberPayments(
         fastify.db,

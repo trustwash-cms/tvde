@@ -5,6 +5,7 @@ import {
   getWeekRange,
   parseUberCsv,
   parseWeekQuery,
+  uberPaymentOrderDateRange,
   type Role,
 } from '@tvde/shared';
 import { getDriverFleetScope } from './user-vehicle-matching.service';
@@ -40,15 +41,32 @@ async function buildUberWhere(
   tenantId: string,
   actorId: string,
   actorRole: Role,
-  filters: { q?: string } = {}
+  filters: { q?: string; startDate?: string; endDate?: string } = {}
 ): Promise<Prisma.UberPaymentWhereInput> {
   const where: Prisma.UberPaymentWhereInput = { tenantId };
   if (filters.q?.trim()) {
+    const q = filters.q.trim();
     where.OR = [
-      { driverUuid: { contains: filters.q.trim(), mode: 'insensitive' } },
-      { firstName: { contains: filters.q.trim(), mode: 'insensitive' } },
-      { lastName: { contains: filters.q.trim(), mode: 'insensitive' } },
+      { driverUuid: { contains: q, mode: 'insensitive' } },
+      { firstName: { contains: q, mode: 'insensitive' } },
+      { lastName: { contains: q, mode: 'insensitive' } },
+      { description: { contains: q, mode: 'insensitive' } },
+      { transactionUuid: { contains: q, mode: 'insensitive' } },
     ];
+  }
+
+  const startYmd = filters.startDate?.trim();
+  const endYmd = filters.endDate?.trim();
+  if (startYmd || endYmd) {
+    // Mesma janela do calculador: dia civil com corte Uber 04:00 (relógio de parede na BD)
+    const range = uberPaymentOrderDateRange(
+      startYmd && /^\d{4}-\d{2}-\d{2}$/.test(startYmd) ? startYmd : '1970-01-01',
+      endYmd && /^\d{4}-\d{2}-\d{2}$/.test(endYmd) ? endYmd : '2099-12-31'
+    );
+    where.reportDate = {
+      ...(startYmd ? { gte: range.gte } : {}),
+      ...(endYmd ? { lt: range.lt } : {}),
+    };
   }
 
   const scope = await getDriverFleetScope(db, tenantId, actorId, actorRole);
@@ -112,19 +130,23 @@ export async function listUberPayments(
   tenantId: string,
   actorId: string,
   actorRole: Role,
-  filters: { q?: string; page?: number }
+  filters: { q?: string; page?: number; startDate?: string; endDate?: string }
 ) {
   const page = Math.max(1, filters.page ?? 1);
   const pageSize = 50;
   const where = await buildUberWhere(db, tenantId, actorId, actorRole, filters);
 
-  const [total, rows] = await Promise.all([
+  const [total, rows, sumAgg] = await Promise.all([
     db.uberPayment.count({ where }),
     db.uberPayment.findMany({
       where,
       orderBy: [{ reportDate: 'desc' }],
       skip: (page - 1) * pageSize,
       take: pageSize,
+    }),
+    db.uberPayment.aggregate({
+      where,
+      _sum: { amount: true },
     }),
   ]);
 
@@ -142,6 +164,8 @@ export async function listUberPayments(
       })
     ),
     total,
+    /** Soma de `amount` de todos os registos do filtro (não só a página). */
+    filteredTotal: decimalToString(sumAgg._sum.amount ?? 0),
     page,
     pageSize,
     totalPages: Math.max(1, Math.ceil(total / pageSize)),
