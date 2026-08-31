@@ -19,6 +19,7 @@ import {
   listUberPaymentReports,
   pickLatestUberReportForPeriod,
   uberReportDisplayType,
+  uberReportDisplayInterval,
   uberReportMatchesPeriod,
   uberReportMatchesType,
   uberReportRowKey,
@@ -805,9 +806,9 @@ export function SyncPagamentosModal({
                           </td>
                           <td
                             className="max-w-[10rem] truncate px-2 py-1.5 text-slate-600"
-                            title={r.interval ?? ''}
+                            title={uberReportDisplayInterval(r)}
                           >
-                            {r.interval ?? '—'}
+                            {uberReportDisplayInterval(r)}
                           </td>
                           <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
                             {r.createdAt ?? '—'}

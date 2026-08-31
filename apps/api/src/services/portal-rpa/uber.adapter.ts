@@ -2,6 +2,8 @@ import type { Page } from 'playwright';
 import {
   defaultUberReportRange,
   resolveUberReportType,
+  uberReportDisplayType,
+  uberReportDisplayInterval,
   uberReportTypeLabel,
   uberReportTypeOptionMatches,
   type UberReportListItem,
@@ -1295,13 +1297,19 @@ export async function listUberReportsFromSession(page: Page): Promise<UberReport
     await page.waitForTimeout(800);
   }
   const rows = await readReportRows(page);
-  return rows.map((r) => ({
-    name: r.name,
-    type: r.type,
-    interval: r.interval,
-    createdAt: r.createdAt || null,
-    hasDownload: r.hasDownload,
-  }));
+  return rows.map((r) => {
+    const item: UberReportListItem = {
+      name: r.name,
+      type: r.type,
+      interval: r.interval,
+      createdAt: r.createdAt || null,
+      hasDownload: r.hasDownload,
+    };
+    return {
+      ...item,
+      interval: uberReportDisplayInterval(item),
+    };
+  });
 }
 
 function formatLisbonDateParts(iso: string): {

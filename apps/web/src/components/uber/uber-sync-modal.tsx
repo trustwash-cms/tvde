@@ -11,6 +11,7 @@ import {
   pickLatestUberReportForPeriod,
   resolveUberReportType,
   uberReportDisplayType,
+  uberReportDisplayInterval,
   uberReportMatchesPeriod,
   uberReportMatchesType,
   uberReportRowKey,
@@ -283,9 +284,9 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
                         </td>
                         <td
                           className="max-w-[10rem] truncate px-2 py-1.5 text-slate-600"
-                          title={r.interval ?? ''}
+                          title={uberReportDisplayInterval(r)}
                         >
-                          {r.interval ?? '—'}
+                          {uberReportDisplayInterval(r)}
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5 text-slate-600">
                           {r.createdAt ?? '—'}
@@ -303,7 +304,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
           <h3 className="text-sm font-semibold text-slate-800">Gerar novo</h3>
           <p className="text-xs text-slate-500">
             Intervalo personalizado (Europe/Lisbon). Default: semana completa anterior (segunda
-            01:00 → domingo 23:30). A organização é obrigatória no portal Uber (activa o botão
+            01:00 → segunda seguinte 23:30, como no portal Uber). A organização é obrigatória no portal Uber (activa o botão
             Gerar).
           </p>
           <label className="block text-xs text-slate-600">

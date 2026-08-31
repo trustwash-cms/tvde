@@ -428,6 +428,7 @@ export {
   uberReportMatchesType,
   uberReportRowKey,
   uberReportDisplayType,
+  uberReportDisplayInterval,
   uberReportTypeOptionMatches,
   resolveUberReportType,
   UBER_REPORT_TYPE_CATALOG,

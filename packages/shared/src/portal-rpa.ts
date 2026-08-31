@@ -194,6 +194,42 @@ export function uberReportDisplayType(r: UberReportListItem): string {
   return '—';
 }
 
+const PT_MONTH_NAMES = [
+  '',
+  'janeiro',
+  'fevereiro',
+  'março',
+  'abril',
+  'maio',
+  'junho',
+  'julho',
+  'agosto',
+  'setembro',
+  'outubro',
+  'novembro',
+  'dezembro',
+] as const;
+
+function formatPortugueseDayMonth(ymd: string): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const month = PT_MONTH_NAMES[m];
+  if (!month || !d) return ymd;
+  return `${d} de ${month}`;
+}
+
+/** Intervalo legível — prioriza datas do prefixo do nome (convenção Uber YYYYMMDD-YYYYMMDD). */
+export function uberReportDisplayInterval(r: UberReportListItem): string {
+  const fromName = extractUberReportDatesFromName(r.name);
+  if (fromName) {
+    return `${formatPortugueseDayMonth(fromName.startYmd)} - ${formatPortugueseDayMonth(fromName.endYmd)}`;
+  }
+  const interval = (r.interval ?? '').replace(/\s+/g, ' ').trim();
+  if (interval && interval !== r.name && !/^\d{8}-\d{8}/.test(interval)) {
+    return interval.length > 36 ? `${interval.slice(0, 33)}…` : interval;
+  }
+  return '—';
+}
+
 export function uberReportTypeOptionMatches(
   reportTypeKey: UberReportTypeKey,
   value: string,
@@ -423,8 +459,8 @@ export function pickLatestUberReportForPeriod(
 }
 
 /**
- * Semana completa anterior em Europe/Lisbon:
- * segunda 01:00 → domingo 23:30 (alinhado a ficheiros YYYYMMDD-YYYYMMDD-payments_order-…).
+ * Semana completa anterior em Europe/Lisbon (convenção Uber):
+ * segunda 01:00 → segunda seguinte 23:30 (fim YYYYMMDD no nome, ex. …20260831).
  */
 export function defaultUberReportRange(now: Date = new Date()): {
   rangeStart: string;
@@ -508,10 +544,11 @@ export function defaultUberReportRange(now: Date = new Date()): {
   const thisMonday = addDays(today.year, today.month, today.day, -daysSinceMonday);
   const prevMonday = addDays(thisMonday.year, thisMonday.month, thisMonday.day, -7);
   const prevSunday = addDays(prevMonday.year, prevMonday.month, prevMonday.day, 6);
+  const endMonday = addDays(prevSunday.year, prevSunday.month, prevSunday.day, 1);
 
   return {
     rangeStart: lisbonLocalToUtcIso(prevMonday.year, prevMonday.month, prevMonday.day, 1, 0),
-    rangeEnd: lisbonLocalToUtcIso(prevSunday.year, prevSunday.month, prevSunday.day, 23, 30),
+    rangeEnd: lisbonLocalToUtcIso(endMonday.year, endMonday.month, endMonday.day, 23, 30),
   };
 }
 
