@@ -34,6 +34,9 @@ ssh -i "$KEY" -o StrictHostKeyChecking=no "$HOST" 'set -e
   if ! grep -q "^DISPLAY=" .env 2>/dev/null; then
     echo "DISPLAY=:1" >> .env
   fi
+  if ! grep -q "^PORTAL_RPA_VNC_URL=" .env 2>/dev/null; then
+    echo "PORTAL_RPA_VNC_URL=http://192.168.10.75:6901" >> .env
+  fi
   # Cookie X11 do VNC (Chromium headed no DISPLAY=:1 partilhado)
   docker cp tvde-rpa-vnc:/headless/.Xauthority ~/tvde/.xauthority-vnc 2>/dev/null || true
   chmod 600 ~/tvde/.xauthority-vnc 2>/dev/null || true

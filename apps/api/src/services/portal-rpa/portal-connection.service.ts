@@ -67,11 +67,16 @@ import { ingestPortalDownloadedFiles } from './ingest.service';
 import {
   inspectUberLiveAuth,
   isBotChallengeVisuallyReady,
+  isOtpScreen,
+  isPasskeyErrorDialog,
+  isPasskeyScreen,
+  isAuthMethodChooser,
   isStuckOnEmptyIdentity,
   isUberPasswordScreen,
   listUberReportsFromSession,
   nudgeBotChallengePaint,
   nudgeUberPastPasskey,
+  dismissPasskeyErrorDialog,
   preferPasswordLogin,
   canHandoffBotChallenge,
   hasActiveArkoseOverlay,
@@ -318,6 +323,8 @@ async function mapPublic(
     otpHint: null,
     authChallenge: null,
     challengeImageBase64: null,
+    uberLiveStream: false,
+    rpaVncUrl: null,
     rpaEnabled: env.portalRpaEnabled,
     browserReady: browser.ready,
     browserDetail: env.portalRpaMock ? 'mock' : browser.detail,
@@ -405,12 +412,22 @@ export async function getPortalConnectionDetail(
           : job?.status === 'awaiting_otp'
             ? /OTP OK|password|palavra-?passe/i.test(job.otpHint ?? '')
               ? 'password'
-              : /anti-bot|desafio|Arkose|Proteger a sua conta/i.test(job.otpHint ?? job.message ?? '')
+              : /anti-bot|desafio|Arkose|Proteger a sua conta|passkey|chave de acesso|ecrã live|pedir SMS/i.test(
+                  job.otpHint ?? job.message ?? ''
+                )
                 ? 'bot'
-                : /preencher email|A preencher/i.test(job.message ?? '')
-                  ? null
-                  : 'otp'
+                : /Desafio OK/i.test(job.otpHint ?? '')
+                  ? meta.authChallenge === 'otp'
+                    ? 'otp'
+                    : 'bot'
+                  : /preencher email|A preencher/i.test(job.message ?? '')
+                    ? null
+                    : 'otp'
             : null;
+
+    const uberLive =
+      portal === 'uber' &&
+      Boolean(row.activeJobId && getLiveOtpSession(row.activeJobId) && !getLiveOtpSession(row.activeJobId)?.page.isClosed());
 
     if (
       portal === 'uber' &&
@@ -420,11 +437,29 @@ export async function getPortalConnectionDetail(
     ) {
       const live = getLiveOtpSession(row.activeJobId);
       if (live && !live.page.isClosed()) {
-        const liveState = await inspectUberLiveAuth(live.page).catch(() => null);
-        if (liveState === 'bot') authChallenge = 'bot';
-        else if (liveState === 'otp') authChallenge = 'otp';
-        else if (liveState === 'password') authChallenge = 'password';
-        else if (liveState === 'passkey') authChallenge = 'passkey';
+        const passkeyBlocking =
+          (await isPasskeyErrorDialog(live.page).catch(() => false)) ||
+          ((await isPasskeyScreen(live.page).catch(() => false)) &&
+            !(await isOtpScreen(live.page).catch(() => false)));
+        const chooser = await isAuthMethodChooser(live.page).catch(() => false);
+        const otpReady = (await isOtpScreen(live.page).catch(() => false)) && !passkeyBlocking;
+
+        if (otpReady) {
+          authChallenge = 'otp';
+        } else if (passkeyBlocking || chooser) {
+          authChallenge = 'bot';
+        } else {
+          const liveState = await inspectUberLiveAuth(live.page).catch(() => null);
+          if (liveState === 'bot' || liveState === 'passkey' || liveState === 'unknown') {
+            authChallenge = 'bot';
+          } else if (liveState === 'otp' && otpReady) {
+            authChallenge = 'otp';
+          } else if (liveState === 'password') {
+            authChallenge = 'password';
+          } else if (liveState === 'identity') {
+            authChallenge = null;
+          }
+        }
       }
     }
 
@@ -436,6 +471,8 @@ export async function getPortalConnectionDetail(
       lastJobMessage: job?.message ?? null,
       authChallenge,
       challengeImageBase64,
+      uberLiveStream: uberLive,
+      rpaVncUrl: uberLive ? env.portalRpaVncUrl : null,
     };
   }
 
@@ -2320,6 +2357,30 @@ async function watchLiveUberAuthChallenge(
       }
 
       if (state === 'otp') {
+        const otpReady = await withLivePageLock(jobId, async () => {
+          if (await isPasskeyErrorDialog(live.page)) {
+            await nudgeUberPastPasskey(live.page, password);
+            return false;
+          }
+          if ((await isPasskeyScreen(live.page)) && !(await isOtpScreen(live.page))) {
+            await nudgeUberPastPasskey(live.page, password);
+            return false;
+          }
+          return isOtpScreen(live.page);
+        });
+        if (!otpReady) {
+          await db.portalSyncJob.update({
+            where: { id: jobId },
+            data: {
+              status: 'awaiting_otp',
+              otpHint:
+                'Desafio OK — a pedir SMS à Uber (ecrã live). Se aparecer passkey, o servidor clica «Enviar código por SMS».',
+              message: 'À espera de SMS Uber',
+              resultJson: { authChallenge: 'bot' },
+            },
+          });
+          continue;
+        }
         await db.portalConnection.update({
           where: { id: connectionId },
           data: { status: 'awaiting_otp', lastError: null },
@@ -2524,19 +2585,55 @@ export async function getPortalLiveFrame(
     let challengeVisible: boolean | null = null;
     if (portal === 'uber') {
       try {
-        const liveState = await inspectUberLiveAuth(live.page).catch(() => 'unknown' as const);
-        if (liveState === 'otp') {
+        const passkeyErr = await isPasskeyErrorDialog(live.page);
+        const otpReady = await isOtpScreen(live.page);
+        const passkeyBlocking =
+          !otpReady &&
+          (passkeyErr ||
+            ((await isPasskeyScreen(live.page)) && !(await isOtpScreen(live.page))));
+
+        if (otpReady) {
+          // Já no OTP: só fechar modal passkey se existir — nunca Resend/SMS de novo
+          if (passkeyErr) {
+            await dismissPasskeyErrorDialog(live.page).catch(() => undefined);
+          }
           authChallenge = 'otp';
           challengeVisible = false;
-        } else if (liveState === 'password') {
-          authChallenge = 'password';
-          challengeVisible = false;
-        } else if (liveState === 'connected') {
-          authChallenge = null;
-          challengeVisible = false;
-        } else if (liveState === 'passkey') {
+          // Persistir hint SMS (evita modal OTP com texto antigo do anti-bot)
+          if (
+            meta.authChallenge !== 'otp' ||
+            /anti-bot|desafio|Arkose|Proteger a sua conta|passkey|pedir SMS/i.test(
+              String(job.otpHint ?? '')
+            )
+          ) {
+            await db.portalSyncJob
+              .update({
+                where: { id: jobId },
+                data: {
+                  status: 'awaiting_otp',
+                  otpHint: 'Introduza o código SMS de 4 dígitos da Uber',
+                  message: 'À espera de OTP SMS',
+                  resultJson: { ...meta, authChallenge: 'otp', challengeImageBase64: null },
+                },
+              })
+              .catch(() => undefined);
+          }
+        } else if (passkeyBlocking || (await isAuthMethodChooser(live.page).catch(() => false))) {
           await nudgeUberPastPasskey(live.page).catch(() => undefined);
-          // Não mudar para passkey — evita fechar o modal bot à toa
+          authChallenge = 'bot';
+          challengeVisible = true;
+        } else {
+          const liveState = await inspectUberLiveAuth(live.page).catch(() => 'unknown' as const);
+          if (liveState === 'password') {
+            authChallenge = 'password';
+            challengeVisible = false;
+          } else if (liveState === 'connected') {
+            authChallenge = null;
+            challengeVisible = false;
+          } else if (liveState === 'passkey' || liveState === 'unknown') {
+            authChallenge = 'bot';
+            challengeVisible = true;
+          }
         }
       } catch (liveStateErr) {
         console.error(

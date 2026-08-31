@@ -22,6 +22,10 @@ type Props = {
   portal: PortalKind;
   jobId: string | null;
   hint?: string | null;
+  /** noVNC do servidor (ecrã completo :6901) */
+  vncUrl?: string | null;
+  /** Manter stream aberto quando o live-frame detecta OTP (Uber login completo) */
+  keepOpenDuringOtp?: boolean;
   onCloseCancel: () => void;
   /** Job avançou (OTP / ligado) — fechar sem cancelar */
   onChallengeCleared: () => void;
@@ -40,6 +44,8 @@ export function UberBotChallengeModal({
   portal,
   jobId,
   hint,
+  vncUrl,
+  keepOpenDuringOtp = false,
   onCloseCancel,
   onChallengeCleared,
 }: Props) {
@@ -116,8 +122,10 @@ export function UberBotChallengeModal({
             typeof res.data.challengeVisible === 'boolean' ? res.data.challengeVisible : null
           );
           setError('');
-          if (res.data.authChallenge === 'otp' || res.data.authChallenge === 'password') {
+          if (res.data.authChallenge === 'password') {
             onChallengeCleared();
+          } else if (res.data.authChallenge === 'otp') {
+            if (!keepOpenDuringOtp) onChallengeCleared();
           } else if (res.data.authChallenge == null && res.data.challengeVisible === false) {
             // Backend limpou bot (identidade / OTP) — fechar «Desafio Uber»
             onChallengeCleared();
@@ -157,7 +165,7 @@ export function UberBotChallengeModal({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [open, jobId, portal, onChallengeCleared, fatal, retryKey]);
+  }, [open, jobId, portal, onChallengeCleared, fatal, retryKey, keepOpenDuringOtp]);
 
   async function handleCancel() {
     if (!jobId || busyCancel) return;
@@ -239,7 +247,7 @@ export function UberBotChallengeModal({
     <Modal
       open={open}
       onClose={() => void handleCancel()}
-      title="Desafio Uber"
+      title="Ecrã Uber (RPA)"
       showCloseButton={!busyCancel}
       closeOnBackdrop={false}
       closeOnEscape={!busyCancel}
@@ -252,8 +260,21 @@ export function UberBotChallengeModal({
             : loadingChallenge
               ? 'A carregar desafio… Se ainda vir o ecrã de email/telefone, aguarde — o anti-bot Uber está a montar.'
               : hint ??
-                'A Uber pediu verificação anti-bot («Proteger a sua conta» / Iniciar desafio). Resolva o desafio aqui — clique e arraste na imagem. Depois pode aparecer o código SMS.'}
+                'Stream em tempo real do browser Uber no servidor. Resolva o anti-bot, veja o passkey/SMS, ou use noVNC para o ecrã completo.'}
         </p>
+        {vncUrl ? (
+          <p className="text-xs">
+            <a
+              href={vncUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-sky-700 underline-offset-2 hover:underline"
+            >
+              Abrir ecrã completo no servidor (noVNC)
+            </a>
+            <span className="text-slate-500"> — password no servidor: tvde-arkose</span>
+          </p>
+        ) : null}
         <div className="relative overflow-hidden rounded-md border border-slate-200 bg-slate-100">
           {frameSrc && !fatal ? (
             // eslint-disable-next-line @next/next/no-img-element

@@ -123,6 +123,8 @@ export function getServerConfig() {
      */
     portalRpaUberHeadedConnect:
       envOr('PORTAL_RPA_UBER_HEADED_CONNECT', process.env.DISPLAY ? 'true' : 'false') === 'true',
+    /** noVNC do ambiente RPA Uber (ex. http://192.168.10.75:6901) — password RFB separada no servidor */
+    portalRpaVncUrl: process.env.PORTAL_RPA_VNC_URL?.trim() || null,
     /** Intervalo do worker que renova cookies (horas). */
     portalRpaRefreshIntervalHours: Math.max(
       1,

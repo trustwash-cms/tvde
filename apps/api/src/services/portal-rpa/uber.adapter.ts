@@ -93,11 +93,37 @@ async function ensureAuthLanding(page: Page): Promise<void> {
 }
 
 async function isOtpScreen(page: Page): Promise<boolean> {
-  if (await page.locator('[screen-test="PHONE_OTP"]').first().isVisible().catch(() => false)) {
+  // Campos OTP têm prioridade — mesmo com modal passkey por cima (antes devolvíamos false
+  // e o nudge clicava «Resend» → Bad request Uber).
+  const otpFields = page.locator(
+    '[screen-test="PHONE_OTP"], #PHONE_SMS_OTP-0, [data-testid="PHONE_SMS_OTP"], input[autocomplete="one-time-code"]'
+  );
+  if (await otpFields.first().isVisible().catch(() => false)) return true;
+  // Copy PT/EN do ecrã SMS (4 dígitos) sem confundir com chooser passkey
+  if (
+    await page
+      .getByText(
+        /introduza o código de 4 dígitos|enter the 4-digit code sent via sms|código de 4 dígitos enviado por sms/i
+      )
+      .first()
+      .isVisible()
+      .catch(() => false)
+  ) {
     return true;
   }
-  return page.locator('#PHONE_SMS_OTP-0, [data-testid="PHONE_SMS_OTP"]').first().isVisible().catch(() => false);
+  return false;
 }
+
+/** Modal Uber «Não foi possível verificar a sua passkey». */
+export async function isPasskeyErrorDialog(page: Page): Promise<boolean> {
+  return page
+    .getByText(/não foi possível verificar a sua passkey|could not verify your passkey/i)
+    .first()
+    .isVisible()
+    .catch(() => false);
+}
+
+export { isOtpScreen };
 
 export async function isUberPasswordScreen(page: Page): Promise<boolean> {
   if (await page.locator('input[type="password"]').first().isVisible().catch(() => false)) {
@@ -851,10 +877,12 @@ async function fillIdentity(page: Page, username: string): Promise<void> {
  * Ecrã pós-email: «Verificar com uma chave de acesso» + «Enviar código por SMS».
  * Preferir SMS (human-in-the-loop fiável) em vez de passkey.
  */
-async function isAuthMethodChooser(page: Page): Promise<boolean> {
+export async function isAuthMethodChooser(page: Page): Promise<boolean> {
+  // Já no OTP — o botão «Resend» partilha id/copy com SMS; NÃO tratar como chooser.
+  if (await isOtpScreen(page)) return false;
   if (await page.locator('#alt-action-send-via-sms').isVisible().catch(() => false)) return true;
   return page
-    .getByText(/verificar com uma chave|já teve sessão iniciada|gostaria de continuar/i)
+    .getByText(/verificar com uma chave|já teve sessão iniciada|gostaria de continuar|verify with a passkey/i)
     .first()
     .isVisible()
     .catch(() => false);
@@ -862,10 +890,11 @@ async function isAuthMethodChooser(page: Page): Promise<boolean> {
 
 /** Fecha o modal Uber «Não foi possível verificar a sua passkey» → Voltar. */
 export async function dismissPasskeyErrorDialog(page: Page): Promise<boolean> {
+  if (!(await isPasskeyErrorDialog(page))) return false;
+
   const voltar = page
-    .getByRole('button', { name: /^voltar$/i })
-    .or(page.getByRole('link', { name: /^voltar$/i }))
-    .or(page.getByText(/^voltar$/i))
+    .locator('button, a, [role="button"]')
+    .filter({ hasText: /^voltar$/i })
     .first();
   if (await voltar.isVisible().catch(() => false)) {
     console.log('[uber-login] passkey erro → Voltar');
@@ -873,6 +902,24 @@ export async function dismissPasskeyErrorDialog(page: Page): Promise<boolean> {
     await page.waitForTimeout(900);
     return true;
   }
+
+  const clicked = await page
+    .evaluate(
+      `(() => {
+        const el = [...document.querySelectorAll('button,a,[role="button"]')].find((n) =>
+          /^voltar$/i.test((n.textContent || '').trim())
+        );
+        if (!el) return false;
+        el.click();
+        return true;
+      })()`
+    )
+    .catch(() => false);
+  if (clicked) {
+    await page.waitForTimeout(900);
+    return true;
+  }
+
   const back = page.getByRole('button', { name: /^back$/i }).first();
   if (await back.isVisible().catch(() => false)) {
     await back.click({ timeout: 8000, force: true }).catch(() => undefined);
@@ -884,13 +931,23 @@ export async function dismissPasskeyErrorDialog(page: Page): Promise<boolean> {
 
 /** Após bot/passkey: insistir SMS ou password (nunca ficar no QR passkey). */
 export async function nudgeUberPastPasskey(page: Page, password?: string): Promise<void> {
-  await dismissPasskeyErrorDialog(page);
-  await dismissSecurityKeyDialog(page);
-  if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
-    await preferSmsOverPasskey(page);
-  }
-  if (password && (await isPostOtpPasswordChooser(page))) {
-    await preferPasswordLogin(page, password);
+  for (let i = 0; i < 4; i += 1) {
+    // OTP real: só fechar erro passkey; NUNCA clicar SMS/Resend de novo.
+    if (await isOtpScreen(page)) {
+      await dismissPasskeyErrorDialog(page);
+      return;
+    }
+    await dismissPasskeyErrorDialog(page);
+    await dismissSecurityKeyDialog(page);
+    if (await isOtpScreen(page)) return;
+    if ((await isAuthMethodChooser(page)) || (await isPasskeyScreen(page))) {
+      await preferSmsOverPasskey(page);
+    }
+    if (password && (await isPostOtpPasswordChooser(page))) {
+      await preferPasswordLogin(page, password);
+    }
+    if (await isOtpScreen(page)) return;
+    await page.waitForTimeout(800);
   }
 }
 
@@ -940,26 +997,66 @@ async function blockWebAuthnForSmsPath(page: Page): Promise<void> {
 }
 
 async function preferSmsOverPasskey(page: Page): Promise<boolean> {
+  // Já no ecrã OTP — NÃO clicar Resend (Uber → «Bad request»).
+  if (await isOtpScreen(page)) {
+    await dismissPasskeyErrorDialog(page);
+    return true;
+  }
   await dismissPasskeyErrorDialog(page);
   await dismissSecurityKeyDialog(page);
+  if (await isOtpScreen(page)) return true;
 
   // Nunca clicar #passkey-login-btn («Continuar com uma chave de acesso»).
+  // Nunca «Resend / Reenviar» — só o pedido SMS inicial do chooser.
+  const resend = page
+    .getByRole('button', { name: /reenviar|resend/i })
+    .or(page.getByText(/reenviar código|resend code/i))
+    .first();
   const sms = page
     .locator('#alt-action-send-via-sms')
     .or(page.getByTestId('Enviar código por SMS'))
-    .or(page.getByRole('button', { name: /enviar código por sms|send .*sms|text me|enviar sms/i }))
-    .or(page.getByRole('link', { name: /enviar código por sms|send .*sms|text me|enviar sms/i }))
-    .or(page.getByText(/^enviar código por sms$/i))
+    .or(
+      page.getByRole('button', {
+        name: /^(enviar código por sms|send code via sms|text me a code|enviar sms)$/i,
+      })
+    )
+    .or(
+      page.getByRole('link', {
+        name: /^(enviar código por sms|send code via sms|text me a code|enviar sms)$/i,
+      })
+    )
+    .or(page.getByText(/^(enviar código por sms|send code via sms)$/i))
     .first();
+
+  // Se o único match for Resend, abortar
+  if (await resend.isVisible().catch(() => false)) {
+    const smsVisible = await sms.isVisible().catch(() => false);
+    if (!smsVisible) {
+      console.log('[uber-login] skip SMS click — só há «Resend» (já no OTP)');
+      return Boolean(await isOtpScreen(page));
+    }
+    // Ambos visíveis: preferir o que NÃO é resend
+  }
 
   if (!(await sms.isVisible().catch(() => false))) {
     // Texto/link sem role button (subtree pode interceptar o botão passkey)
-    const smsText = page.getByText(/enviar código por sms/i).first();
+    const smsText = page.getByText(/^(enviar código por sms|send code via sms)$/i).first();
     if (!(await smsText.isVisible().catch(() => false))) return false;
+    // Evitar clicar em «Resend code via SMS» (contém send…sms)
+    const label = ((await smsText.textContent().catch(() => '')) || '').trim();
+    if (/reenviar|resend/i.test(label)) {
+      console.log('[uber-login] skip SMS click — texto é Resend:', label);
+      return Boolean(await isOtpScreen(page));
+    }
     console.log('[uber-login] a clicar texto «Enviar código por SMS»');
     await dismissSecurityKeyDialog(page);
     await smsText.click({ timeout: 10_000, force: true }).catch(() => undefined);
   } else {
+    const label = ((await sms.textContent().catch(() => '')) || '').trim();
+    if (/reenviar|resend/i.test(label)) {
+      console.log('[uber-login] skip SMS click — botão é Resend:', label);
+      return Boolean(await isOtpScreen(page));
+    }
     console.log('[uber-login] a escolher «Enviar código por SMS» (não passkey)');
     await dismissSecurityKeyDialog(page);
     await sms.click({ timeout: 10_000, force: true }).catch(() => undefined);
@@ -971,14 +1068,21 @@ async function preferSmsOverPasskey(page: Page): Promise<boolean> {
   if (await isOtpScreen(page)) return true;
   if (!(await isAuthMethodChooser(page))) return true;
 
-  // Retry com evaluate
+  // Retry com evaluate — só o pedido inicial, nunca Resend
   await page.evaluate(
     `(() => {
-      const btn = document.querySelector('#alt-action-send-via-sms')
-        || [...document.querySelectorAll('button,[data-testid]')].find(el =>
-             /enviar código por sms/i.test(el.getAttribute('data-testid') || el.innerText || ''));
-      if (!btn) return;
-      btn.click();
+      const isResend = (t) => /reenviar|resend/i.test(t || '');
+      const btn = document.querySelector('#alt-action-send-via-sms');
+      if (btn && !isResend(btn.innerText || btn.textContent || '')) {
+        btn.click();
+        return;
+      }
+      const el = [...document.querySelectorAll('button,a,[role="button"],[data-testid]')].find((n) => {
+        const t = (n.getAttribute('data-testid') || n.innerText || '').trim();
+        if (isResend(t)) return false;
+        return /^(enviar código por sms|send code via sms)$/i.test(t);
+      });
+      if (el) el.click();
     })()`
   ).catch(() => undefined);
   await page.waitForTimeout(2500);
@@ -2325,7 +2429,7 @@ async function pollForNewReportAndDownload(
   return null;
 }
 
-async function isPasskeyScreen(page: Page): Promise<boolean> {
+export async function isPasskeyScreen(page: Page): Promise<boolean> {
   if (
     await page
       .getByText(
@@ -2644,6 +2748,23 @@ export async function inspectUberLiveAuth(
     await clickContinue(page);
     await page.waitForTimeout(1200);
     if (isSupplierUrl(page.url()) && !isAuthUrl(page.url())) return 'connected';
+  }
+  // OTP real tem prioridade (mesmo com modal passkey residual)
+  if (await isOtpScreen(page)) {
+    if (await isPasskeyErrorDialog(page)) {
+      await dismissPasskeyErrorDialog(page);
+    }
+    return 'otp';
+  }
+  // Passkey/erro — insistir SMS (só se ainda não estiver no OTP)
+  if (
+    (await isPasskeyErrorDialog(page)) ||
+    ((await isPasskeyScreen(page)) && !(await isOtpScreen(page)))
+  ) {
+    await nudgeUberPastPasskey(page, password);
+    if (await isOtpScreen(page)) return 'otp';
+    if (await isPasswordScreen(page)) return 'password';
+    return 'unknown';
   }
   // SMS / password têm prioridade sobre iframe Arkose residual
   if (await isOtpScreen(page)) return 'otp';

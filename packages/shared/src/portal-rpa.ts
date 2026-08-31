@@ -61,6 +61,10 @@ export interface PortalConnectionPublic {
   authChallenge: 'passkey' | 'otp' | 'bot' | 'password' | null;
   /** PNG base64 do QR/ecrã passkey (quando authChallenge=passkey) */
   challengeImageBase64: string | null;
+  /** Stream JPEG do Chromium vivo activo (login Uber em curso) */
+  uberLiveStream: boolean;
+  /** URL noVNC do ambiente RPA no servidor (quando uberLiveStream) */
+  rpaVncUrl: string | null;
   rpaEnabled: boolean;
   /** Chromium Playwright pronto no servidor (launch verificado quando possível) */
   browserReady: boolean;

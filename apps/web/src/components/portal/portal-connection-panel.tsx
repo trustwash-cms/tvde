@@ -43,8 +43,13 @@ function needsInteractiveAuth(c: PortalConnectionPublic): boolean {
     c.status === 'awaiting_otp' ||
     c.authChallenge === 'bot' ||
     c.authChallenge === 'passkey' ||
+    c.uberLiveStream ||
     (c.activeJobType === 'connect' && c.activeJobStatus === 'awaiting_otp')
   );
+}
+
+function uberRpaLiveActive(c: PortalConnectionPublic | null | undefined): boolean {
+  return Boolean(c?.uberLiveStream && c.activeJobId);
 }
 
 function humanizePortalError(raw: string | null | undefined): string {
@@ -237,42 +242,47 @@ export function PortalConnectionPanel({
   }
 
   function openAuthModalForChallenge(c: PortalConnectionPublic) {
-    if (c.authChallenge === 'bot') {
+    const rpaLive = uberRpaLiveActive(c);
+
+    if (rpaLive || c.authChallenge === 'bot') {
       setBotOpen(true);
+    }
+
+    if (c.authChallenge === 'bot') {
       setPasskeyOpen(false);
-      setOtpOpen(false);
       setPasswordOpen(false);
+      setOtpOpen(false);
       return;
     }
     if (c.authChallenge === 'passkey' && c.challengeImageBase64) {
-      setBotOpen(false);
-      setOtpOpen(false);
+      if (!rpaLive) setBotOpen(false);
       setPasswordOpen(false);
       if (portal !== 'uber') {
         setPasskeyOpen(true);
-      } else if (!isPasswordChallenge(c)) {
-        // Uber: servidor tenta SMS — não mostrar QR passkey
+        setOtpOpen(false);
+      } else {
+        // Uber: stream RPA + servidor tenta SMS — não mostrar QR passkey nem OTP prematuro
         setPasskeyOpen(false);
-        setOtpOpen(true);
+        setOtpOpen(false);
       }
       return;
     }
     if (isPasswordChallenge(c)) {
       setPasskeyOpen(false);
-      setBotOpen(false);
+      if (!rpaLive) setBotOpen(false);
       setOtpOpen(false);
       setPasswordOpen(true);
       return;
     }
     if (c.activeJobStatus === 'running') {
       setPasskeyOpen(false);
-      setBotOpen(false);
+      if (!rpaLive) setBotOpen(false);
       setOtpOpen(false);
       setPasswordOpen(false);
       return;
     }
     setPasskeyOpen(false);
-    setBotOpen(false);
+    if (!rpaLive) setBotOpen(false);
     setPasswordOpen(false);
     setOtpOpen(true);
   }
@@ -281,7 +291,9 @@ export function PortalConnectionPanel({
     c: PortalConnectionPublic,
     opts?: { forceOpen?: boolean }
   ) {
+    const rpaLive = uberRpaLiveActive(c);
     if (
+      !rpaLive &&
       c.status !== 'awaiting_otp' &&
       c.authChallenge !== 'bot' &&
       c.authChallenge !== 'passkey'
@@ -362,7 +374,7 @@ export function PortalConnectionPanel({
             setPhase('awaiting_otp');
           }
         }
-        if (res.data.authChallenge === 'bot') {
+        if (res.data.authChallenge === 'bot' || res.data.uberLiveStream) {
           syncAuthModalsFromConnection(res.data);
         } else if (res.data.authChallenge === 'passkey' && res.data.challengeImageBase64) {
           syncAuthModalsFromConnection(res.data);
@@ -379,6 +391,8 @@ export function PortalConnectionPanel({
           setOtpOpen(false);
           setPasswordOpen(false);
         }
+      } else if (res.data.uberLiveStream && res.data.activeJobType === 'connect') {
+        syncAuthModalsFromConnection(res.data);
       }
       return res.data;
     }
@@ -501,6 +515,14 @@ export function PortalConnectionPanel({
         const currentPhase = phaseRef.current;
 
         if (
+          currentPhase === 'connecting' &&
+          next.uberLiveStream &&
+          next.activeJobType === 'connect'
+        ) {
+          syncAuthModalsFromConnection(next, { forceOpen: true });
+        }
+
+        if (
           (currentPhase === 'syncing' || syncInFlightRef.current) &&
           needsInteractiveAuth(next)
         ) {
@@ -562,7 +584,7 @@ export function PortalConnectionPanel({
 
         // Enquanto validamos OTP ou password, manter modal + loader
         if (currentPhase === 'submitting_otp' || currentPhase === 'submitting_password') {
-          if (next.authChallenge === 'bot' || next.authChallenge === 'passkey') {
+          if (next.authChallenge === 'bot' || next.authChallenge === 'passkey' || next.uberLiveStream) {
             otpSubmitStartedAt.current = null;
             setPhase('awaiting_otp');
             setBusy(false);
@@ -892,6 +914,7 @@ export function PortalConnectionPanel({
     status === 'awaiting_otp' ||
     connection?.authChallenge === 'bot' ||
     connection?.authChallenge === 'passkey' ||
+    uberRpaLiveActive(connection) ||
     phase === 'awaiting_otp' ||
     phase === 'awaiting_password' ||
     phase === 'submitting_otp' ||
@@ -901,8 +924,8 @@ export function PortalConnectionPanel({
     !authUiActive &&
     connection?.activeJobType !== 'connect';
   const loadingMsg = authUiActive
-    ? connection?.authChallenge === 'bot'
-      ? 'Login Uber — resolva o desafio anti-bot na janela Desafio Uber.'
+    ? connection?.authChallenge === 'bot' || uberRpaLiveActive(connection)
+      ? 'Login Uber — acompanhe o browser no ecrã RPA (stream ou noVNC).'
       : phaseMessage(
           phase === 'syncing' || phase === 'connecting' ? 'awaiting_otp' : phase,
           portalLabel,
@@ -988,6 +1011,34 @@ export function PortalConnectionPanel({
           {connection?.status === 'connected' && connection.activeJobStatus === 'completed' && connection.lastJobMessage ? (
             <p className="mt-1 text-xs text-emerald-700">{connection.lastJobMessage}</p>
           ) : null}
+          {portal === 'uber' && uberRpaLiveActive(connection) ? (
+            <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900">
+              <p className="font-medium">Ambiente RPA Uber activo no servidor</p>
+              <p className="mt-1 text-xs text-sky-800">
+                Veja em tempo real o que o Playwright está a fazer (desafio, passkey, SMS, password).
+                O stream abre automaticamente; pode também usar o ecrã completo noVNC.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="btn-secondary text-xs"
+                  onClick={() => openAuthModalManual()}
+                >
+                  Abrir stream no dashboard
+                </button>
+                {connection?.rpaVncUrl ? (
+                  <a
+                    href={connection.rpaVncUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-secondary text-xs"
+                  >
+                    Abrir ecrã completo (noVNC)
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {showPersistentError ? (
             <div className="mt-1 flex items-start gap-2">
               <p className="flex-1 text-xs text-amber-700">
@@ -1040,8 +1091,8 @@ export function PortalConnectionPanel({
               className="btn-primary text-sm"
               onClick={() => openAuthModalManual()}
             >
-              {connection?.authChallenge === 'bot'
-                ? 'Abrir desafio Uber'
+              {connection?.authChallenge === 'bot' || uberRpaLiveActive(connection)
+                ? 'Ver ecrã RPA'
                 : connection?.authChallenge === 'passkey'
                   ? 'Abrir passkey'
                   : isPasswordChallenge(connection)
@@ -1276,11 +1327,19 @@ export function PortalConnectionPanel({
         portal={portal}
         jobId={connection?.activeJobId ?? null}
         hint={connection?.otpHint}
+        vncUrl={connection?.rpaVncUrl}
+        keepOpenDuringOtp={uberRpaLiveActive(connection)}
         onCloseCancel={() => {
           dismissAuthModal();
           void load();
         }}
         onChallengeCleared={() => {
+          if (uberRpaLiveActive(connection) && connection?.authChallenge !== 'password') {
+            void load().then((next) => {
+              if (next) syncAuthModalsFromConnection(next, { forceOpen: true });
+            });
+            return;
+          }
           setBotOpen(false);
           if (connection) {
             lastAutoOpenedChallengeRef.current = null;
@@ -1355,17 +1414,26 @@ export function PortalConnectionPanel({
             </div>
           ) : null}
           <p className="text-sm text-slate-600">
-            {connection?.otpHint ??
-              (portal === 'myprio'
-                ? 'Introduza o código SMS de 6 dígitos (o portal MyPRIO expira em ~2 minutos).'
-                : portal === 'uber'
-                  ? 'Introduza o código SMS de 4 dígitos da Uber.'
-                  : 'Introduza o código recebido por SMS ou email.')}
+            {(() => {
+              const hint = connection?.otpHint ?? '';
+              const staleBot =
+                portal === 'uber' &&
+                /anti-bot|desafio|Arkose|Proteger a sua conta|passkey|chave de acesso/i.test(hint);
+              if (hint && !staleBot) return hint;
+              if (portal === 'myprio') {
+                return 'Introduza o código SMS de 6 dígitos (o portal MyPRIO expira em ~2 minutos).';
+              }
+              if (portal === 'uber') {
+                return 'Introduza o código SMS de 4 dígitos enviado pela Uber para o telemóvel da conta.';
+              }
+              return 'Introduza o código recebido por SMS ou email.';
+            })()}
           </p>
           {(portal === 'myprio' || portal === 'uber') && phase !== 'submitting_otp' ? (
             <p className="text-xs text-amber-700">
-              O browser no servidor mantém-se aberto à espera deste código. Se o SMS não chegar, Desligar → Ligar
-              conta outra vez.
+              {portal === 'uber'
+                ? 'Não clique em «Reenviar código» no ecrã RPA — a Uber costuma responder «Pedido inválido». Se o SMS não chegou, Desligar → Ligar conta outra vez.'
+                : 'O browser no servidor mantém-se aberto à espera deste código. Se o SMS não chegar, Desligar → Ligar conta outra vez.'}
             </p>
           ) : null}
           {error && otpOpen ? <p className="text-sm text-red-600">{error}</p> : null}
