@@ -392,12 +392,12 @@ export async function getPortalConnectionDetail(
         : {};
     const challengeImageBase64 =
       typeof meta.challengeImageBase64 === 'string' ? meta.challengeImageBase64 : null;
-    const authChallenge =
+    let authChallenge: 'passkey' | 'otp' | 'bot' | 'password' | null =
       meta.authChallenge === 'passkey' ||
       meta.authChallenge === 'otp' ||
       meta.authChallenge === 'bot' ||
       meta.authChallenge === 'password'
-        ? meta.authChallenge
+        ? (meta.authChallenge as 'passkey' | 'otp' | 'bot' | 'password')
         : challengeImageBase64
           ? 'passkey'
           : job?.status === 'awaiting_otp'
@@ -409,6 +409,23 @@ export async function getPortalConnectionDetail(
                   ? null
                   : 'otp'
             : null;
+
+    if (
+      portal === 'uber' &&
+      row.activeJobId &&
+      job &&
+      (job.status === 'running' || job.status === 'awaiting_otp')
+    ) {
+      const live = getLiveOtpSession(row.activeJobId);
+      if (live && !live.page.isClosed()) {
+        const liveState = await inspectUberLiveAuth(live.page).catch(() => null);
+        if (liveState === 'bot') authChallenge = 'bot';
+        else if (liveState === 'otp') authChallenge = 'otp';
+        else if (liveState === 'password') authChallenge = 'password';
+        else if (liveState === 'passkey') authChallenge = 'passkey';
+      }
+    }
+
     return {
       ...base,
       activeJobStatus: job?.status ?? null,
@@ -1776,6 +1793,33 @@ async function continueOtpJob(
       return phase;
     });
 
+    if (portal === 'uber' && live) {
+      const pwdAfterOtp = connection.passwordEncrypted
+        ? decryptPortalField(connection.passwordEncrypted, 'password')
+        : '';
+      const liveState = await withLivePageLock(jobId, () =>
+        inspectUberLiveAuth(live.page, pwdAfterOtp)
+      ).catch(() => null);
+      if (liveState === 'bot') {
+        await db.portalConnection.update({
+          where: { id: connection.id },
+          data: { status: 'awaiting_otp', lastError: null },
+        });
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'awaiting_otp',
+            otpHint:
+              'Resolva o desafio anti-bot («Proteger a sua conta») na janela Desafio Uber.',
+            message: 'À espera do desafio anti-bot Uber',
+            resultJson: { authChallenge: 'bot' },
+          },
+        });
+        void watchLiveUberAuthChallenge(db, connection.id, jobId, { bot: true });
+        return;
+      }
+    }
+
     if (result.status === 'connected') {
       const storageState =
         ('storageState' in result && result.storageState) ||
@@ -1894,10 +1938,60 @@ async function continuePasswordJob(
     }
 
     console.log('[uber-otp] submitPortalPassword → preferPasswordLogin');
-    await preferPasswordLogin(live.page, password);
-    const connected = await waitUberSupplierAfterPassword(live.page);
+    await withLivePageLock(jobId, async () => {
+      await preferPasswordLogin(live.page, password);
+      await live.page.waitForTimeout(1500);
+    });
+
+    const liveState = await withLivePageLock(jobId, () =>
+      inspectUberLiveAuth(live.page, password)
+    ).catch(() => 'unknown' as const);
+
+    if (liveState === 'bot') {
+      await db.portalConnection.update({
+        where: { id: connection.id },
+        data: { status: 'awaiting_otp', lastError: null },
+      });
+      await db.portalSyncJob.update({
+        where: { id: jobId },
+        data: {
+          status: 'awaiting_otp',
+          otpHint:
+            'Resolva o desafio anti-bot («Proteger a sua conta») na janela Desafio Uber.',
+          message: 'À espera do desafio anti-bot Uber',
+          resultJson: { authChallenge: 'bot' },
+        },
+      });
+      void watchLiveUberAuthChallenge(db, connection.id, jobId, { bot: true });
+      return;
+    }
+
+    const connected = await withLivePageLock(jobId, () =>
+      waitUberSupplierAfterPassword(live.page)
+    );
 
     if (!connected) {
+      const afterState = await withLivePageLock(jobId, () =>
+        inspectUberLiveAuth(live.page, password)
+      ).catch(() => 'unknown' as const);
+      if (afterState === 'bot') {
+        await db.portalConnection.update({
+          where: { id: connection.id },
+          data: { status: 'awaiting_otp', lastError: null },
+        });
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'awaiting_otp',
+            otpHint:
+              'Resolva o desafio anti-bot («Proteger a sua conta») na janela Desafio Uber.',
+            message: 'À espera do desafio anti-bot Uber',
+            resultJson: { authChallenge: 'bot' },
+          },
+        });
+        void watchLiveUberAuthChallenge(db, connection.id, jobId, { bot: true });
+        return;
+      }
       // Voltar a awaiting password (manter browser)
       await db.portalConnection.update({
         where: { id: connection.id },

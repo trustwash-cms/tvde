@@ -186,9 +186,52 @@ export function PortalConnectionPanel({
   const otpSubmitStartedAt = useRef<number | null>(null);
   /** Utilizador fechou o modal deste job — não reabrir até Ligar outra vez ou «Introduzir OTP». */
   const [dismissedAuthJobId, setDismissedAuthJobId] = useState<string | null>(null);
-  const authModalAutoOpenedForJobRef = useRef<string | null>(null);
+  /** Último modal auto-aberto por job+tipo (permite password → bot no mesmo job). */
+  const lastAutoOpenedChallengeRef = useRef<{ jobId: string; challenge: string } | null>(null);
   /** Evita sair do spinner «A ligar…» com lastError/lastJobMessage de uma falha anterior. */
   const sawJobThisConnectRef = useRef(false);
+
+  function authChallengeKey(c: PortalConnectionPublic): string {
+    if (c.authChallenge === 'bot') return 'bot';
+    if (c.authChallenge === 'passkey') return 'passkey';
+    if (isPasswordChallenge(c)) return 'password';
+    return 'otp';
+  }
+
+  function openAuthModalForChallenge(c: PortalConnectionPublic) {
+    if (c.authChallenge === 'bot') {
+      setBotOpen(true);
+      setPasskeyOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+      return;
+    }
+    if (c.authChallenge === 'passkey' && c.challengeImageBase64) {
+      setPasskeyOpen(true);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+      return;
+    }
+    if (isPasswordChallenge(c)) {
+      setPasskeyOpen(false);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(true);
+      return;
+    }
+    if (c.activeJobStatus === 'running') {
+      setPasskeyOpen(false);
+      setBotOpen(false);
+      setOtpOpen(false);
+      setPasswordOpen(false);
+      return;
+    }
+    setPasskeyOpen(false);
+    setBotOpen(false);
+    setPasswordOpen(false);
+    setOtpOpen(true);
+  }
 
   function syncAuthModalsFromConnection(
     c: PortalConnectionPublic,
@@ -206,40 +249,19 @@ export function PortalConnectionPanel({
       return;
     }
 
-    if (!opts?.forceOpen && authModalAutoOpenedForJobRef.current === jobId) {
+    const challenge = authChallengeKey(c);
+    if (
+      !opts?.forceOpen &&
+      lastAutoOpenedChallengeRef.current?.jobId === jobId &&
+      lastAutoOpenedChallengeRef.current?.challenge === challenge
+    ) {
       return;
     }
 
-    if (c.authChallenge === 'bot') {
-      setBotOpen(true);
-      setPasskeyOpen(false);
-      setOtpOpen(false);
-      setPasswordOpen(false);
-    } else if (c.authChallenge === 'passkey' && c.challengeImageBase64) {
-      setPasskeyOpen(true);
-      setBotOpen(false);
-      setOtpOpen(false);
-      setPasswordOpen(false);
-    } else if (isPasswordChallenge(c)) {
-      setPasskeyOpen(false);
-      setBotOpen(false);
-      setOtpOpen(false);
-      setPasswordOpen(true);
-    } else if (c.activeJobStatus === 'running') {
-      // OTP já submetido — não reabrir popup; estado no painel
-      setPasskeyOpen(false);
-      setBotOpen(false);
-      setOtpOpen(false);
-      setPasswordOpen(false);
-    } else {
-      setPasskeyOpen(false);
-      setBotOpen(false);
-      setPasswordOpen(false);
-      setOtpOpen(true);
-    }
+    openAuthModalForChallenge(c);
 
     if (!opts?.forceOpen) {
-      authModalAutoOpenedForJobRef.current = jobId;
+      lastAutoOpenedChallengeRef.current = { jobId, challenge };
     }
   }
 
@@ -462,6 +484,15 @@ export function PortalConnectionPanel({
 
         // Enquanto validamos OTP ou password, manter modal + loader
         if (currentPhase === 'submitting_otp' || currentPhase === 'submitting_password') {
+          if (next.authChallenge === 'bot' || next.authChallenge === 'passkey') {
+            otpSubmitStartedAt.current = null;
+            setPhase('awaiting_otp');
+            setBusy(false);
+            setPasswordOpen(false);
+            setOtpOpen(false);
+            syncAuthModalsFromConnection(next, { forceOpen: true });
+            return;
+          }
           if (next.status === 'connected' || next.activeJobStatus === 'completed') {
             otpSubmitStartedAt.current = null;
             clearBusyUi();
@@ -555,7 +586,7 @@ export function PortalConnectionPanel({
     setError('');
     sawJobThisConnectRef.current = false;
     setDismissedAuthJobId(null);
-    authModalAutoOpenedForJobRef.current = null;
+    lastAutoOpenedChallengeRef.current = null;
     const body = useStoredCredentials
       ? { useStoredCredentials: true as const }
       : { username, password };
@@ -1130,7 +1161,7 @@ export function PortalConnectionPanel({
         onChallengeCleared={() => {
           setBotOpen(false);
           if (connection) {
-            authModalAutoOpenedForJobRef.current = null;
+            lastAutoOpenedChallengeRef.current = null;
             syncAuthModalsFromConnection(connection);
           }
           void load();
