@@ -698,12 +698,15 @@ export async function startPortalSync(
         'Portal à espera de OTP — introduza o código SMS no login (não inicie outro sync).'
       );
     }
-    if (active && (active.status === 'running' || active.status === 'pending')) {
-      throw new Error(
-        `Já existe uma sincronização ${PORTAL_KIND_LABELS[portal]} em curso. Aguarde alguns segundos ou use Repetir.`
-      );
-    }
   }
+
+  const runningJob = await db.portalSyncJob.findFirst({
+    where: {
+      connectionId: connection.id,
+      status: { in: ['running', 'awaiting_otp'] },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
 
   const syncScope = portal === 'myprio' ? options?.syncScope : undefined;
   const uberSync = portal === 'uber' ? options?.uberSync : undefined;
@@ -714,6 +717,7 @@ export async function startPortalSync(
       : uberSync?.mode === 'existing'
         ? `A descarregar ${uberSync.reportName?.slice(0, 40) ?? 'relatório'}…`
         : null;
+  const queueMsg = runningJob ? 'Na fila — à espera do job anterior…' : null;
 
   const resultJson: Prisma.InputJsonValue | undefined =
     syncScope || uberSync
@@ -730,17 +734,23 @@ export async function startPortalSync(
       portal: toDbPortal(portal),
       type: 'sync',
       status: 'pending',
-      message: scopeLabel ? `A sincronizar ${scopeLabel}…` : uberMsg,
+      message: queueMsg ?? (scopeLabel ? `A sincronizar ${scopeLabel}…` : uberMsg),
       resultJson,
     },
   });
 
-  await db.portalConnection.update({
-    where: { id: connection.id },
-    data: { activeJobId: job.id, lastError: null },
-  });
-
-  void runPortalJob(db, job.id, actorUserId);
+  if (!runningJob) {
+    await db.portalConnection.update({
+      where: { id: connection.id },
+      data: { activeJobId: job.id, lastError: null },
+    });
+    void runPortalJob(db, job.id, actorUserId);
+  } else {
+    await db.portalConnection.update({
+      where: { id: connection.id },
+      data: { lastError: null },
+    });
+  }
   return { jobId: job.id, connection: await getPortalConnectionDetail(db, tenantId, portal) };
 }
 
@@ -982,14 +992,65 @@ export async function getPortalJob(
   return job;
 }
 
+async function dispatchNextPortalJob(
+  db: PrismaClient,
+  connectionId: string,
+  finishedJobId: string,
+  actorUserId: string
+): Promise<void> {
+  const finished = await db.portalSyncJob.findUnique({
+    where: { id: finishedJobId },
+    select: { status: true },
+  });
+  if (
+    !finished ||
+    finished.status === 'running' ||
+    finished.status === 'pending' ||
+    finished.status === 'awaiting_otp'
+  ) {
+    return;
+  }
+
+  const busy = await db.portalSyncJob.findFirst({
+    where: {
+      connectionId,
+      status: { in: ['running', 'awaiting_otp'] },
+    },
+  });
+  if (busy) return;
+
+  const next = await db.portalSyncJob.findFirst({
+    where: { connectionId, status: 'pending' },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!next) {
+    await db.portalConnection.updateMany({
+      where: { id: connectionId, activeJobId: finishedJobId },
+      data: { activeJobId: null },
+    });
+    return;
+  }
+
+  await db.portalConnection.update({
+    where: { id: connectionId },
+    data: { activeJobId: next.id },
+  });
+  void runPortalJob(db, next.id, actorUserId);
+}
+
 async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string) {
   const job = await db.portalSyncJob.findUnique({ where: { id: jobId } });
   if (!job) return;
 
-  await db.portalSyncJob.update({
-    where: { id: jobId },
-    data: { status: 'running', startedAt: new Date() },
-  });
+  if (job.status === 'pending') {
+    const claimed = await db.portalSyncJob.updateMany({
+      where: { id: jobId, status: 'pending' },
+      data: { status: 'running', startedAt: new Date() },
+    });
+    if (claimed.count === 0) return;
+  } else if (job.status !== 'running' && job.status !== 'awaiting_otp') {
+    return;
+  }
 
   const connection = await db.portalConnection.findUnique({ where: { id: job.connectionId } });
   if (!connection) return;
@@ -1598,6 +1659,8 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
     }
   } catch (err) {
     await failJob(db, connection.id, jobId, humanizePlaywrightError(err));
+  } finally {
+    await dispatchNextPortalJob(db, connection.id, jobId, actorUserId);
   }
 }
 
@@ -1906,7 +1969,6 @@ async function failJob(
           ? PORTAL_SESSION_NEEDS_RESAVE_MESSAGE
           : PORTAL_PASSWORD_NEEDS_RESAVE_MESSAGE
         : message,
-      activeJobId: null,
       ...(clearSession ? { sessionStateEncrypted: null } : {}),
     },
   });

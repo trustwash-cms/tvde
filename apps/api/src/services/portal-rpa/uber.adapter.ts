@@ -1679,6 +1679,58 @@ function snapUberTimeOption(parts: ReturnType<typeof formatLisbonDateParts>): st
   return `${parts.hour12}:${mm} ${parts.ampm}`;
 }
 
+async function fillLabeledReportDate(
+  page: Page,
+  labelRe: RegExp,
+  dateSlash: string
+): Promise<boolean> {
+  const label = page.getByText(labelRe).first();
+  if (!(await label.isVisible().catch(() => false))) return false;
+
+  const input = label
+    .locator('xpath=following::input[not(@type="checkbox") and not(@type="hidden")][1]')
+    .first();
+  if (!(await input.isVisible().catch(() => false))) return false;
+
+  await input.scrollIntoViewIfNeeded().catch(() => undefined);
+  await input.click({ timeout: 5000 });
+  await input.fill('');
+  await input.fill(dateSlash, { timeout: 8000 });
+  await input.dispatchEvent('input').catch(() => undefined);
+  await input.dispatchEvent('change').catch(() => undefined);
+  await input.dispatchEvent('blur').catch(() => undefined);
+  await page.waitForTimeout(200);
+  return true;
+}
+
+async function readLabeledReportDate(page: Page, labelRe: RegExp): Promise<string> {
+  return page.evaluate(
+    `({ source, flags }) => {
+      const re = new RegExp(source, flags);
+      const labels = [...document.querySelectorAll('label, span, div, p')].filter((el) =>
+        re.test((el.textContent || '').trim())
+      );
+      for (const label of labels) {
+        let el = label.nextElementSibling;
+        for (let i = 0; i < 8 && el; i += 1, el = el.nextElementSibling) {
+          const input = el.matches && el.matches('input')
+            ? el
+            : el.querySelector && el.querySelector('input:not([type="checkbox"]):not([type="hidden"])');
+          if (input && input.value && String(input.value).trim()) return String(input.value).trim();
+        }
+        const following = label.parentElement && label.parentElement.querySelector(
+          'input:not([type="checkbox"]):not([type="hidden"])'
+        );
+        if (following && following.value && String(following.value).trim()) {
+          return String(following.value).trim();
+        }
+      }
+      return '';
+    }`,
+    { source: labelRe.source, flags: labelRe.flags.replace(/g/g, '') }
+  ) as Promise<string>;
+}
+
 async function fillCustomReportRange(
   page: Page,
   rangeStart: string,
@@ -1687,22 +1739,29 @@ async function fillCustomReportRange(
   if (!(await isGenerateDrawerOpen(page))) return;
   await scrollGenerateDrawerToTop(page);
 
-  // Começar por cima: abrir o resumo readonly do período (DevTools)
+  console.log(`[uber-sync] período pedido: ${rangeStart} → ${rangeEnd}`);
+
   const periodSummary = page
     .locator('input[placeholder="Selecione o período do relatório"]')
     .or(page.getByPlaceholder(/selecione o período do relatório/i))
     .first();
   if (await periodSummary.isVisible().catch(() => false)) {
     await periodSummary.click({ timeout: 5000 });
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
     console.log('[uber-sync] abri resumo do período');
   }
 
   const customTab = page.getByRole('tab', { name: /intervalo personalizado|custom/i }).first();
   if (await customTab.isVisible().catch(() => false)) {
     await customTab.click();
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(600);
   }
+
+  await page
+    .getByText(/^data de início$/i)
+    .first()
+    .waitFor({ state: 'visible', timeout: 12_000 })
+    .catch(() => undefined);
 
   const start = formatLisbonDateParts(rangeStart);
   const end = formatLisbonDateParts(rangeEnd);
@@ -1711,37 +1770,67 @@ async function fillCustomReportRange(
   const startTimeOpt = snapUberTimeOption(start);
   const endTimeOpt = snapUberTimeOption(end);
 
-  const filled = await page.evaluate(
-    `(payload) => {
-      const panel =
-        document.querySelector('[data-tracking-name="report-management-v2"]') ||
-        [...document.querySelectorAll('div')].reverse().find((p) =>
-          /data de início|intervalo personalizado|selecione as opções abaixo/i.test(p.textContent || '')
-        );
-      if (!panel) return { ok: false, reason: 'no-panel' };
-      const setNative = (el, value) => {
-        const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
-        if (desc && desc.set) desc.set.call(el, value);
-        else el.value = value;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-      };
-      const inputs = [...panel.querySelectorAll('input:not([type="checkbox"]):not([type="hidden"])')];
-      const dateInputs = inputs.filter((el) => {
-        if (el.readOnly && /período|periodo|organiz/i.test(el.placeholder || '')) return false;
-        const blob = [el.type, el.placeholder, el.getAttribute('aria-label'), el.value].join('|').toLowerCase();
-        if (/filiais|organiz|search|hora|time|período|periodo/.test(blob)) return false;
-        return /\\d{4}\\/\\d{2}|data|date|yyyy/.test(blob) || /^\\d{4}\\/\\d{2}\\/\\d{2}$/.test(el.value || '') || el.type === 'text' || el.type === 'date';
-      });
-      let n = 0;
-      if (dateInputs[0]) { setNative(dateInputs[0], payload.startDate); n++; }
-      if (dateInputs[1]) { setNative(dateInputs[1], payload.endDate); n++; }
-      return { ok: n >= 1, n, vals: dateInputs.slice(0, 2).map((e) => e.value) };
-    }`,
-    { startDate, endDate }
-  );
-  console.log(`[uber-sync] datas JS: ${JSON.stringify(filled)}`);
+  let startOk = await fillLabeledReportDate(page, /^data de início$/i, startDate);
+  let endOk = await fillLabeledReportDate(page, /^data de fim$/i, endDate);
+
+  if (!startOk || !endOk) {
+    const filled = (await page.evaluate(
+      `(payload) => {
+        const panel =
+          document.querySelector('[data-tracking-name="report-management-v2"]') ||
+          [...document.querySelectorAll('div')].reverse().find((p) =>
+            /data de início|intervalo personalizado|selecione as opções abaixo/i.test(p.textContent || '')
+          );
+        if (!panel) return { ok: false, reason: 'no-panel' };
+        const setNative = (el, value) => {
+          const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+          if (desc && desc.set) desc.set.call(el, value);
+          else el.value = value;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+          el.dispatchEvent(new Event('blur', { bubbles: true }));
+        };
+        const inputs = [...panel.querySelectorAll('input:not([type="checkbox"]):not([type="hidden"])')];
+        const dateInputs = inputs.filter((el) => {
+          if (el.readOnly && /período|periodo|organiz/i.test(el.placeholder || '')) return false;
+          const blob = [el.type, el.placeholder, el.getAttribute('aria-label'), el.value]
+            .join('|')
+            .toLowerCase();
+          if (/filiais|organiz|search|hora|time|período|periodo/.test(blob)) return false;
+          return (
+            /\\d{4}\\/\\d{2}|data|date|yyyy/.test(blob) ||
+            /^\\d{4}\\/\\d{2}\\/\\d{2}$/.test(el.value || '') ||
+            el.type === 'text' ||
+            el.type === 'date'
+          );
+        });
+        let n = 0;
+        if (dateInputs[0]) {
+          setNative(dateInputs[0], payload.startDate);
+          n++;
+        }
+        if (dateInputs[1]) {
+          setNative(dateInputs[1], payload.endDate);
+          n++;
+        }
+        return { ok: n >= 2, n, vals: dateInputs.slice(0, 2).map((e) => e.value) };
+      }`,
+      { startDate, endDate }
+    )) as { ok?: boolean; n?: number; vals?: string[] };
+    console.log(`[uber-sync] datas JS fallback: ${JSON.stringify(filled)}`);
+    startOk = startOk || Boolean(filled?.ok);
+    endOk = endOk || Boolean(filled?.ok);
+  }
+
+  const readStart = await readLabeledReportDate(page, /^data de início$/i);
+  const readEnd = await readLabeledReportDate(page, /^data de fim$/i);
+  console.log(`[uber-sync] datas lidas: início="${readStart || '?'}" fim="${readEnd || '?'}"`);
+
+  if (startDate !== endDate && (readStart === readEnd || !readStart || !readEnd)) {
+    throw new Error(
+      `Sync Uber: período não ficou no formulário (pedido ${startDate} → ${endDate}, portal "${readStart || '?'}" → "${readEnd || '?'}")`
+    );
+  }
 
   const pickTime = async (nearLabel: RegExp, optionText: string) => {
     const label = page.getByText(nearLabel).first();
