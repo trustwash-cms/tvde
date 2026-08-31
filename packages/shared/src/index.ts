@@ -394,6 +394,7 @@ export {
 } from './user-vehicle-overlap';
 export {
   defaultPaymentWeekRange,
+  uberPaymentOrderDateRange,
   type PaymentMoneyLine,
   type PaymentCalculationReceitas,
   type PaymentCalculationDespesas,

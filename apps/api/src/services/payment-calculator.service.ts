@@ -5,6 +5,7 @@ import {
   overlapDays,
   toDateOnlyUtc,
   UBER_DRIVER_NET_EARNINGS_DESCRIPTION,
+  uberPaymentOrderDateRange,
   type PaymentCalculation,
   type PaymentDriverOption,
   type PaymentMoneyLine,
@@ -139,18 +140,21 @@ export async function calculateDriverPayment(
   const boltByUuid = pickBestByKey(vehicles, (v) => v.uuidBolt, periodStart, periodEnd);
 
   let uberTotal = 0;
+  // Transações «Pago a si»: janela Uber Mon 04:00 → Mon seguinte 04:00 (Lisboa),
+  // não meia-noite civil — alinhado a «Rendimentos líquidos» no portal.
+  const uberOrderRange = uberPaymentOrderDateRange(periodStartStr, periodEndStr);
   for (const [, vehicle] of uberByUuid) {
-    const baseWhere = {
+    const driverFilter = {
       tenantId,
       isPaid: false as const,
       driverUuid: { equals: vehicle.uuidUber!, mode: 'insensitive' as const },
-      reportDate: { gte: periodStart, lte: endOfDayUtc(periodEnd) },
     };
-    // Preferir «Pagamentos do motorista» = rendimentos líquidos (totais + reembolsos)
+    // Preferir «Pagamentos do motorista» = rendimentos líquidos (agregado semanal)
     const netRows = await db.uberPayment.findMany({
       where: {
-        ...baseWhere,
+        ...driverFilter,
         description: UBER_DRIVER_NET_EARNINGS_DESCRIPTION,
+        reportDate: { gte: periodStart, lte: endOfDayUtc(periodEnd) },
       },
       select: { id: true, amount: true, reportDate: true, description: true },
     });
@@ -159,8 +163,9 @@ export async function calculateDriverPayment(
         ? netRows
         : await db.uberPayment.findMany({
             where: {
-              ...baseWhere,
+              ...driverFilter,
               NOT: { description: UBER_DRIVER_NET_EARNINGS_DESCRIPTION },
+              reportDate: { gte: uberOrderRange.gte, lt: uberOrderRange.lt },
             },
             select: { id: true, amount: true, reportDate: true, description: true },
           });
@@ -173,7 +178,7 @@ export async function calculateDriverPayment(
       meta:
         netRows.length > 0
           ? `rendimentos líquidos (${rows.length} linha${rows.length === 1 ? '' : 's'})`
-          : `${rows.length} linhas «Pago a si» em aberto`,
+          : `${rows.length} linhas «Pago a si» (Uber 04:00 Lisboa)`,
     });
   }
 

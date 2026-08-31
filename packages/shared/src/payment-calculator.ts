@@ -53,6 +53,34 @@ export function defaultPaymentWeekRange(now: Date = new Date()): {
   return { periodStart: fmt(lastMonday), periodEnd: fmt(lastSunday) };
 }
 
+/**
+ * Janela Uber «Rendimentos» para somar linhas «Pago a si».
+ * Portal: segunda 04:00 → segunda seguinte 03:59 (Europe/Lisbon).
+ * Os CSV Uber guardam o relógio de parede em `timestamp without time zone`
+ * (import no servidor UTC = componentes 04:00 tal como no portal). O corte usa
+ * hora 04:00 nos componentes UTC do Date — alinhado aos dados em BD.
+ * Período seg→dom: [periodStart 04:00, (periodEnd+1) 04:00).
+ */
+export function uberPaymentOrderDateRange(
+  periodStartYmd: string,
+  periodEndYmd: string
+): { gte: Date; lt: Date } {
+  const start = periodStartYmd.trim();
+  const end = periodEndYmd.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+    throw new Error('Datas de período inválidas');
+  }
+  const [sy, sm, sd] = start.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  const nextDay = new Date(Date.UTC(ey, em - 1, ed + 1));
+  return {
+    gte: new Date(Date.UTC(sy, sm - 1, sd, 4, 0, 0, 0)),
+    lt: new Date(
+      Date.UTC(nextDay.getUTCFullYear(), nextDay.getUTCMonth(), nextDay.getUTCDate(), 4, 0, 0, 0)
+    ),
+  };
+}
+
 export interface PaymentMoneyLine {
   label: string;
   amount: string;
