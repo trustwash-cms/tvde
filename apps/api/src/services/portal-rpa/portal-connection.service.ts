@@ -85,7 +85,7 @@ function isTransientPortalNetworkError(message: string): boolean {
 }
 
 /** Portais onde tentamos login silencioso (email+password) quando a sessão expira. Uber pode pedir OTP SMS. */
-const SILENT_RELOGIN_PORTALS = new Set<PortalKind>(['via_verde', 'uber']);
+const SILENT_RELOGIN_PORTALS = new Set<PortalKind>(['via_verde']);
 
 async function attemptSilentPortalRelogin(
   db: PrismaClient,
@@ -312,6 +312,7 @@ async function mapPublic(
     isEnabled: row?.isEnabled ?? true,
     autoSyncEnabled: row?.autoSyncEnabled ?? false,
     activeJobId: row?.activeJobId ?? null,
+    activeJobType: null,
     activeJobStatus: null,
     otpHint: null,
     authChallenge: null,
@@ -429,6 +430,7 @@ export async function getPortalConnectionDetail(
     return {
       ...base,
       activeJobStatus: job?.status ?? null,
+      activeJobType: job?.type ?? null,
       otpHint: job?.otpHint ?? null,
       lastJobMessage: job?.message ?? null,
       authChallenge,
@@ -672,6 +674,11 @@ export async function startPortalSync(
     where: { tenantId_portal: { tenantId, portal: toDbPortal(portal) } },
   });
   if (!connection) throw new Error('Conta não ligada');
+  if (connection.status === 'awaiting_otp') {
+    throw new Error(
+      'Login pendente (OTP/desafio anti-bot) — resolva em Ligar conta antes de sincronizar.'
+    );
+  }
   if (
     connection.status !== 'connected' &&
     connection.status !== 'error' &&
@@ -680,6 +687,13 @@ export async function startPortalSync(
     throw new Error('Ligue a conta antes de sincronizar');
   }
   if (!connection.sessionStateEncrypted) throw new Error('Sem sessão guardada — volte a ligar');
+
+  const pendingConnect = await db.portalSyncJob.findFirst({
+    where: { connectionId: connection.id, type: 'connect', status: 'pending' },
+  });
+  if (pendingConnect) {
+    throw new Error('Login Uber em fila — aguarde terminar Ligar conta antes de sincronizar.');
+  }
 
   if (portal === 'myprio' && !options?.syncScope) {
     throw new Error(
@@ -1009,6 +1023,17 @@ export async function getPortalJob(
   return job;
 }
 
+async function cancelPendingSyncJobs(
+  db: PrismaClient,
+  connectionId: string,
+  reason: string
+): Promise<void> {
+  await db.portalSyncJob.updateMany({
+    where: { connectionId, type: 'sync', status: 'pending' },
+    data: { status: 'failed', completedAt: new Date(), message: reason },
+  });
+}
+
 async function dispatchNextPortalJob(
   db: PrismaClient,
   connectionId: string,
@@ -1017,7 +1042,7 @@ async function dispatchNextPortalJob(
 ): Promise<void> {
   const finished = await db.portalSyncJob.findUnique({
     where: { id: finishedJobId },
-    select: { status: true },
+    select: { status: true, type: true },
   });
   if (
     !finished ||
@@ -1025,6 +1050,19 @@ async function dispatchNextPortalJob(
     finished.status === 'pending' ||
     finished.status === 'awaiting_otp'
   ) {
+    return;
+  }
+
+  if (finished.status === 'failed' && finished.type === 'connect') {
+    await cancelPendingSyncJobs(
+      db,
+      connectionId,
+      'Cancelado — termine Ligar conta (OTP/desafio) antes de sincronizar.'
+    );
+    await db.portalConnection.updateMany({
+      where: { id: connectionId, activeJobId: finishedJobId },
+      data: { activeJobId: null },
+    });
     return;
   }
 
@@ -1550,13 +1588,17 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             return;
           }
         } else {
+          const expiredMsg =
+            portal === 'uber'
+              ? 'Sessão Uber expirada — use Ligar conta (SMS ou desafio anti-bot) e só depois Sincronizar.'
+              : syncResult.message;
           await db.portalConnection.update({
             where: { id: connection.id },
-            data: { status: 'expired', lastError: syncResult.message, activeJobId: null },
+            data: { status: 'expired', lastError: expiredMsg, activeJobId: null },
           });
           await db.portalSyncJob.update({
             where: { id: jobId },
-            data: { status: 'failed', completedAt: new Date(), message: syncResult.message },
+            data: { status: 'failed', completedAt: new Date(), message: expiredMsg },
           });
           return;
         }

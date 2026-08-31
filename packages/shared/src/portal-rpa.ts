@@ -53,6 +53,8 @@ export interface PortalConnectionPublic {
   /** Sync automático diário (Via Verde / MyPRIO / Uber). Default false — o sync manual não muda. */
   autoSyncEnabled: boolean;
   activeJobId: string | null;
+  /** Tipo do job activo (connect / sync / refresh) — evita misturar spinner de sync com login */
+  activeJobType: 'connect' | 'sync' | 'refresh' | null;
   activeJobStatus: string | null;
   otpHint: string | null;
   /** Desafio humano actual: passkey (QR), bot (Arkose live), OTP SMS, ou password pós-OTP */

@@ -29,8 +29,22 @@ type PanelPhase =
 
 function isPasswordChallenge(c: PortalConnectionPublic | null | undefined): boolean {
   if (!c) return false;
+  if (c.authChallenge === 'bot' || c.authChallenge === 'otp' || c.authChallenge === 'passkey') {
+    return false;
+  }
   if (c.authChallenge === 'password') return true;
-  return /OTP OK|password|palavra-?passe/i.test(c.otpHint ?? '');
+  const hint = c.otpHint ?? '';
+  if (/anti-bot|desafio|Arkose|Proteger a sua conta/i.test(hint)) return false;
+  return /OTP OK|password|palavra-?passe/i.test(hint);
+}
+
+function needsInteractiveAuth(c: PortalConnectionPublic): boolean {
+  return (
+    c.status === 'awaiting_otp' ||
+    c.authChallenge === 'bot' ||
+    c.authChallenge === 'passkey' ||
+    (c.activeJobType === 'connect' && c.activeJobStatus === 'awaiting_otp')
+  );
 }
 
 function humanizePortalError(raw: string | null | undefined): string {
@@ -78,6 +92,9 @@ function humanizePortalError(raw: string | null | undefined): string {
   // Mensagens nossas Sync Uber — mostrar limpas (não genericizar)
   if (/^Job não está à espera de OTP/i.test(raw.trim())) {
     return 'O login Uber ficou num passo intermédio. Clique em Desligar e volte a Ligar conta.';
+  }
+  if (/Timeout à espera do desafio anti-bot/i.test(raw)) {
+    return raw.trim();
   }
   if (/^OTP em validação/i.test(raw.trim())) {
     return raw.trim();
@@ -198,6 +215,27 @@ export function PortalConnectionPanel({
     return 'otp';
   }
 
+  function exitSyncForAuth(next: PortalConnectionPublic) {
+    syncInFlightRef.current = false;
+    setBusy(false);
+    setUberSyncOpen(false);
+    if (next.authChallenge === 'bot' || next.authChallenge === 'passkey') {
+      setPhase('awaiting_otp');
+    } else if (isPasswordChallenge(next)) {
+      setPhase('awaiting_password');
+    } else {
+      setPhase('awaiting_otp');
+    }
+    syncAuthModalsFromConnection(next, { forceOpen: true });
+  }
+
+  function closeAuthModalsOnly() {
+    setOtpOpen(false);
+    setPasswordOpen(false);
+    setPasskeyOpen(false);
+    setBotOpen(false);
+  }
+
   function openAuthModalForChallenge(c: PortalConnectionPublic) {
     if (c.authChallenge === 'bot') {
       setBotOpen(true);
@@ -237,7 +275,13 @@ export function PortalConnectionPanel({
     c: PortalConnectionPublic,
     opts?: { forceOpen?: boolean }
   ) {
-    if (c.status !== 'awaiting_otp') return;
+    if (
+      c.status !== 'awaiting_otp' &&
+      c.authChallenge !== 'bot' &&
+      c.authChallenge !== 'passkey'
+    ) {
+      return;
+    }
     const jobId = c.activeJobId;
     if (!jobId) return;
 
@@ -373,6 +417,12 @@ export function PortalConnectionPanel({
   useEffect(() => {
     if (!connection) return;
     if (connection.status === 'connected') {
+      const authPending =
+        connection.authChallenge === 'bot' ||
+        connection.authChallenge === 'passkey' ||
+        connection.activeJobStatus === 'awaiting_otp' ||
+        connection.activeJobType === 'connect';
+      if (authPending) return;
       if (
         phase === 'connecting' ||
         phase === 'awaiting_otp' ||
@@ -443,6 +493,28 @@ export function PortalConnectionPanel({
         });
         if (!next) return;
         const currentPhase = phaseRef.current;
+
+        if (
+          (currentPhase === 'syncing' || syncInFlightRef.current) &&
+          needsInteractiveAuth(next)
+        ) {
+          exitSyncForAuth(next);
+          return;
+        }
+
+        if (
+          (currentPhase === 'syncing' || syncInFlightRef.current) &&
+          next.activeJobType === 'connect' &&
+          (next.activeJobStatus === 'running' || next.activeJobStatus === 'awaiting_otp')
+        ) {
+          syncInFlightRef.current = false;
+          setBusy(true);
+          setPhase(next.activeJobStatus === 'awaiting_otp' ? 'awaiting_otp' : 'connecting');
+          if (next.activeJobStatus === 'awaiting_otp') {
+            syncAuthModalsFromConnection(next, { forceOpen: true });
+          }
+          return;
+        }
 
         // OTP validado → password: sair do spinner OTP e abrir modal password
         if (
@@ -682,10 +754,13 @@ export function PortalConnectionPanel({
     syncInFlightRef.current = true;
     setError('');
     setUberSyncOpen(false);
+    setDismissedAuthJobId(null);
+    lastAutoOpenedChallengeRef.current = null;
+    closeAuthModalsOnly();
     const body: { syncScope?: MyPrioSyncScope; uberSync?: UberSyncOptions } = {};
     if (syncScope) body.syncScope = syncScope;
     if (uberSync) body.uberSync = uberSync;
-    const res = await apiFetch(
+    const res = await apiFetch<{ jobId: string; connection: PortalConnectionPublic }>(
       API_PATHS.portalConnections.sync(portal),
       {
         method: 'POST',
@@ -699,6 +774,23 @@ export function PortalConnectionPanel({
       setPhase('idle');
       setError(humanizePortalError(res.error) || 'Falha na sincronização');
       return;
+    }
+    const conn = res.data?.connection;
+    if (conn) {
+      setConnection(conn);
+      if (needsInteractiveAuth(conn)) {
+        exitSyncForAuth(conn);
+        return;
+      }
+      if (conn.activeJobType === 'connect') {
+        syncInFlightRef.current = false;
+        setPhase(conn.activeJobStatus === 'awaiting_otp' ? 'awaiting_otp' : 'connecting');
+        setBusy(true);
+        if (conn.activeJobStatus === 'awaiting_otp') {
+          syncAuthModalsFromConnection(conn, { forceOpen: true });
+        }
+        return;
+      }
     }
     await load();
   }
@@ -782,18 +874,39 @@ export function PortalConnectionPanel({
   const status = connection?.status ?? 'disconnected';
   const statusLabel = PORTAL_CONNECTION_STATUS_LABELS[status];
   const rpaOff = connection && !connection.rpaEnabled;
-  const loadingMsg =
-    phaseMessage(phase, portalLabel, syncLabel) ||
-    (status === 'awaiting_otp' && connection?.activeJobStatus === 'running'
-      ? 'A validar o código SMS na Uber… pode demorar até ~60s.'
-      : status === 'awaiting_otp' && dismissedAuthJobId === connection?.activeJobId
-        ? 'Login pendente — use «Introduzir OTP» quando quiser ou Desligar para recomeçar.'
-        : null);
-  const showPanelLoader =
-    busy ||
-    jobInFlight ||
+  const loginJobActive =
+    connection?.activeJobType === 'connect' &&
+    Boolean(connection.activeJobStatus && connection.activeJobStatus !== 'completed' && connection.activeJobStatus !== 'failed');
+  const authUiActive =
+    loginJobActive ||
+    status === 'awaiting_otp' ||
+    connection?.authChallenge === 'bot' ||
+    connection?.authChallenge === 'passkey' ||
     phase === 'awaiting_otp' ||
-    phase === 'awaiting_password';
+    phase === 'awaiting_password' ||
+    phase === 'submitting_otp' ||
+    phase === 'submitting_password';
+  const syncUiActive =
+    (phase === 'syncing' || syncInFlightRef.current) &&
+    !authUiActive &&
+    connection?.activeJobType !== 'connect';
+  const loadingMsg = authUiActive
+    ? connection?.authChallenge === 'bot'
+      ? 'Login Uber — resolva o desafio anti-bot na janela Desafio Uber.'
+      : phaseMessage(
+          phase === 'syncing' || phase === 'connecting' ? 'awaiting_otp' : phase,
+          portalLabel,
+          syncLabel
+        ) ||
+        (connection?.activeJobStatus === 'running'
+          ? 'A validar o código SMS na Uber… pode demorar até ~60s.'
+          : dismissedAuthJobId === connection?.activeJobId
+            ? 'Login pendente — use «Introduzir OTP» quando quiser ou Desligar para recomeçar.'
+            : null)
+    : syncUiActive
+      ? phaseMessage('syncing', portalLabel, syncLabel)
+      : phaseMessage(phase, portalLabel, syncLabel);
+  const showPanelLoader = busy || authUiActive || syncUiActive || (jobInFlight && connection?.activeJobType === 'sync');
   const persistentError =
     connection?.lastError ||
     (connection?.activeJobStatus === 'failed' ? connection.lastJobMessage : null) ||
@@ -849,7 +962,7 @@ export function PortalConnectionPanel({
                   {portal === 'myprio'
                     ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, o MyPRIO pede OTP — volte a Ligar conta.'
                     : portal === 'uber'
-                      ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta re-login automático; se a Uber pedir SMS OTP, volte a Ligar conta.'
+                      ? 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, volte a Ligar conta (SMS ou desafio anti-bot) antes de Sincronizar.'
                       : 'Corre 1× por dia (~06:00 Lisboa) com a conta ligada. O sync manual mantém-se. Se a sessão expirar, tenta religar com as credenciais guardadas.'}
                 </span>
               </span>
