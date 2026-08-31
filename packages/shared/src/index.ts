@@ -426,6 +426,8 @@ export {
   uberReportTypeLabel,
   uberReportTypeFromReportName,
   uberReportMatchesType,
+  uberReportRowKey,
+  uberReportDisplayType,
   uberReportTypeOptionMatches,
   resolveUberReportType,
   UBER_REPORT_TYPE_CATALOG,

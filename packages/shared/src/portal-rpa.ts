@@ -169,12 +169,29 @@ export function uberReportMatchesType(
   reportTypeKey: UberReportTypeKey
 ): boolean {
   const blob = `${report.name} ${report.type ?? ''}`;
+  if (/driver_activity|atividade do moto/i.test(blob)) return false;
   if (reportTypeKey === 'REPORT_TYPE_PAYMENTS_ORDER') {
     return /payments_order|payments_orde|transa[cç][aã]o de pagamentos?|transacao de pagamentos|payment.?transaction/i.test(
       blob
     );
   }
   return /payments_driver|pagamentos? do?s? motoristas?|driver payments?/i.test(blob);
+}
+
+/** Chave única por linha (nome pode repetir na lista Uber). */
+export function uberReportRowKey(r: UberReportListItem): string {
+  return `${r.name}\u0001${r.createdAt ?? ''}\u0001${r.type ?? ''}`;
+}
+
+export function uberReportDisplayType(r: UberReportListItem): string {
+  const t = (r.type ?? '').replace(/\s+/g, ' ').trim();
+  if (t && !/^tipo de relatório$/i.test(t)) {
+    return t.length > 32 ? `${t.slice(0, 29)}…` : t;
+  }
+  if (/driver_activity|atividade do moto/i.test(r.name)) return 'Atividade do motorista';
+  if (/payments_order|payments_orde/i.test(r.name)) return 'Transação de pagamentos';
+  if (/payments_driver/i.test(r.name)) return 'Pagamentos do motorista';
+  return '—';
 }
 
 export function uberReportTypeOptionMatches(

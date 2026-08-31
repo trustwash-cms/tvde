@@ -1130,27 +1130,66 @@ async function readReportRows(page: Page): Promise<ReportRowSnapshot[]> {
         .map((c) => (c.innerText || c.textContent || '').replace(/\\s+/g, ' ').trim())
         .filter(Boolean);
       if (cells.length < 2) continue;
+
       const text = cells.join(' | ');
-      const name = cells[0] || '';
-      // Colunas típicas: Nome | Tipo | Intervalo | Frequência | Criado em | Ações
-      const type =
-        cells.find((c) => /transação|transacao|pagament|atividade|desempenho|qualidade|tempo/i.test(c))
-        || (cells.length > 1 ? cells[1] : null)
-        || null;
-      const interval =
-        cells.find((c) => /\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}.+\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(c)
-          || /\\d{8}\\s*[–-]\\s*\\d{8}/.test(c)
-          || /start|end|início|inicio|fim|julho|july|de julho/i.test(c))
-        || (cells.length > 2 ? cells[2] : null)
-        || null;
-      const createdAt =
-        cells.find((c) => /\\b(January|February|March|April|May|June|July|August|September|October|November|December)\\b/i.test(c))
-        || cells.find((c) => /\\b\\d{1,2}\\/\\d{1,2}\\/\\d{4}\\b/.test(c))
-        || cells[cells.length - 2]
-        || '';
-      // Só «Faça o download» conta — «Em curso» tem ícone/botão mas NÃO é download
+      let name = cells[0] || '';
+      let type = null;
+      let interval = null;
+      let createdAt = '';
+
+      // Tabela Uber: Nome | Tipo | Intervalo | Frequência | Criado em | Ações
+      if (cells.length >= 5 && !/^nome$/i.test(cells[0])) {
+        name = cells[0];
+        type = cells[1] || null;
+        interval = cells[2] || null;
+        const freqIdx = cells.findIndex((c) =>
+          /manualmente|diariamente|semanalmente|mensalmente|daily|weekly|monthly/i.test(c)
+        );
+        if (freqIdx >= 0 && cells[freqIdx + 1]) {
+          createdAt = cells[freqIdx + 1];
+        } else if (cells.length >= 6) {
+          createdAt = cells[4] || '';
+        } else {
+          createdAt = cells[cells.length - 2] || '';
+        }
+      } else {
+        type =
+          cells.find((c) =>
+            /transação|transacao|pagament|atividade|desempenho|qualidade|tempo/i.test(c)
+          ) || null;
+        interval =
+          cells.find((c) => /\\d{1,2}\\s+de\\s+\\w+.+\\d{1,2}\\s+de\\s+\\w+/i.test(c)) ||
+          cells.find((c) =>
+            /\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}.+\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(c)
+          ) ||
+          cells.find((c) => /\\d{8}\\s*[–-]\\s*\\d{8}/.test(c)) ||
+          null;
+        createdAt =
+          cells.find((c) =>
+            /\\b(January|February|March|April|May|June|July|August|September|October|November|December)\\b/i.test(
+              c
+            )
+          ) ||
+          cells.find((c) => /\\d{1,2}\\s+de\\s+\\w+\\s+de\\s+\\d{4}/i.test(c)) ||
+          cells.find((c) => /\\b\\d{1,2}\\/\\d{1,2}\\/\\d{4}\\b/.test(c)) ||
+          '';
+      }
+
+      if (
+        interval &&
+        (/^\\d{8}-\\d{8}/.test(interval) || /^payments_/i.test(interval) || interval === name)
+      ) {
+        interval =
+          cells.find((c) => /\\d{1,2}\\s+de\\s+\\w+.+\\d{1,2}\\s+de\\s+\\w+/i.test(c)) ||
+          cells.find((c) =>
+            /\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}.+\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}/.test(c)
+          ) ||
+          null;
+      }
+
       const inProgress = /em curso|in progress|processing|a processar|generating/i.test(text);
-      const hasDownload = /faça o download|faca o download|\\bdownload\\b/i.test(text) && !inProgress;
+      const hasDownload =
+        /faça o download|faca o download|\\bdownload\\b/i.test(text) && !inProgress;
       if (!name || /^nome$/i.test(name)) continue;
       rows.push({ name, type, interval, createdAt, hasDownload, inProgress });
     }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Car,
   CheckCircle2,
@@ -17,8 +17,11 @@ import {
   defaultPaymentWeekRange,
   lisbonDatetimeLocalToIso,
   listUberPaymentReports,
+  pickLatestUberReportForPeriod,
+  uberReportDisplayType,
   uberReportMatchesPeriod,
   uberReportMatchesType,
+  uberReportRowKey,
   resolveUberReportType,
   uberReportTypeLabel,
   UBER_REPORT_TYPE_CATALOG,
@@ -253,7 +256,7 @@ export function SyncPagamentosModal({
   const [uberListLoading, setUberListLoading] = useState(false);
   const [uberListError, setUberListError] = useState('');
   const [uberListNeedsLogin, setUberListNeedsLogin] = useState(false);
-  const [uberSelectedReport, setUberSelectedReport] = useState<string | null>(null);
+  const [uberSelectedRowKey, setUberSelectedRowKey] = useState<string | null>(null);
   const [uberReadyMode, setUberReadyMode] = useState<UberReadyMode>('existing');
   const [uberPeriodStart, setUberPeriodStart] = useState('');
   const [uberPeriodEnd, setUberPeriodEnd] = useState('');
@@ -271,7 +274,7 @@ export function SyncPagamentosModal({
     setUberListLoading(false);
     setUberListError('');
     setUberListNeedsLogin(false);
-    setUberSelectedReport(null);
+    setUberSelectedRowKey(null);
     setUberReadyMode('existing');
     uberSyncRef.current = null;
     setPhase('idle');
@@ -288,11 +291,16 @@ export function SyncPagamentosModal({
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
   }, []);
 
+  const selectedUberReport = useMemo(
+    () => uberReports.find((r) => uberReportRowKey(r) === uberSelectedRowKey) ?? null,
+    [uberReports, uberSelectedRowKey]
+  );
+
   const loadUberReports = useCallback(async (periodStart: string, periodEnd: string) => {
     setUberListLoading(true);
     setUberListError('');
     setUberListNeedsLogin(false);
-    setUberSelectedReport(null);
+    setUberSelectedRowKey(null);
     const res = await apiFetch<UberReportListItem[]>(
       API_PATHS.portalConnections.reports('uber'),
       { method: 'POST', body: JSON.stringify({}) },
@@ -310,21 +318,16 @@ export function SyncPagamentosModal({
     // Lista completa do Supplier (como no modal Uber antigo)
     setUberReports(res.data);
     const reportTypeKey = readUberReportType();
-    const paymentReports = listUberPaymentReports(res.data).filter((r) =>
+    const downloadable = listUberPaymentReports(res.data).filter((r) =>
       uberReportMatchesType(r, reportTypeKey)
     );
-    const matching = paymentReports.find((r) =>
-      uberReportMatchesPeriod(r, periodStart, periodEnd)
-    );
-    const preselect =
-      matching?.name ??
-      paymentReports.find((r) => r.hasDownload)?.name ??
-      listUberPaymentReports(res.data).find((r) => r.hasDownload && /payments_order/i.test(r.name))
-        ?.name ??
-      res.data.find((r) => r.hasDownload && !/driver_activity/i.test(r.name))?.name ??
+    const match =
+      pickLatestUberReportForPeriod(downloadable, periodStart, periodEnd) ??
+      downloadable.find((r) => uberReportMatchesPeriod(r, periodStart, periodEnd)) ??
+      downloadable[0] ??
       null;
-    if (preselect) {
-      setUberSelectedReport(preselect);
+    if (match) {
+      setUberSelectedRowKey(uberReportRowKey(match));
       setUberReadyMode('existing');
     } else {
       setUberReadyMode('generate');
@@ -350,8 +353,8 @@ export function SyncPagamentosModal({
 
   function buildUberSyncOptions(): UberSyncOptions | null {
     if (uberReadyMode === 'existing') {
-      if (!uberSelectedReport) return null;
-      return { mode: 'existing', reportName: uberSelectedReport };
+      if (!selectedUberReport) return null;
+      return { mode: 'existing', reportName: selectedUberReport.name };
     }
     if (!uberPeriodStart || !uberPeriodEnd || uberPeriodEnd < uberPeriodStart) return null;
     return {
@@ -375,7 +378,7 @@ export function SyncPagamentosModal({
   const canStartSync =
     !uberListLoading &&
     Boolean(buildUberSyncOptions()) &&
-    (uberReadyMode === 'generate' || Boolean(uberSelectedReport));
+    (uberReadyMode === 'generate' || Boolean(selectedUberReport));
 
   const animateProgress = useCallback((index: number, durationMs: number) => {
     const start = performance.now();
@@ -747,6 +750,7 @@ export function SyncPagamentosModal({
                     <tr>
                       <th className="w-8 px-2 py-2" />
                       <th className="px-2 py-2 font-medium">Nome</th>
+                      <th className="px-2 py-2 font-medium">Tipo</th>
                       <th className="px-2 py-2 font-medium">Intervalo</th>
                       <th className="px-2 py-2 font-medium">Criado</th>
                     </tr>
@@ -754,19 +758,23 @@ export function SyncPagamentosModal({
                   <tbody>
                     {uberReports.map((r) => {
                       const disabled = !r.hasDownload || uberReadyMode !== 'existing';
-                      const matches =
+                      const rowKey = uberReportRowKey(r);
+                      const matchesPeriod =
                         Boolean(uberPeriodStart) &&
                         Boolean(uberPeriodEnd) &&
                         uberReportMatchesPeriod(r, uberPeriodStart, uberPeriodEnd);
+                      const matchesType = uberReportMatchesType(r, uberReportTypeKey);
                       return (
                         <tr
-                          key={r.name + (r.createdAt ?? '')}
+                          key={rowKey}
                           className={`border-t border-slate-100 ${
                             !r.hasDownload
                               ? 'opacity-50'
-                              : matches
+                              : matchesPeriod && matchesType
                                 ? 'bg-emerald-50/70'
-                                : 'hover:bg-slate-50'
+                                : !matchesType
+                                  ? 'opacity-70'
+                                  : 'hover:bg-slate-50'
                           }`}
                         >
                           <td className="px-2 py-1.5">
@@ -774,23 +782,29 @@ export function SyncPagamentosModal({
                               type="radio"
                               name="uber-report-ready"
                               disabled={disabled}
-                              checked={uberSelectedReport === r.name}
+                              checked={uberSelectedRowKey === rowKey}
                               onChange={() => {
-                                setUberSelectedReport(r.name);
+                                setUberSelectedRowKey(rowKey);
                                 setUberReadyMode('existing');
                               }}
                             />
                           </td>
                           <td
-                            className="max-w-[14rem] truncate px-2 py-1.5 font-medium text-slate-800"
+                            className="max-w-[11rem] truncate px-2 py-1.5 font-medium text-slate-800"
                             title={r.name}
                           >
                             {r.name}
-                            {matches ? (
+                            {matchesPeriod && matchesType ? (
                               <span className="ml-1 text-[10px] font-normal text-emerald-700">
                                 (período)
                               </span>
                             ) : null}
+                          </td>
+                          <td
+                            className="max-w-[8rem] truncate px-2 py-1.5 text-slate-600"
+                            title={uberReportDisplayType(r)}
+                          >
+                            {uberReportDisplayType(r)}
                           </td>
                           <td
                             className="max-w-[10rem] truncate px-2 py-1.5 text-slate-600"
@@ -831,6 +845,22 @@ export function SyncPagamentosModal({
                     } catch {
                       /* ignore */
                     }
+                    const downloadable = listUberPaymentReports(uberReports).filter((r) =>
+                      uberReportMatchesType(r, next)
+                    );
+                    const match =
+                      pickLatestUberReportForPeriod(
+                        downloadable,
+                        uberPeriodStart,
+                        uberPeriodEnd
+                      ) ??
+                      downloadable.find((r) =>
+                        uberReportMatchesPeriod(r, uberPeriodStart, uberPeriodEnd)
+                      ) ??
+                      downloadable[0] ??
+                      null;
+                    setUberSelectedRowKey(match ? uberReportRowKey(match) : null);
+                    if (match) setUberReadyMode('existing');
                   }}
                 >
                   {UBER_REPORT_TYPE_CATALOG.map((t) => (

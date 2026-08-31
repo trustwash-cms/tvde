@@ -8,8 +8,12 @@ import {
   guessUberReportTypesFromReports,
   isoToLisbonDatetimeLocal,
   lisbonDatetimeLocalToIso,
+  pickLatestUberReportForPeriod,
   resolveUberReportType,
+  uberReportDisplayType,
+  uberReportMatchesPeriod,
   uberReportMatchesType,
+  uberReportRowKey,
   uberReportTypeLabel,
   UBER_REPORT_TYPE_CATALOG,
   DEFAULT_UBER_REPORT_TYPE,
@@ -54,7 +58,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState('');
   const [reports, setReports] = useState<UberReportListItem[]>([]);
-  const [selectedName, setSelectedName] = useState<string | null>(null);
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [organizationName, setOrganizationName] = useState(DEFAULT_ORG);
   const [reportTypeKey, setReportTypeKey] = useState<UberReportTypeKey>(DEFAULT_UBER_REPORT_TYPE);
   const [rangeStartLocal, setRangeStartLocal] = useState(() =>
@@ -70,12 +74,33 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
     [reports]
   );
 
+  const selectedReport = useMemo(
+    () => reports.find((r) => uberReportRowKey(r) === selectedRowKey) ?? null,
+    [reports, selectedRowKey]
+  );
+
+  function preselectReport(
+    items: UberReportListItem[],
+    typeKey: UberReportTypeKey,
+    range = defaultUberReportRange()
+  ) {
+    const downloadable = items.filter((r) => r.hasDownload && uberReportMatchesType(r, typeKey));
+    const startYmd = range.rangeStart.slice(0, 10);
+    const endYmd = range.rangeEnd.slice(0, 10);
+    const match =
+      pickLatestUberReportForPeriod(downloadable, startYmd, endYmd) ??
+      downloadable.find((r) => uberReportMatchesPeriod(r, startYmd, endYmd)) ??
+      downloadable[0] ??
+      null;
+    setSelectedRowKey(match ? uberReportRowKey(match) : null);
+  }
+
   useEffect(() => {
     if (!open) return;
     const range = defaultUberReportRange();
     setRangeStartLocal(isoToLisbonDatetimeLocal(range.rangeStart));
     setRangeEndLocal(isoToLisbonDatetimeLocal(range.rangeEnd));
-    setSelectedName(null);
+    setSelectedRowKey(null);
     setOrganizationName(readStoredOrg());
     setReportTypeKey(readStoredReportType());
     setActionError('');
@@ -95,15 +120,12 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
       }
       setReports(res.data);
       const storedType = readStoredReportType();
-      const paymentReports = res.data.filter(
-        (r) => r.hasDownload && uberReportMatchesType(r, storedType)
-      );
-      const firstDownloadable =
-        paymentReports.find((r) => r.hasDownload)?.name ??
-        res.data.find((r) => r.hasDownload && /payments_order/i.test(r.name))?.name ??
-        res.data.find((r) => r.hasDownload && !/driver_activity/i.test(r.name))?.name ??
-        null;
-      if (firstDownloadable) setSelectedName(firstDownloadable);
+      const typeFromList = guessUberReportTypesFromReports(res.data);
+      const finalType = typeFromList.includes(storedType)
+        ? storedType
+        : typeFromList[0] ?? storedType;
+      setReportTypeKey(finalType);
+      preselectReport(res.data, finalType, range);
 
       const guessed = guessUberOrganizationsFromReports(res.data.map((r) => r.name));
       const stored = readStoredOrg();
@@ -112,22 +134,16 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
       } else if (guessed[0]) {
         setOrganizationName(guessed[0]);
       }
-      const typeFromList = guessUberReportTypesFromReports(res.data);
-      if (typeFromList.includes(storedType)) {
-        setReportTypeKey(storedType);
-      } else if (typeFromList[0]) {
-        setReportTypeKey(typeFromList[0]);
-      }
     })();
   }, [open]);
 
   async function handleDownloadSelected() {
-    if (!selectedName) {
+    if (!selectedReport) {
       setActionError('Seleccione um relatório na lista');
       return;
     }
     setActionError('');
-    await onSync({ mode: 'existing', reportName: selectedName });
+    await onSync({ mode: 'existing', reportName: selectedReport.name });
   }
 
   async function handleGenerate() {
@@ -188,7 +204,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
           <button
             type="button"
             className="btn-primary text-sm inline-flex items-center gap-2"
-            disabled={busy || loadingList || !selectedName}
+            disabled={busy || loadingList || !selectedReport}
             onClick={() => void handleDownloadSelected()}
           >
             {busy ? <Loader2 size={14} className="animate-spin" /> : null}
@@ -201,7 +217,8 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
         <section className="space-y-2">
           <h3 className="text-sm font-semibold text-slate-800">Relatórios existentes</h3>
           <p className="text-xs text-slate-500">
-            Lista do Supplier (Relatórios). Escolha um e descarregue, ou gere um novo abaixo.
+            Lista do Supplier (Relatórios). A coluna Tipo ajuda a distinguir «Transação de pagamentos»
+            de «Atividade do motorista». Por defeito pré-selecciona o período da semana anterior.
           </p>
           {loadingList ? (
             <div className="flex items-center gap-2 rounded-md border border-sky-100 bg-sky-50 px-3 py-3 text-sm text-sky-900">
@@ -219,6 +236,7 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
                   <tr>
                     <th className="w-8 px-2 py-2" />
                     <th className="px-2 py-2 font-medium">Nome</th>
+                    <th className="px-2 py-2 font-medium">Tipo</th>
                     <th className="px-2 py-2 font-medium">Intervalo</th>
                     <th className="px-2 py-2 font-medium">Criado em</th>
                   </tr>
@@ -226,25 +244,47 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
                 <tbody>
                   {reports.map((r) => {
                     const disabled = !r.hasDownload;
+                    const rowKey = uberReportRowKey(r);
+                    const range = defaultUberReportRange();
+                    const matchesPeriod = uberReportMatchesPeriod(
+                      r,
+                      range.rangeStart.slice(0, 10),
+                      range.rangeEnd.slice(0, 10)
+                    );
+                    const matchesType = uberReportMatchesType(r, reportTypeKey);
                     return (
                       <tr
-                        key={r.name + (r.createdAt ?? '')}
-                        className={`border-t border-slate-100 ${disabled ? 'opacity-50' : 'hover:bg-slate-50'}`}
+                        key={rowKey}
+                        className={`border-t border-slate-100 ${
+                          disabled
+                            ? 'opacity-50'
+                            : matchesPeriod && matchesType
+                              ? 'bg-emerald-50/70'
+                              : !matchesType
+                                ? 'opacity-70'
+                                : 'hover:bg-slate-50'
+                        }`}
                       >
                         <td className="px-2 py-1.5">
                           <input
                             type="radio"
                             name="uber-report"
                             disabled={disabled || busy}
-                            checked={selectedName === r.name}
-                            onChange={() => setSelectedName(r.name)}
+                            checked={selectedRowKey === rowKey}
+                            onChange={() => setSelectedRowKey(rowKey)}
                           />
                         </td>
                         <td
-                          className="max-w-[14rem] truncate px-2 py-1.5 font-medium text-slate-800"
+                          className="max-w-[11rem] truncate px-2 py-1.5 font-medium text-slate-800"
                           title={r.name}
                         >
                           {r.name}
+                        </td>
+                        <td
+                          className="max-w-[8rem] truncate px-2 py-1.5 text-slate-600"
+                          title={uberReportDisplayType(r)}
+                        >
+                          {uberReportDisplayType(r)}
                         </td>
                         <td
                           className="max-w-[10rem] truncate px-2 py-1.5 text-slate-600"
@@ -277,7 +317,11 @@ export function UberSyncModal({ open, onClose, onSync, busy }: Props) {
               className="mt-1 w-full rounded-md border border-slate-200 px-2 py-1.5 text-sm"
               value={reportTypeKey}
               disabled={busy}
-              onChange={(e) => setReportTypeKey(resolveUberReportType(e.target.value))}
+              onChange={(e) => {
+                const next = resolveUberReportType(e.target.value);
+                setReportTypeKey(next);
+                preselectReport(reports, next);
+              }}
             >
               {UBER_REPORT_TYPE_CATALOG.map((t) => (
                 <option key={t.key} value={t.key}>
