@@ -60,6 +60,7 @@ const apiEnv = {
   TVDE_X11_ROOT: fs.existsSync(path.join(tvdeX11Root, 'usr/bin/Xvfb')) ? tvdeX11Root : undefined,
   // Arkose: Chromium headed no Xvfb para o stream «Desafio Uber» pintar
   PORTAL_RPA_UBER_HEADED_CONNECT: fileEnv.PORTAL_RPA_UBER_HEADED_CONNECT || 'true',
+  PORTAL_RPA_UBER_INTERACTIVE: fileEnv.PORTAL_RPA_UBER_INTERACTIVE || 'false',
   PORTAL_RPA_LIBS_DIR: fs.existsSync(playwrightLibs) ? playwrightLibs : undefined,
   PATH: [fs.existsSync(tvdeX11Bin) ? tvdeX11Bin : null, process.env.PATH].filter(Boolean).join(':'),
   LD_LIBRARY_PATH: [...tvdeX11Lib, playwrightLibPath, process.env.LD_LIBRARY_PATH]

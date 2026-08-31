@@ -1728,14 +1728,37 @@ async function fillLabeledReportDate(
   if (!(await input.isVisible().catch(() => false))) return false;
 
   await input.scrollIntoViewIfNeeded().catch(() => undefined);
-  await input.click({ timeout: 5000 });
-  await input.fill('');
-  await input.fill(dateSlash, { timeout: 8000 });
-  await input.dispatchEvent('input').catch(() => undefined);
-  await input.dispatchEvent('change').catch(() => undefined);
-  await input.dispatchEvent('blur').catch(() => undefined);
-  await page.waitForTimeout(200);
-  return true;
+  // Fechar popover do mês que intercepta cliques no campo seguinte
+  await page.keyboard.press('Escape').catch(() => undefined);
+  await page.waitForTimeout(150);
+
+  const setViaJs = await input
+    .evaluate(
+      `(el, val) => {
+        const inp = el;
+        inp.focus();
+        inp.value = val;
+        inp.dispatchEvent(new Event('input', { bubbles: true }));
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        inp.dispatchEvent(new Event('blur', { bubbles: true }));
+        return inp.value === val;
+      }`,
+      dateSlash
+    )
+    .catch(() => false);
+
+  if (!setViaJs) {
+    await input.click({ timeout: 8000, force: true });
+    await input.fill('', { force: true });
+    await input.fill(dateSlash, { timeout: 8000, force: true });
+    await input.dispatchEvent('input').catch(() => undefined);
+    await input.dispatchEvent('change').catch(() => undefined);
+    await input.dispatchEvent('blur').catch(() => undefined);
+  }
+
+  await page.waitForTimeout(250);
+  const current = (await input.inputValue().catch(() => '')).trim();
+  return current === dateSlash || current.replace(/-/g, '/') === dateSlash;
 }
 
 async function readLabeledReportDate(page: Page, labelRe: RegExp): Promise<string> {
@@ -1806,6 +1829,10 @@ async function fillCustomReportRange(
   const endTimeOpt = snapUberTimeOption(end);
 
   let startOk = await fillLabeledReportDate(page, /^data de início$/i, startDate);
+  if (startOk) {
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await page.waitForTimeout(350);
+  }
   let endOk = await fillLabeledReportDate(page, /^data de fim$/i, endDate);
 
   if (!startOk || !endOk) {

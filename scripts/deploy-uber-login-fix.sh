@@ -21,7 +21,9 @@ echo "==> build api+web, Playwright heal, XAUTHORITY, restart"
 ssh -i "$KEY" -o StrictHostKeyChecking=no "$HOST" 'set -e
   cd ~/tvde
   # Produção: headless + modal Desafio Uber (não bloquear no Chromium interactivo)
-  if grep -q "^PORTAL_RPA_UBER_INTERACTIVE=" .env 2>/dev/null; then
+  if grep -q "^PORTAL_RPA_UBER_INTERACTIVE=true" .env 2>/dev/null; then
+    echo "==== PORTAL_RPA_UBER_INTERACTIVE=true (debug — mantido) ===="
+  elif grep -q "^PORTAL_RPA_UBER_INTERACTIVE=" .env 2>/dev/null; then
     sed -i "s/^PORTAL_RPA_UBER_INTERACTIVE=.*/PORTAL_RPA_UBER_INTERACTIVE=false/" .env
   else
     echo "PORTAL_RPA_UBER_INTERACTIVE=false" >> .env

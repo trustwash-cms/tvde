@@ -1241,12 +1241,16 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
           if (uberHeadedConnect) {
             console.log(
               `[portal-rpa] Uber connect headed DISPLAY=${process.env.DISPLAY ?? '-'} ` +
-                `interactive=${uberInteractive} headedConnect=${env.portalRpaUberHeadedConnect}`
+                `interactive=${uberInteractive} headedConnect=${env.portalRpaUberHeadedConnect} ` +
+                `(ver browser: noVNC http://<servidor>:6901 pw tvde-arkose)`
             );
+            await page.setViewportSize({ width: 1440, height: 900 }).catch(() => undefined);
+            await page.bringToFront().catch(() => undefined);
           }
           const phase = await adapter.login(page, username, password);
           if (phase.status === 'awaiting_otp' || phase.status === 'awaiting_passkey') {
             await registerLiveOtpSession(jobId, browser, context, page);
+            await page.bringToFront().catch(() => undefined);
           }
           return { phase, browser, context };
         }

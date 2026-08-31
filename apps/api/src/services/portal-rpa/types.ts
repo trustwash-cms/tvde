@@ -673,7 +673,8 @@ async function launchChromium(headless: boolean): Promise<Browser> {
     } else {
       console.log(
         `[portal-rpa] Chromium headed DISPLAY=${display ?? process.env.DISPLAY ?? '(none)'} ` +
-          `(Arkose precisa de paint real para o stream Desafio Uber)`
+          `XAUTHORITY=${process.env.XAUTHORITY ?? '-'} ` +
+          `(stream=modal Desafio Uber; ecrã completo=noVNC :6901)`
       );
     }
   }
@@ -686,7 +687,7 @@ async function launchChromium(headless: boolean): Promise<Browser> {
       '--disable-blink-features=AutomationControlled',
       // Headed + Xvfb: GPU software costuma falhar; headless clássico também
       '--disable-gpu',
-      ...(useHeadless ? [] : ['--window-size=1440,900']),
+      ...(useHeadless ? [] : ['--window-size=1440,900', '--window-position=0,0', '--start-maximized']),
     ],
   };
 
