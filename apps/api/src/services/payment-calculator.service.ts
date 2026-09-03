@@ -132,6 +132,7 @@ export async function calculateDriverPayment(
     fuelTransactionIds: [] as string[],
     uberPaymentIds: [] as string[],
     boltOrderIds: [] as string[],
+    boltEarningIds: [] as string[],
     driverExpenseIds: [] as string[],
   };
 
@@ -184,11 +185,23 @@ export async function calculateDriverPayment(
 
   let boltTotal = 0;
   for (const [, vehicle] of boltByUuid) {
-    const rows = await db.boltOrder.findMany({
+    const driverUuid = vehicle.uuidBolt!;
+    // Preferir CSV Fleet «Ganhos por motorista» (Pagamento previsto) se existir para o período
+    const earning = await db.boltDriverEarning.findFirst({
       where: {
         tenantId,
         isPaid: false,
-        driverUuid: { equals: vehicle.uuidBolt!, mode: 'insensitive' },
+        driverUuid: { equals: driverUuid, mode: 'insensitive' },
+        periodStart: periodStart,
+        periodEnd: periodEnd,
+      },
+    });
+
+    const orderRows = await db.boltOrder.findMany({
+      where: {
+        tenantId,
+        isPaid: false,
+        driverUuid: { equals: driverUuid, mode: 'insensitive' },
         orderCreatedTimestamp: {
           gte: periodStart,
           lte: endOfDayUtc(periodEnd),
@@ -211,19 +224,31 @@ export async function calculateDriverPayment(
         orderReference: true,
       },
     });
-    const sum = rows.reduce((acc, r) => {
+    // Marcar pedidos do período mesmo quando usamos CSV (não voltarem a entrar)
+    ids.boltOrderIds.push(...orderRows.map((r) => r.id));
+
+    if (earning) {
+      const sum = dec(earning.netAmount);
+      boltTotal += sum;
+      ids.boltEarningIds.push(earning.id);
+      detalhes.bolt.push({
+        label: `Bolt · ${vehicle.matricula} · ${driverUuid}`,
+        amount: money(sum),
+        meta: `CSV ganhos líquidos ${periodStartStr}→${periodEndStr} (em aberto)`,
+      });
+      continue;
+    }
+
+    const sum = orderRows.reduce((acc, r) => {
       if (r.payoutAmount != null) return acc + dec(r.payoutAmount);
-      if (r.netEarnings != null) {
-        return acc + dec(r.netEarnings) + dec(r.tip) + dec(r.tollFee);
-      }
+      if (r.netEarnings != null) return acc + dec(r.netEarnings);
       return acc + dec(r.ridePrice);
     }, 0);
     boltTotal += sum;
-    ids.boltOrderIds.push(...rows.map((r) => r.id));
     detalhes.bolt.push({
-      label: `Bolt · ${vehicle.matricula} · ${vehicle.uuidBolt}`,
+      label: `Bolt · ${vehicle.matricula} · ${driverUuid}`,
       amount: money(sum),
-      meta: `${rows.length} corridas (líquido net+tip+portagem · em aberto)`,
+      meta: `${orderRows.length} corridas (net_earnings Fleet · sem CSV)`,
     });
   }
   if (boltByUuid.size === 0 && vehicles.some((v) => v.uuidBolt?.trim())) {

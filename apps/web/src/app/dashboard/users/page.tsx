@@ -7,6 +7,8 @@ import {
   canManageUser,
   canToggleUserStatus,
   canViewUserProfile,
+  hasMinRole,
+  isDriverRole,
   type Role,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken, storeTokens } from '@/lib/api';
@@ -17,6 +19,7 @@ import { EditUserModal } from '@/components/users/edit-user-modal';
 import { DeleteUserModal } from '@/components/users/delete-user-modal';
 import { UserDetailsModal } from '@/components/users/user-details-modal';
 import { UserVehiclesModal } from '@/components/users/user-vehicles-modal';
+import { DriverPaidPaymentsModal } from '@/components/pagamentos/driver-paid-payments-modal';
 import { useAlertDialog } from '@/hooks/use-alert-dialog';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 
@@ -44,6 +47,7 @@ export default function UsersPage() {
   const [deleteUser, setDeleteUser] = useState<UserListItem | null>(null);
   const [detailsUser, setDetailsUser] = useState<UserListItem | null>(null);
   const [vehiclesUser, setVehiclesUser] = useState<UserListItem | null>(null);
+  const [paidPaymentsUser, setPaidPaymentsUser] = useState<UserListItem | null>(null);
   const [credentialsBusyId, setCredentialsBusyId] = useState<string | null>(null);
 
   const isMaster = actorRole === 'master';
@@ -282,6 +286,11 @@ export default function UsersPage() {
     return true;
   }
 
+  function canViewPaidPayments(u: UserListItem): boolean {
+    if (!actorRole || !hasMinRole(actorRole, 'superadmin')) return false;
+    return isDriverRole(u.role as Role);
+  }
+
   async function handleImpersonate(u: UserListItem) {
     const name = u.fullName || u.username || u.email;
     const ok = await confirm({
@@ -368,6 +377,7 @@ export default function UsersPage() {
                 canDelete={canDeleteUser(u)}
                 canToggle={canToggleUser(u)}
                 canDetails={canViewDetails(u)}
+                canPaidPayments={canViewPaidPayments(u)}
                 canVehicles={canViewDetails(u)}
                 canImpersonate={canImpersonateUser(u)}
                 canContaCorrente={actorRole === 'master' || actorRole === 'superadmin'}
@@ -377,6 +387,7 @@ export default function UsersPage() {
                 onDelete={() => setDeleteUser(u)}
                 onToggleStatus={() => handleToggleStatus(u)}
                 onDetails={() => setDetailsUser(u)}
+                onPaidPayments={() => setPaidPaymentsUser(u)}
                 onVehicles={() => setVehiclesUser(u)}
                 onImpersonate={() => handleImpersonate(u)}
                 onCredentialsAction={() => handleCredentialsAction(u)}
@@ -435,6 +446,12 @@ export default function UsersPage() {
           open={!!vehiclesUser}
           user={vehiclesUser}
           onClose={() => setVehiclesUser(null)}
+        />
+
+        <DriverPaidPaymentsModal
+          open={!!paidPaymentsUser}
+          user={paidPaymentsUser}
+          onClose={() => setPaidPaymentsUser(null)}
         />
       </div>
     </>

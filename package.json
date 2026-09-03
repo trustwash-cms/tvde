@@ -18,7 +18,7 @@
     "db:rls": "docker exec -i tvde_postgres psql -U tvde -d tvde < packages/database/prisma/rls.sql",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "playwright:install": "npx playwright install chromium",
+    "playwright:install": "npx playwright install chromium firefox",
     "playwright:libs": "bash scripts/setup-playwright-libs.sh"
   },
   "devDependencies": {

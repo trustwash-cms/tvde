@@ -8,11 +8,11 @@ import {
   Calendar,
   Check,
   CheckCircle2,
-  Clock,
   Eye,
   Loader2,
   Mail,
   Paperclip,
+  Percent,
   RefreshCw,
   Trash2,
   Wallet,
@@ -20,8 +20,10 @@ import {
 } from 'lucide-react';
 import {
   defaultPaymentWeekRange,
+  hasMinRole,
   type PaymentCalculation,
   type PaymentDriverOption,
+  type Role,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiUrl, getStoredToken } from '@/lib/api';
 import { Modal } from '@/components/modal';
@@ -49,6 +51,18 @@ function formatDateTime(iso: string | null) {
     hour: '2-digit',
     minute: '2-digit',
   });
+}
+
+function computeIva6Receitas(receitasTotal: number) {
+  const ivaAmount = Math.round(receitasTotal * 0.06 * 100) / 100;
+  const diferencaAmount = Math.round((receitasTotal - ivaAmount) * 100) / 100;
+  return { ivaAmount, diferencaAmount };
+}
+
+function isValidEmail(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed);
 }
 
 function MoneyRow({
@@ -100,6 +114,9 @@ type PaymentReportRow = {
   lastSentAt: string | null;
   attachmentsCount: number;
   createdAt: string;
+  adminIvaReceitas6?: string | null;
+  adminIvaReceitasSentAt?: string | null;
+  adminIvaReceitasSentTo?: string | null;
 };
 
 type PaymentReportDetail = PaymentReportRow & {
@@ -117,7 +134,17 @@ type PaymentAttachment = {
   mimeType: string;
   sizeBytes: string;
   createdAt: string;
+  fileAvailable?: boolean;
 };
+
+async function downloadAttachmentError(res: Response): Promise<string> {
+  const contentType = res.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const json = (await res.json()) as { error?: string };
+    return json.error ?? 'Não foi possível descarregar o ficheiro';
+  }
+  return 'Não foi possível descarregar o ficheiro';
+}
 
 type ReportsList = {
   items: PaymentReportRow[];
@@ -131,7 +158,6 @@ type Filters = {
   periodStart: string;
   periodEnd: string;
   search: string;
-  isPaid: '' | 'true' | 'false';
   paymentMethod: string;
   perPage: number;
 };
@@ -140,7 +166,6 @@ const EMPTY_FILTERS: Filters = {
   periodStart: '',
   periodEnd: '',
   search: '',
-  isPaid: '',
   paymentMethod: '',
   perPage: 25,
 };
@@ -178,6 +203,15 @@ export function PagamentosPanel() {
   const [attachments, setAttachments] = useState<PaymentAttachment[]>([]);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [uploadingAttachment, setUploadingAttachment] = useState(false);
+  const [actorRole, setActorRole] = useState<Role | null>(null);
+  const [ivaModal, setIvaModal] = useState<PaymentReportRow | null>(null);
+  const [ivaEmail, setIvaEmail] = useState('');
+  const [ivaSending, setIvaSending] = useState(false);
+  const [ivaIncludeCarro, setIvaIncludeCarro] = useState(false);
+  const [ivaCarroBase, setIvaCarroBase] = useState('');
+  const [zipDownloading, setZipDownloading] = useState(false);
+
+  const isSuperadmin = actorRole ? hasMinRole(actorRole, 'superadmin') : false;
 
   const loadDefaultRange = useCallback(() => {
     const range = defaultPaymentWeekRange();
@@ -214,10 +248,10 @@ export function PagamentosPanel() {
     const params = new URLSearchParams();
     params.set('page', String(page));
     params.set('perPage', String(applied.perPage));
+    params.set('isPaid', 'false');
     if (applied.periodStart) params.set('periodStart', applied.periodStart);
     if (applied.periodEnd) params.set('periodEnd', applied.periodEnd);
     if (applied.search.trim()) params.set('search', applied.search.trim());
-    if (applied.isPaid) params.set('isPaid', applied.isPaid);
     if (applied.paymentMethod) params.set('paymentMethod', applied.paymentMethod);
 
     const res = await apiFetch<ReportsList>(
@@ -237,6 +271,9 @@ export function PagamentosPanel() {
     void loadDrivers();
     loadDefaultRange();
     void loadMethods();
+    apiFetch<{ role: Role }>(API_PATHS.auth.me, {}, getStoredToken()).then((res) => {
+      if (res.data?.role) setActorRole(res.data.role);
+    });
   }, [loadDrivers, loadDefaultRange, loadMethods]);
 
   useEffect(() => {
@@ -284,7 +321,7 @@ export function PagamentosPanel() {
   }
 
   async function handleConfirm() {
-    if (!userId || !result) return;
+    if (!userId || !result || confirming) return;
     setConfirming(true);
     setError('');
     setSuccess('');
@@ -305,7 +342,8 @@ export function PagamentosPanel() {
       setError(res.error ?? 'Não foi possível gravar o pagamento');
       return;
     }
-    setResult(res.data.calculation);
+    // Esconde o resumo + botão para evitar duplo clique / segundo lançamento
+    setResult(null);
     setSuccess('Pagamento gravado. Movimentos incluídos marcados como pagos.');
     void loadReports();
   }
@@ -434,6 +472,76 @@ export function PagamentosPanel() {
     void loadReports();
   }
 
+  function openIvaModal(row: PaymentReportRow) {
+    setIvaModal(row);
+    setIvaEmail(row.adminIvaReceitasSentTo ?? '');
+    setIvaIncludeCarro(false);
+    const comissao = Number(row.despesasComissao);
+    setIvaCarroBase(Number.isFinite(comissao) && comissao > 0 ? comissao.toFixed(2) : '300');
+    setError('');
+  }
+
+  async function sendIva6Email() {
+    if (!ivaModal) return;
+    const to = ivaEmail.trim();
+    if (!isValidEmail(to)) {
+      setError('Indique um endereço de email válido');
+      return;
+    }
+
+    const receitas = Number(ivaModal.receitasTotal);
+    const { ivaAmount } = computeIva6Receitas(receitas);
+    const carroBaseNum = Number(String(ivaCarroBase).replace(',', '.'));
+    if (ivaIncludeCarro && (!Number.isFinite(carroBaseNum) || carroBaseNum < 0)) {
+      setError('Indique um valor do carro válido');
+      return;
+    }
+
+    const carroLine = ivaIncludeCarro
+      ? `\nCarro: ${formatMoney(carroBaseNum)} − IVA = ${formatMoney(Math.round((carroBaseNum - ivaAmount) * 100) / 100)}`
+      : '';
+
+    const ok = await confirm({
+      title: 'Enviar IVA 6%',
+      message: `Enviar o relatório de IVA (${formatMoney(ivaAmount)}) para ${to}?${carroLine}\n\nMotorista: ${ivaModal.userLabel}\nPeríodo: ${formatDatePt(ivaModal.periodStart)} – ${formatDatePt(ivaModal.periodEnd)}\n\nO motorista não recebe este email.`,
+      confirmLabel: 'Enviar',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return;
+
+    setIvaSending(true);
+    setError('');
+    const res = await apiFetch<{
+      sentAt: string;
+      to: string;
+      receitasTotal: string;
+      ivaAmount: string;
+      diferencaAmount: string;
+    }>(
+      API_PATHS.pagamentos.reportIva6Email(ivaModal.id),
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          to,
+          includeCarro: ivaIncludeCarro,
+          ...(ivaIncludeCarro ? { carroBase: carroBaseNum } : {}),
+        }),
+      },
+      getStoredToken()
+    );
+    setIvaSending(false);
+    if (!res.success) {
+      setError(res.error ?? 'Falha ao enviar email de IVA');
+      return;
+    }
+    setSuccess(`IVA gravado e email enviado para ${res.data?.to ?? to}`);
+    setIvaModal(null);
+    setIvaEmail('');
+    setIvaIncludeCarro(false);
+    setIvaCarroBase('');
+    void loadReports();
+  }
+
   async function openAttachments(row: PaymentReportRow) {
     setAttachModal(row);
     setAttachments([]);
@@ -490,13 +598,17 @@ export function PagamentosPanel() {
 
   async function downloadAttachment(att: PaymentAttachment) {
     if (!attachModal) return;
+    if (att.fileAvailable === false) {
+      setError('Ficheiro em falta no servidor — volte a carregar o comprovativo');
+      return;
+    }
     const token = getStoredToken();
     const res = await fetch(
       `${getApiUrl()}${API_PATHS.pagamentos.reportAttachmentDownload(attachModal.id, att.id)}`,
       { headers: token ? { Authorization: `Bearer ${token}` } : {} }
     );
     if (!res.ok) {
-      setError('Não foi possível descarregar o ficheiro');
+      setError(await downloadAttachmentError(res));
       return;
     }
     const blob = await res.blob();
@@ -533,13 +645,57 @@ export function PagamentosPanel() {
   }
 
   const resultadoNum = result ? Number(result.resultado) : 0;
-  const zipEnabled = Boolean(filters.periodStart && filters.periodEnd);
+  const zipEnabled = Boolean(applied.periodStart && applied.periodEnd);
+
+  async function downloadAttachmentsZip() {
+    if (!zipEnabled) return;
+    setZipDownloading(true);
+    setError('');
+    const params = new URLSearchParams();
+    params.set('isPaid', 'false');
+    params.set('periodStart', applied.periodStart);
+    params.set('periodEnd', applied.periodEnd);
+    if (applied.search.trim()) params.set('search', applied.search.trim());
+    if (applied.paymentMethod) params.set('paymentMethod', applied.paymentMethod);
+
+    const token = getStoredToken();
+    const res = await fetch(
+      `${getApiUrl()}${API_PATHS.pagamentos.reportsAttachmentsZip}?${params}`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    );
+    setZipDownloading(false);
+
+    const contentType = res.headers.get('content-type') ?? '';
+    if (!res.ok) {
+      if (contentType.includes('application/json')) {
+        const json = (await res.json()) as { error?: string };
+        setError(json.error ?? 'Falha ao gerar ZIP');
+      } else {
+        setError('Falha ao gerar ZIP');
+      }
+      return;
+    }
+
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const disposition = res.headers.get('content-disposition') ?? '';
+    const match = /filename="([^"]+)"/.exec(disposition);
+    a.href = url;
+    a.download = match?.[1] ?? `pagamentos_anexos_${applied.periodStart}_${applied.periodEnd}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setSuccess('ZIP descarregado');
+  }
 
   return (
     <div className="space-y-6">
       {confirmDialog}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-500">Gestão de pagamentos dos motoristas</p>
+        <p className="text-sm text-slate-500">
+          Gestão de pagamentos pendentes dos motoristas. Os pagos ficam no card do motorista em{' '}
+          <span className="font-medium text-slate-700">Utilizadores</span> (ícone €).
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
@@ -768,23 +924,6 @@ export function PagamentosPanel() {
             />
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Estado</span>
-            <select
-              className="input w-full"
-              value={filters.isPaid}
-              onChange={(e) =>
-                setFilters((f) => ({
-                  ...f,
-                  isPaid: e.target.value as Filters['isPaid'],
-                }))
-              }
-            >
-              <option value="">Todos</option>
-              <option value="true">Pago</option>
-              <option value="false">Pendente</option>
-            </select>
-          </label>
-          <label className="block text-sm">
             <span className="mb-1 block text-slate-600">Método</span>
             <select
               className="input w-full"
@@ -828,19 +967,23 @@ export function PagamentosPanel() {
           </button>
           <button
             type="button"
-            className="btn-secondary"
-            disabled={!zipEnabled}
+            className="btn-secondary inline-flex items-center gap-2"
+            disabled={!zipEnabled || zipDownloading}
             title={
               zipEnabled
-                ? 'Exportação ZIP em breve'
-                : 'Indique período (início e fim) para exportar anexos'
+                ? 'Descarregar comprovativos dos pendentes no período (ZIP)'
+                : 'Indique período (início e fim) e filtre'
             }
+            onClick={() => void downloadAttachmentsZip()}
           >
+            {zipDownloading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : null}
             Download anexos (ZIP)
           </button>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="overflow-x-auto px-0.5 pb-1 pt-2.5">
           <table className="w-full min-w-[960px] text-sm">
             <thead className="bg-slate-50 text-left text-slate-500">
               <tr>
@@ -852,7 +995,6 @@ export function PagamentosPanel() {
                 <th className="px-3 py-3 font-medium">Resultado</th>
                 <th className="px-3 py-3 font-medium">Último envio</th>
                 <th className="px-3 py-3 font-medium">Método</th>
-                <th className="px-3 py-3 font-medium">Pago</th>
                 <th className="px-3 py-3 font-medium">Ações</th>
               </tr>
             </thead>
@@ -930,21 +1072,8 @@ export function PagamentosPanel() {
                         <span className="text-slate-400">—</span>
                       )}
                     </td>
-                    <td className="px-3 py-3">
-                      {row.isPaid ? (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
-                          <Check className="h-3 w-3" />
-                          Pago
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-                          <Clock className="h-3 w-3" />
-                          Pendente
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div className="inline-flex overflow-hidden rounded-md border border-slate-200 bg-white">
+                    <td className="overflow-visible px-3 py-3">
+                      <div className="inline-flex overflow-visible rounded-md border border-slate-200 bg-white shadow-sm">
                         <button
                           type="button"
                           className="border-r border-slate-200 p-2 text-slate-600 hover:bg-slate-50"
@@ -954,30 +1083,18 @@ export function PagamentosPanel() {
                         >
                           <Eye className="h-4 w-4" />
                         </button>
-                        {row.isPaid ? (
-                          <button
-                            type="button"
-                            className="border-r border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
-                            title="Marcar pendente"
-                            disabled={busyId === row.id}
-                            onClick={() => void markPending(row)}
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        ) : (
-                          <button
-                            type="button"
-                            className="border-r border-slate-200 p-2 text-emerald-700 hover:bg-emerald-50"
-                            title="Marcar pago"
-                            disabled={busyId === row.id}
-                            onClick={() => {
-                              setPayModal(row);
-                              setPayMethod(methods[0]?.code ?? '');
-                            }}
-                          >
-                            <Check className="h-4 w-4" />
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          className="border-r border-slate-200 p-2 text-emerald-700 hover:bg-emerald-50"
+                          title="Marcar pago"
+                          disabled={busyId === row.id}
+                          onClick={() => {
+                            setPayModal(row);
+                            setPayMethod(methods[0]?.code ?? '');
+                          }}
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
                         <button
                           type="button"
                           className="border-r border-slate-200 p-2 text-sky-600 hover:bg-sky-50 disabled:cursor-not-allowed disabled:opacity-40"
@@ -997,16 +1114,36 @@ export function PagamentosPanel() {
                             <Mail className="h-4 w-4" />
                           )}
                         </button>
+                        {isSuperadmin ? (
+                          <button
+                            type="button"
+                            className="relative overflow-visible border-r border-slate-200 p-2 text-violet-600 hover:bg-violet-50"
+                            title={
+                              row.adminIvaReceitasSentAt
+                                ? `IVA 6% — enviado ${formatDateTime(row.adminIvaReceitasSentAt)} para ${row.adminIvaReceitasSentTo ?? '—'}`
+                                : 'IVA 6% sobre receitas (email interno)'
+                            }
+                            disabled={busyId === row.id}
+                            onClick={() => openIvaModal(row)}
+                          >
+                            <Percent className="h-4 w-4" />
+                            {row.adminIvaReceitas6 ? (
+                              <span className="pointer-events-none absolute right-0 top-0 z-10 flex h-4 min-w-4 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full bg-violet-600 px-0.5 text-[10px] font-bold leading-none text-white ring-2 ring-white">
+                                ✓
+                              </span>
+                            ) : null}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
-                          className="relative border-r border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
+                          className="relative overflow-visible border-r border-slate-200 p-2 text-slate-500 hover:bg-slate-50"
                           title="Comprovativos"
                           disabled={busyId === row.id}
                           onClick={() => void openAttachments(row)}
                         >
                           <Paperclip className="h-4 w-4" />
                           {row.attachmentsCount > 0 ? (
-                            <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-sky-600 px-1 text-[10px] font-bold text-white">
+                            <span className="pointer-events-none absolute right-0 top-0 z-10 flex h-4 min-w-4 -translate-y-1/2 translate-x-1/2 items-center justify-center rounded-full bg-sky-600 px-0.5 text-[10px] font-bold leading-none text-white ring-2 ring-white">
                               {row.attachmentsCount}
                             </span>
                           ) : null}
@@ -1027,14 +1164,14 @@ export function PagamentosPanel() {
               })}
               {!loadingList && !list?.items.length ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
-                    Sem pagamentos — use «Calcular pagamento» para gerar o primeiro relatório.
+                  <td colSpan={9} className="px-3 py-10 text-center text-slate-400">
+                    Sem pagamentos pendentes — use «Calcular pagamento» para gerar o primeiro relatório.
                   </td>
                 </tr>
               ) : null}
               {loadingList ? (
                 <tr>
-                  <td colSpan={10} className="px-3 py-10 text-center text-slate-400">
+                  <td colSpan={9} className="px-3 py-10 text-center text-slate-400">
                     <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                   </td>
                 </tr>
@@ -1265,13 +1402,19 @@ export function PagamentosPanel() {
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-1">
-                      <button
-                        type="button"
-                        className="rounded px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50"
-                        onClick={() => void downloadAttachment(att)}
-                      >
-                        Download
-                      </button>
+                      {att.fileAvailable === false ? (
+                        <span className="rounded px-2 py-1 text-xs font-medium text-amber-700">
+                          Em falta
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="rounded px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50"
+                          onClick={() => void downloadAttachment(att)}
+                        >
+                          Download
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
@@ -1287,6 +1430,159 @@ export function PagamentosPanel() {
           </div>
         )}
       </Modal>
+
+      {ivaModal ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900">IVA 6% sobre receitas</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              {ivaModal.userLabel}
+              {ivaModal.userEmail ? ` · ${ivaModal.userEmail}` : ''}
+            </p>
+            <p className="text-sm text-slate-500">
+              {formatDatePt(ivaModal.periodStart)} até {formatDatePt(ivaModal.periodEnd)}
+            </p>
+
+            {(() => {
+              const receitas = Number(ivaModal.receitasTotal);
+              const { ivaAmount, diferencaAmount } = computeIva6Receitas(receitas);
+              const carroBaseNum = Number(String(ivaCarroBase).replace(',', '.'));
+              const carroAmount =
+                ivaIncludeCarro && Number.isFinite(carroBaseNum)
+                  ? Math.round((carroBaseNum - ivaAmount) * 100) / 100
+                  : null;
+              return (
+                <div className="mt-4 space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-600">Receitas (corridas)</span>
+                    <span className="font-medium tabular-nums text-slate-900">
+                      {formatMoney(receitas)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-slate-600">IVA 6%</span>
+                    <span className="font-semibold tabular-nums text-red-600">
+                      {formatMoney(ivaAmount)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between gap-4 border-t border-slate-200 pt-2">
+                    <span className="font-medium text-slate-700">Diferença (receitas − IVA)</span>
+                    <span className="font-semibold tabular-nums text-emerald-700">
+                      {formatMoney(diferencaAmount)}
+                    </span>
+                  </div>
+
+                  <label className="mt-2 flex items-center gap-2 border-t border-slate-200 pt-3 text-slate-700">
+                    <input
+                      type="checkbox"
+                      className="rounded border-slate-300"
+                      checked={ivaIncludeCarro}
+                      disabled={ivaSending}
+                      onChange={(e) => setIvaIncludeCarro(e.target.checked)}
+                    />
+                    <span className="font-medium">Incluir Carro no email</span>
+                  </label>
+
+                  {ivaIncludeCarro ? (
+                    <div className="space-y-2 rounded-md border border-violet-200 bg-violet-50/80 p-3">
+                      <label className="block text-xs text-slate-600">
+                        Valor do carro
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="input mt-1 w-full"
+                          value={ivaCarroBase}
+                          disabled={ivaSending}
+                          onChange={(e) => setIvaCarroBase(e.target.value)}
+                        />
+                      </label>
+                      <div className="flex justify-between gap-4">
+                        <span className="font-medium text-violet-800">Semana do Carro</span>
+                        <span className="font-semibold tabular-nums text-violet-800">
+                          {carroAmount != null && Number.isFinite(carroAmount)
+                            ? formatMoney(carroAmount)
+                            : '—'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-violet-600">
+                        {Number.isFinite(carroBaseNum)
+                          ? `${formatMoney(carroBaseNum)} − ${formatMoney(ivaAmount)} · no email substitui a Diferença`
+                          : 'Indique o valor do carro'}
+                      </p>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })()}
+
+            {ivaModal.adminIvaReceitasSentAt ? (
+              <p className="mt-3 text-xs text-violet-700">
+                Último envio: {formatDateTime(ivaModal.adminIvaReceitasSentAt)}
+                {ivaModal.adminIvaReceitasSentTo ? ` → ${ivaModal.adminIvaReceitasSentTo}` : ''}
+                {ivaModal.adminIvaReceitas6
+                  ? ` · IVA gravado: ${formatMoney(ivaModal.adminIvaReceitas6)}`
+                  : ''}
+              </p>
+            ) : null}
+
+            <label className="mt-4 block text-sm">
+              <span className="mb-1 block text-slate-600">Enviar por email para</span>
+              <input
+                type="email"
+                className="input w-full"
+                placeholder="contabilidade@empresa.pt"
+                value={ivaEmail}
+                disabled={ivaSending}
+                onChange={(e) => setIvaEmail(e.target.value)}
+              />
+              {ivaEmail.trim() && !isValidEmail(ivaEmail) ? (
+                <span className="mt-1 block text-xs text-red-600">
+                  Indique um endereço de email válido
+                </span>
+              ) : null}
+            </label>
+
+            <p className="mt-2 text-xs text-slate-500">
+              O motorista não vê nem recebe este valor — uso interno / fiscal.
+            </p>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                disabled={ivaSending}
+                onClick={() => {
+                  setIvaModal(null);
+                  setIvaEmail('');
+                  setIvaIncludeCarro(false);
+                  setIvaCarroBase('');
+                }}
+              >
+                Fechar
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={
+                  ivaSending ||
+                  !isValidEmail(ivaEmail) ||
+                  (ivaIncludeCarro &&
+                    (!Number.isFinite(Number(String(ivaCarroBase).replace(',', '.'))) ||
+                      Number(String(ivaCarroBase).replace(',', '.')) < 0))
+                }
+                onClick={() => void sendIva6Email()}
+              >
+                {ivaSending ? (
+                  <Loader2 className="inline h-4 w-4 animate-spin" />
+                ) : (
+                  'Enviar email'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <SyncPagamentosModal
         open={syncOpen}

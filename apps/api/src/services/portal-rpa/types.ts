@@ -240,6 +240,9 @@ function preparePlaywrightEnv() {
     .join(':');
   process.env.LD_LIBRARY_PATH = libPath;
 
+  // Firefox/WebKit: validação de apt falha sem sudo; libs estão em .playwright-libs
+  process.env.PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = '1';
+
   const fontsConf = join(libsDir, 'etc', 'fonts', 'fonts.conf');
   if (existsSync(fontsConf)) {
     process.env.FONTCONFIG_PATH = join(libsDir, 'etc', 'fonts');
@@ -314,10 +317,12 @@ function runHealCommand(
 }
 
 function tryHealMissingBrowser(root: string): { ok: boolean; detail: string } {
+  const engine = resolvePortalBrowserEngine();
+  const pkg = engine === 'chrome' ? 'chromium' : engine;
   return runHealCommand(
-    'playwright install chromium',
+    `playwright install ${pkg}`,
     'npx',
-    ['playwright', 'install', 'chromium'],
+    ['playwright', 'install', pkg],
     root,
     180_000
   );
@@ -332,7 +337,11 @@ function tryHealMissingLibs(root: string): { ok: boolean; detail: string } {
 }
 
 function classifyLaunchFailure(detail: string): 'missing_browser' | 'missing_libs' | 'other' {
-  if (/Executable doesn't exist|playwright install|chromium_headless_shell|Chromium em falta/i.test(detail)) {
+  if (
+    /Executable doesn't exist|playwright install|chromium_headless_shell|Chromium em falta|Firefox em falta|WebKit em falta|Browser Playwright em falta/i.test(
+      detail
+    )
+  ) {
     return 'missing_browser';
   }
   if (
@@ -343,6 +352,41 @@ function classifyLaunchFailure(detail: string): 'missing_browser' | 'missing_lib
     return 'missing_libs';
   }
   return 'other';
+}
+
+export type PortalRpaBrowserEngine = 'chromium' | 'firefox' | 'webkit' | 'chrome';
+
+/** Motor configurado em PORTAL_RPA_BROWSER (default chromium). */
+export function resolvePortalBrowserEngine(): PortalRpaBrowserEngine {
+  const raw = (process.env.PORTAL_RPA_BROWSER || 'chromium').toLowerCase().trim();
+  if (raw === 'firefox' || raw === 'webkit' || raw === 'chrome' || raw === 'chromium') {
+    return raw;
+  }
+  return 'chromium';
+}
+
+function browserEngineLabel(engine: PortalRpaBrowserEngine): string {
+  switch (engine) {
+    case 'firefox':
+      return 'Firefox';
+    case 'webkit':
+      return 'WebKit';
+    case 'chrome':
+      return 'Google Chrome';
+    default:
+      return 'Chromium';
+  }
+}
+
+function defaultUserAgent(engine: PortalRpaBrowserEngine): string {
+  if (engine === 'firefox') {
+    return 'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0';
+  }
+  if (engine === 'webkit') {
+    return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
+  }
+  // chromium / chrome
+  return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 }
 
 /**
@@ -356,16 +400,22 @@ export function probePlaywrightBrowser(): { ready: boolean; detail: string } {
   }
 
   preparePlaywrightEnv();
+  const engine = resolvePortalBrowserEngine();
+  const label = browserEngineLabel(engine);
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const pw = require('playwright') as typeof import('playwright');
-    const exe = pw.chromium.executablePath();
+    if (engine === 'chrome') {
+      // channel chrome — binário do SO; só confirmamos no launch
+      return setBrowserReadyCache(true, `${label} (channel) — launch ainda não verificado`, false);
+    }
+    const type = engine === 'firefox' ? pw.firefox : engine === 'webkit' ? pw.webkit : pw.chromium;
+    const exe = type.executablePath();
     const ready = Boolean(exe && existsSync(exe));
     const detail = ready
-      ? `Chromium no disco (${exe}) — launch ainda não verificado`
-      : `Chromium em falta (${exe || 'sem path'})`;
-    // Sem launch: só marcar ready se o ficheiro existe (boot async confirma a seguir)
+      ? `${label} no disco (${exe}) — launch ainda não verificado`
+      : `${label} em falta (${exe || 'sem path'})`;
     return setBrowserReadyCache(ready, detail, false);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -373,24 +423,31 @@ export function probePlaywrightBrowser(): { ready: boolean; detail: string } {
   }
 }
 
-/** Lança Chromium headless e fecha — prova real de libs + binário. */
+/** Lança o motor configurado headless e fecha — prova real de libs + binário. */
 export async function probePlaywrightBrowserLaunch(): Promise<{
   ready: boolean;
   detail: string;
 }> {
   preparePlaywrightEnv();
+  const engine = resolvePortalBrowserEngine();
+  const label = browserEngineLabel(engine);
   try {
-    const { chromium } = await import('playwright');
-    const exe = chromium.executablePath();
-    if (!exe || !existsSync(exe)) {
-      return setBrowserReadyCache(false, `Chromium em falta (${exe || 'sem path'})`, true);
-    }
-    const browser = await chromium.launch({
+    const pw = await import('playwright');
+    const opts: LaunchOptions = {
       headless: true,
-      args: ['--disable-dev-shm-usage', '--no-sandbox', '--disable-gpu'],
-    });
+      ...(engine === 'chromium' || engine === 'chrome'
+        ? { args: ['--disable-dev-shm-usage', '--no-sandbox', '--disable-gpu'] }
+        : {}),
+      ...(engine === 'chrome' ? { channel: 'chrome' as const } : {}),
+    };
+    const browser =
+      engine === 'firefox'
+        ? await pw.firefox.launch(opts)
+        : engine === 'webkit'
+          ? await pw.webkit.launch(opts)
+          : await pw.chromium.launch(opts);
     await browser.close().catch(() => undefined);
-    return setBrowserReadyCache(true, `Chromium OK (launch ${exe})`, true);
+    return setBrowserReadyCache(true, `${label} OK (launch)`, true);
   } catch (err) {
     const detail = humanizePlaywrightError(err);
     invalidatePlaywrightBrowserCache();
@@ -649,16 +706,18 @@ export function ensureVirtualDisplay(preferred = process.env.DISPLAY || ':1'): s
   return display;
 }
 
-async function launchChromium(headless: boolean): Promise<Browser> {
+async function launchPortalBrowser(headless: boolean): Promise<Browser> {
   preparePlaywrightEnv();
-  const { chromium } = await import('playwright');
+  const pw = await import('playwright');
+  const engine = resolvePortalBrowserEngine();
+  const label = browserEngineLabel(engine);
 
   let probe = probePlaywrightBrowser();
   if (!probe.ready || (browserReadyCache && !browserReadyCache.launchVerified)) {
     const ensured = await ensurePlaywrightReady({ heal: true });
     probe = { ready: ensured.ready, detail: ensured.detail };
   }
-  if (!probe.ready) {
+  if (!probe.ready && engine !== 'chrome') {
     throw new Error(humanizePlaywrightError(new Error(probe.detail)));
   }
 
@@ -667,88 +726,93 @@ async function launchChromium(headless: boolean): Promise<Browser> {
     const display = ensureVirtualDisplay();
     if (!display && !process.env.DISPLAY) {
       console.warn(
-        '[portal-rpa] headed pedido mas sem DISPLAY — fallback headless (Arkose pode não pintar)'
+        `[portal-rpa] headed pedido mas sem DISPLAY — fallback headless (${label})`
       );
       useHeadless = true;
     } else {
       console.log(
-        `[portal-rpa] Chromium headed DISPLAY=${display ?? process.env.DISPLAY ?? '(none)'} ` +
+        `[portal-rpa] ${label} headed DISPLAY=${display ?? process.env.DISPLAY ?? '(none)'} ` +
           `XAUTHORITY=${process.env.XAUTHORITY ?? '-'} ` +
-          `(stream=modal Desafio Uber; ecrã completo=noVNC :6901)`
+          `(engine=${engine}; stream=modal Desafio Uber; ecrã=noVNC :6901)`
       );
     }
   }
 
+  const chromiumArgs = [
+    '--disable-dev-shm-usage',
+    '--no-sandbox',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-gpu',
+    ...(useHeadless ? [] : ['--window-size=1440,900', '--window-position=0,0', '--start-maximized']),
+  ];
+
   const options: LaunchOptions = {
     headless: useHeadless,
-    args: [
-      '--disable-dev-shm-usage',
-      '--no-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      // Headed + Xvfb: GPU software costuma falhar; headless clássico também
-      '--disable-gpu',
-      ...(useHeadless ? [] : ['--window-size=1440,900', '--window-position=0,0', '--start-maximized']),
-    ],
+    ...(engine === 'chromium' || engine === 'chrome' ? { args: chromiumArgs } : {}),
+    ...(engine === 'chrome' ? { channel: 'chrome' as const } : {}),
   };
 
-  const launchOnce = async (opts: LaunchOptions) => chromium.launch(opts);
+  const launchOnce = async (opts: LaunchOptions) => {
+    if (engine === 'firefox') return pw.firefox.launch(opts);
+    if (engine === 'webkit') return pw.webkit.launch(opts);
+    if (engine === 'chrome') return pw.chromium.launch(opts);
+    return pw.chromium.launch(opts);
+  };
 
   try {
     return await launchOnce(options);
   } catch (err) {
     invalidatePlaywrightBrowserCache();
-    // One-shot auto-heal (libs/binário) depois de falha de launch
     const healed = await ensurePlaywrightReady({ heal: true, force: true });
-    if (healed.ready) {
+    if (healed.ready || engine === 'chrome') {
       try {
         return await launchOnce(options);
       } catch {
-        // cair para fallbacks abaixo
+        // fallbacks abaixo
       }
     }
 
-    // Fallback: tentar com executablePath explícito
-    try {
-      const exe = chromium.executablePath();
-      return await launchOnce({ ...options, executablePath: exe });
-    } catch (err2) {
-      // Último recurso: se headed falhou por display, tentar headless
-      if (!useHeadless) {
-        console.warn(
-          '[portal-rpa] headed launch falhou — retry headless:',
-          err2 instanceof Error ? err2.message : err2
-        );
-        try {
-          return await launchOnce({
-            ...options,
-            headless: true,
-            args: options.args?.filter((a) => !a.startsWith('--window-size')),
-          });
-        } catch (err3) {
-          throw new Error(
-            humanizePlaywrightError(
-              err instanceof Error &&
-                /shared libraries|libatk|Missing X server|XServer/i.test(err.message)
-                ? err
-                : err3 instanceof Error
-                  ? err3
-                  : err2 instanceof Error
-                    ? err2
-                    : err
-            )
+    if (engine === 'chromium') {
+      try {
+        const exe = pw.chromium.executablePath();
+        return await launchOnce({ ...options, executablePath: exe });
+      } catch (err2) {
+        if (!useHeadless) {
+          console.warn(
+            `[portal-rpa] ${label} headed falhou — retry headless:`,
+            err2 instanceof Error ? err2.message : err2
           );
+          try {
+            return await launchOnce({
+              ...options,
+              headless: true,
+              args: options.args?.filter((a) => !a.startsWith('--window-size')),
+            });
+          } catch (err3) {
+            throw new Error(
+              humanizePlaywrightError(
+                err3 instanceof Error ? err3 : err2 instanceof Error ? err2 : err
+              )
+            );
+          }
         }
+        throw new Error(humanizePlaywrightError(err2 instanceof Error ? err2 : err));
       }
-      throw new Error(
-        humanizePlaywrightError(
-          err instanceof Error && /shared libraries|libatk|Missing X server|XServer/i.test(err.message)
-            ? err
-            : err2 instanceof Error
-              ? err2
-              : err
-        )
-      );
     }
+
+    if (!useHeadless) {
+      console.warn(
+        `[portal-rpa] ${label} headed falhou — retry headless:`,
+        err instanceof Error ? err.message : err
+      );
+      try {
+        return await launchOnce({ ...options, headless: true });
+      } catch (err2) {
+        throw new Error(humanizePlaywrightError(err2 instanceof Error ? err2 : err));
+      }
+    }
+
+    throw new Error(humanizePlaywrightError(err instanceof Error ? err : new Error(String(err))));
   }
 }
 
@@ -763,7 +827,8 @@ export async function withPlaywrightPage<T>(
   },
   fn: (browser: Browser, context: BrowserContext, page: Page) => Promise<T>
 ): Promise<T> {
-  const browser = await launchChromium(options.headless);
+  const engine = resolvePortalBrowserEngine();
+  const browser = await launchPortalBrowser(options.headless);
   const timeoutMs = options.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -780,8 +845,7 @@ export async function withPlaywrightPage<T>(
       acceptDownloads: true,
       viewport: { width: 1440, height: 900 },
       locale: 'pt-PT',
-      userAgent:
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      userAgent: defaultUserAgent(engine),
     });
     const page = await context.newPage();
     await page.addInitScript(

@@ -15,23 +15,24 @@ import { captureStorageState } from './types';
 import { env } from '../../config/env';
 
 /**
- * Uber Supplier Portal — ver docs/07-UBER.md
- * - Host app: supplier.uber.com (singular)
+ * Uber Fleet Hub — ver docs/07-UBER.md
+ * - Host app: fleethub.uber.com (substitui supplier.uber.com)
  * - Auth: auth.uber.com/v2 (Breeze)
  * - OTP SMS: 4 dígitos (#PHONE_SMS_OTP-0..3) via modal TVDE
  * - Pós-OTP: «Iniciar sessão com a palavra-passe» (não passkey)
  * - Sync: lista/escolha relatório ou Gerar «Transação de pagamentos» (`payments_order`) com intervalo → poll
  */
 
-const SUPPLIER_HOME = 'https://supplier.uber.com/';
+const SUPPLIER_HOME = 'https://fleethub.uber.com/';
 const AUTH_HOST = 'auth.uber.com';
 
 function isAuthUrl(url: string): boolean {
   return url.includes(AUTH_HOST);
 }
 
+/** Fleet Hub (novo) ou supplier (legado, redirects / sessões antigas). */
 function isSupplierUrl(url: string): boolean {
-  return url.includes('supplier.uber.com');
+  return url.includes('fleethub.uber.com') || url.includes('supplier.uber.com');
 }
 
 async function identityInput(page: Page) {
@@ -1358,7 +1359,7 @@ async function gotoReports(page: Page): Promise<'ok' | 'expired' | 'failed'> {
   } else {
     const orgMatch = page.url().match(/supplier\.uber\.com\/orgs\/([^/]+)/i);
     if (orgMatch?.[1]) {
-      await page.goto(`https://supplier.uber.com/orgs/${orgMatch[1]}/reports`, {
+      await page.goto(`https://fleethub.uber.com/orgs/${orgMatch[1]}/reports`, {
         waitUntil: 'domcontentloaded',
         timeout: 60_000,
       });
@@ -2306,7 +2307,7 @@ async function refreshReportsList(page: Page): Promise<void> {
   }
   const orgMatch = page.url().match(/supplier\.uber\.com\/orgs\/([^/]+)/i);
   if (orgMatch?.[1]) {
-    await page.goto(`https://supplier.uber.com/orgs/${orgMatch[1]}/reports`, {
+    await page.goto(`https://fleethub.uber.com/orgs/${orgMatch[1]}/reports`, {
       waitUntil: 'domcontentloaded',
       timeout: 60_000,
     });

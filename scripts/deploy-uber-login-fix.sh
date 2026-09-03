@@ -14,6 +14,8 @@ rsync -az --delete \
   --exclude 'apps/api/dist' \
   --exclude 'apps/web/.next' \
   --exclude '.playwright-libs' \
+  --exclude 'uploads/' \
+  --exclude 'apps/api/uploads/' \
   -e "ssh -i $KEY -o StrictHostKeyChecking=no" \
   "$ROOT/" "$HOST:~/tvde/"
 

@@ -79,8 +79,8 @@ await context.addInitScript(() => {
 const page = await context.newPage();
 
 try {
-  console.log('[smoke] goto supplier.uber.com');
-  await page.goto('https://supplier.uber.com/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  console.log('[smoke] goto fleethub.uber.com');
+  await page.goto('https://fleethub.uber.com/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForURL(/auth\.uber\.com/, { timeout: 45_000 }).catch(() => undefined);
   console.log('[smoke] url', page.url().slice(0, 140));
 

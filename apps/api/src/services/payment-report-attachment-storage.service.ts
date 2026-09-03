@@ -3,10 +3,10 @@ import { mkdir, rm, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { env } from '../config/env';
+import { resolveStorageFilePath, resolveUploadRoot } from '../utils/upload-path';
 
-function resolveUploadRoot(): string {
-  const configured = env.paymentReceiptsUploadDir;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+function configuredUploadDir(): string {
+  return env.paymentReceiptsUploadDir;
 }
 
 export function buildPaymentReceiptStorageKey(
@@ -20,14 +20,18 @@ export function buildPaymentReceiptStorageKey(
 }
 
 export function getPaymentReceiptPath(storageKey: string): string {
-  return path.join(resolveUploadRoot(), storageKey);
+  return resolveStorageFilePath(configuredUploadDir(), storageKey);
+}
+
+export function paymentReceiptFileExists(storageKey: string): boolean {
+  return existsSync(getPaymentReceiptPath(storageKey));
 }
 
 export async function savePaymentReceiptFile(
   storageKey: string,
   buffer: Buffer
 ): Promise<void> {
-  const fullPath = getPaymentReceiptPath(storageKey);
+  const fullPath = path.join(resolveUploadRoot(configuredUploadDir()), storageKey);
   await mkdir(path.dirname(fullPath), { recursive: true });
   await writeFile(fullPath, buffer);
 }
@@ -42,7 +46,7 @@ export async function deletePaymentReceiptDir(
   tenantId: string,
   reportId: string
 ): Promise<void> {
-  const dir = path.join(resolveUploadRoot(), tenantId, reportId);
+  const dir = path.join(resolveUploadRoot(configuredUploadDir()), tenantId, reportId);
   if (!existsSync(dir)) return;
   await rm(dir, { recursive: true, force: true });
 }
@@ -50,7 +54,7 @@ export async function deletePaymentReceiptDir(
 export function openPaymentReceiptStream(storageKey: string) {
   const fullPath = getPaymentReceiptPath(storageKey);
   if (!existsSync(fullPath)) {
-    throw new Error('Ficheiro não encontrado');
+    throw new Error('Ficheiro não encontrado no servidor');
   }
   return createReadStream(fullPath);
 }

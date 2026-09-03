@@ -33,7 +33,7 @@ export function boltBillableOrderWhere(
   };
 }
 
-/** Valor a pagar: net_earnings + tip + toll (fallback ride_price). */
+/** Valor a pagar: net_earnings (líquido Fleet). Fallback ride_price legado. */
 export function boltOrderPayoutDecimal(order: {
   payoutAmount?: Prisma.Decimal | null;
   netEarnings?: Prisma.Decimal | null;
@@ -42,12 +42,7 @@ export function boltOrderPayoutDecimal(order: {
   ridePrice?: Prisma.Decimal | null;
 }): number {
   if (order.payoutAmount != null) return Number(order.payoutAmount.toString());
-  const net = order.netEarnings != null ? Number(order.netEarnings.toString()) : null;
-  if (net != null) {
-    const tip = order.tip != null ? Number(order.tip.toString()) : 0;
-    const toll = order.tollFee != null ? Number(order.tollFee.toString()) : 0;
-    return net + tip + toll;
-  }
+  if (order.netEarnings != null) return Number(order.netEarnings.toString());
   return order.ridePrice != null ? Number(order.ridePrice.toString()) : 0;
 }
 
@@ -58,10 +53,8 @@ function computePayoutAmount(input: {
   ridePrice: Prisma.Decimal | null;
 }): Prisma.Decimal | null {
   if (input.netEarnings != null) {
-    const tip = input.tip ? Number(input.tip.toString()) : 0;
-    const toll = input.tollFee ? Number(input.tollFee.toString()) : 0;
     return new Prisma.Decimal(
-      (Math.round((Number(input.netEarnings.toString()) + tip + toll) * 100) / 100).toFixed(2)
+      (Math.round(Number(input.netEarnings.toString()) * 100) / 100).toFixed(2)
     );
   }
   return input.ridePrice;

@@ -112,12 +112,23 @@ export function getServerConfig() {
     portalRpaMock: (process.env.PORTAL_RPA_MOCK ?? (isProd ? 'false' : 'true')) === 'true',
     portalRpaHeadless: envOr('PORTAL_RPA_HEADLESS', 'true') === 'true',
     /**
-     * Uber Ligar conta com Chromium visível (debug). Default false — fluxo automático
+     * Motor Playwright: `chromium` (default), `firefox`, `webkit`, ou `chrome` (Google Chrome
+     * instalado no SO — `channel: 'chrome'`). Útil se a Uber bloquear o Chromium do Playwright.
+     */
+    portalRpaBrowser: (() => {
+      const raw = envOr('PORTAL_RPA_BROWSER', 'chromium').toLowerCase().trim();
+      if (raw === 'firefox' || raw === 'webkit' || raw === 'chrome' || raw === 'chromium') {
+        return raw as 'chromium' | 'firefox' | 'webkit' | 'chrome';
+      }
+      return 'chromium' as const;
+    })(),
+    /**
+     * Uber Ligar conta com browser visível (debug). Default false — fluxo automático
      * SMS → OTP (modal TVDE) → palavra-passe.
      */
     portalRpaUberInteractive: envOr('PORTAL_RPA_UBER_INTERACTIVE', 'false') === 'true',
     /**
-     * Uber Ligar conta: Chromium headed (Xvfb / DISPLAY) para o Arkose pintar no stream
+     * Uber Ligar conta: browser headed (Xvfb / DISPLAY) para o Arkose pintar no stream
      * «Desafio Uber». Diferente de UBER_INTERACTIVE (não espera humano no servidor).
      * Default: true se DISPLAY estiver definido.
      */

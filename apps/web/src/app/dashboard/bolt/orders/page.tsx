@@ -1,9 +1,9 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { Check } from 'lucide-react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Upload } from 'lucide-react';
 import { hasMinRole, type Role } from '@tvde/shared';
-import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
+import { API_PATHS, apiFetch, getApiErrorMessage, getApiUrl, getStoredToken } from '@/lib/api';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { withSearchQuery } from '@/lib/list-search';
@@ -53,6 +53,8 @@ export default function BoltOrdersPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [importMsg, setImportMsg] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
 
   const canManage = role ? hasMinRole(role, 'superadmin') : false;
 
@@ -208,14 +210,75 @@ export default function BoltOrdersPage() {
     await load(appliedQ, page, appliedStartDate, appliedEndDate);
   }
 
+  async function handleEarningsImport(file: File) {
+    if (!workspaceId) return;
+    setError('');
+    setSuccess('');
+    setImportMsg('');
+    const form = new FormData();
+    form.append('file', file);
+    const token = getStoredToken();
+    const qs = new URLSearchParams();
+    if (workspaceId) qs.set('workspaceId', workspaceId);
+    const res = await fetch(
+      `${getApiUrl()}${API_PATHS.bolt.earningsImport}?${qs.toString()}`,
+      {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: form,
+      }
+    );
+    const raw = await res.json();
+    if (!res.ok || !raw.success) {
+      setError(getApiErrorMessage(raw));
+      return;
+    }
+    const d = raw.data as {
+      inserted: number;
+      updated: number;
+      skipped: number;
+      periodStart: string;
+      periodEnd: string;
+    };
+    setImportMsg(
+      `Ganhos importados ${d.periodStart}→${d.periodEnd}: +${d.inserted} · actualizados ${d.updated}` +
+        (d.skipped ? ` · ignorados ${d.skipped}` : '')
+    );
+  }
+
   return (
     <div className="space-y-6">
       {confirmDialog}
-      <p className="text-sm text-slate-500">
-        Corridas com valor a pagar. Coluna «Preço» ={' '}
-        <strong>líquido</strong> Fleet (<code className="text-xs">net_earnings + tip + portagem</code>
-        ) — o que o motorista recebe, não o bruto da corrida.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-2xl text-sm text-slate-500">
+          Coluna «Preço» = <code className="text-xs">net_earnings</code> (Ganhos líquidos / Pagamento
+          previsto da Fleet). Opcional: importar CSV «Ganhos por motorista» para o mesmo valor por
+          período.
+        </p>
+        {canManage ? (
+          <div>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = '';
+                if (f) void handleEarningsImport(f);
+              }}
+            />
+            <button
+              type="button"
+              className="btn-secondary inline-flex items-center gap-2 text-sm"
+              onClick={() => fileRef.current?.click()}
+            >
+              <Upload size={16} /> Importar Ganhos CSV
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {importMsg ? <p className="text-sm text-emerald-700">{importMsg}</p> : null}
 
       <form onSubmit={onFilter} className="card flex flex-wrap items-end gap-3">
         <div className="min-w-[220px] flex-1">
@@ -253,27 +316,21 @@ export default function BoltOrdersPage() {
         </button>
       </form>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-        <p className="text-sm text-slate-600">
-          {appliedQ || appliedStartDate || appliedEndDate ? (
-            <>
-              Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
-            </>
-          ) : (
-            <>
-              Todos os registos · <span className="font-medium text-slate-800">{total}</span>
-            </>
-          )}
-        </p>
-        <p className="text-sm font-semibold text-emerald-800">
-          Montante líquido:{' '}
-          {Number(filteredTotal).toLocaleString('pt-PT', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-          })}{' '}
-          €
-        </p>
-      </div>
+      {appliedQ || appliedStartDate || appliedEndDate ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+          <p className="text-sm text-slate-600">
+            Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
+          </p>
+          <p className="text-sm font-semibold text-emerald-800">
+            Montante líquido:{' '}
+            {Number(filteredTotal).toLocaleString('pt-PT', {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}{' '}
+            €
+          </p>
+        </div>
+      ) : null}
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
       {success ? <p className="text-sm text-emerald-700">{success}</p> : null}

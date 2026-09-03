@@ -333,22 +333,16 @@ export function UberPanel() {
         </button>
       </form>
 
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
-        <p className="text-sm text-slate-600">
-          {hasActiveFilter ? (
-            <>
-              Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
-            </>
-          ) : (
-            <>
-              Todos os registos · <span className="font-medium text-slate-800">{total}</span>
-            </>
-          )}
-        </p>
-        <p className="text-sm font-semibold text-emerald-800">
-          Montante: {formatMoney(filteredTotal)}
-        </p>
-      </div>
+      {hasActiveFilter ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+          <p className="text-sm text-slate-600">
+            Filtro activo · <span className="font-medium text-slate-800">{total}</span> registo(s)
+          </p>
+          <p className="text-sm font-semibold text-emerald-800">
+            Montante: {formatMoney(filteredTotal)}
+          </p>
+        </div>
+      ) : null}
       <p className="text-xs text-slate-500">
         Datas usam o corte Uber (segunda 04:00 Lisboa) — alinhado a «Rendimentos líquidos» e ao
         calculador de pagamentos.

@@ -633,6 +633,7 @@ export const API_PATHS = {
     orderById: (id: string) => `/bolt/orders/${id}`,
     orderPaid: (id: string) => `/bolt/orders/${id}/paid`,
     ordersBulkMarkPaid: '/bolt/orders/bulk/mark-paid',
+    earningsImport: '/bolt/earnings/import',
     drivers: '/bolt/drivers',
     vehicles: '/bolt/vehicles',
     syncLogs: '/bolt/sync-logs',
@@ -680,6 +681,8 @@ export const API_PATHS = {
     reportPaid: (id: string) => `/pagamentos/reports/${id}/paid`,
     reportById: (id: string) => `/pagamentos/reports/${id}`,
     reportSendEmail: (id: string) => `/pagamentos/reports/${id}/send-email`,
+    reportIva6Email: (id: string) => `/pagamentos/reports/${id}/iva6-email`,
+    reportsAttachmentsZip: '/pagamentos/reports/attachments-zip',
     reportAttachments: (id: string) => `/pagamentos/reports/${id}/attachments`,
     reportAttachmentUpload: (id: string) => `/pagamentos/reports/${id}/attachments/upload`,
     reportAttachmentDownload: (reportId: string, attachmentId: string) =>

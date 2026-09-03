@@ -18,6 +18,7 @@ import {
   markBoltOrderPaid,
   bulkMarkBoltOrdersPaid,
 } from '../services/bolt-sync.service';
+import { importBoltEarningsCsvText } from '../services/bolt-earnings-import.service';
 import { getDriverFleetScope } from '../services/user-vehicle-matching.service';
 import { sumDriverPaymentReportsInMonth } from '../services/payment-report.service';
 
@@ -40,6 +41,7 @@ async function resolveDriverUuids(
 export async function boltRoutes(fastify: FastifyInstance) {
   fastify.addHook('preHandler', fastify.authenticate);
   fastify.addHook('preHandler', fastify.requireModule('bolt'));
+  await fastify.register(import('@fastify/multipart'), { limits: { fileSize: 15 * 1024 * 1024 } });
 
   fastify.get('/bolt/status', async (request, reply) => {
     const query = request.query as { workspaceId?: string };
@@ -425,6 +427,61 @@ export async function boltRoutes(fastify: FastifyInstance) {
       success: true,
       data: { items: vehicles, total, page, limit },
     });
+  });
+
+  fastify.post('/bolt/earnings/import', {
+    preHandler: [fastify.requireRole('superadmin')],
+  }, async (request, reply) => {
+    try {
+      const query = z
+        .object({
+          workspaceId: z.string().uuid().optional(),
+          periodStart: z.string().optional(),
+          periodEnd: z.string().optional(),
+        })
+        .parse(request.query);
+
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send({ success: false, error: 'Ficheiro em falta' });
+      }
+      const filename = file.filename || 'ganhos.csv';
+      const csvText = (await file.toBuffer()).toString('utf-8');
+
+      const { tenantId } = await resolveWorkspaceTenantScope(
+        fastify,
+        request.user,
+        query.workspaceId
+      );
+
+      const data = await importBoltEarningsCsvText(fastify.db, tenantId, request.user.sub, csvText, {
+        filename,
+        periodStart: query.periodStart,
+        periodEnd: query.periodEnd,
+      });
+
+      await createAuditLog({
+        tenantId,
+        userId: request.user.sub,
+        action: 'bolt.earnings_import',
+        entityType: 'bolt_driver_earning',
+        entityId: tenantId,
+        afterJson: {
+          inserted: data.inserted,
+          updated: data.updated,
+          periodStart: data.periodStart,
+          periodEnd: data.periodEnd,
+          filename,
+        },
+        ipAddress: request.ip,
+      });
+
+      return reply.send({ success: true, data });
+    } catch (err) {
+      return reply
+        .status(400)
+        .send({ success: false, error: err instanceof Error ? err.message : 'Importação falhou' });
+    }
   });
 
   fastify.get('/bolt/sync-logs', {

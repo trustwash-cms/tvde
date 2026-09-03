@@ -71,6 +71,10 @@ export type PaymentReportRow = {
   lastSentAt: string | null;
   attachmentsCount: number;
   createdAt: string;
+  /** Só preenchido para superadmin — IVA 6% fiscal sobre receitas */
+  adminIvaReceitas6?: string | null;
+  adminIvaReceitasSentAt?: string | null;
+  adminIvaReceitasSentTo?: string | null;
 };
 
 export type PaymentReportsListResult = {
@@ -91,9 +95,12 @@ export type ListPaymentReportsFilters = {
   perPage?: number;
   /** Motorista: só os próprios reports */
   userId?: string;
+  /** Incluir campos internos de IVA fiscal (superadmin) */
+  includeAdminFields?: boolean;
 };
 
-function mapReportRow(r: {
+function mapReportRow(
+  r: {
   id: string;
   userId: string;
   periodStart: Date;
@@ -111,9 +118,14 @@ function mapReportRow(r: {
   paymentMethod: string | null;
   lastSentAt: Date | null;
   createdAt: Date;
+  adminIvaReceitas6?: { toString(): string } | null;
+  adminIvaReceitasSentAt?: Date | null;
+  adminIvaReceitasSentTo?: string | null;
   user: { fullName: string | null; username: string | null; email: string };
   _count?: { attachments?: number };
-}): PaymentReportRow {
+},
+  opts?: { includeAdminFields?: boolean }
+): PaymentReportRow {
   const uber = Number(r.receitasUber.toString());
   const bolt = Number(r.receitasBolt.toString());
   const vv = Number(r.despesasViaVerde.toString());
@@ -152,6 +164,14 @@ function mapReportRow(r: {
     lastSentAt: r.lastSentAt?.toISOString() ?? null,
     attachmentsCount: r._count?.attachments ?? 0,
     createdAt: r.createdAt.toISOString(),
+    ...(opts?.includeAdminFields
+      ? {
+          adminIvaReceitas6:
+            r.adminIvaReceitas6 != null ? money(r.adminIvaReceitas6.toString()) : null,
+          adminIvaReceitasSentAt: r.adminIvaReceitasSentAt?.toISOString() ?? null,
+          adminIvaReceitasSentTo: r.adminIvaReceitasSentTo ?? null,
+        }
+      : {}),
   };
 }
 
@@ -222,7 +242,7 @@ export async function listPaymentReports(
   ]);
 
   return {
-    items: rows.map(mapReportRow),
+    items: rows.map((row) => mapReportRow(row, { includeAdminFields: filters.includeAdminFields })),
     page,
     perPage,
     total,
@@ -284,7 +304,8 @@ export type PaymentReportDetail = PaymentReportRow & {
 export async function getPaymentReport(
   db: PrismaClient,
   tenantId: string,
-  reportId: string
+  reportId: string,
+  opts?: { includeAdminFields?: boolean }
 ): Promise<PaymentReportDetail> {
   const row = await db.paymentReport.findFirst({
     where: { id: reportId, tenantId },
@@ -295,7 +316,7 @@ export async function getPaymentReport(
   });
   if (!row) throw new Error('Pagamento não encontrado');
 
-  const base = mapReportRow(row);
+  const base = mapReportRow(row, { includeAdminFields: opts?.includeAdminFields });
   const details =
     row.detailsJson && typeof row.detailsJson === 'object'
       ? (row.detailsJson as unknown as PaymentCalculation['detalhes'])
@@ -363,6 +384,7 @@ export async function deletePaymentReport(
   const fuelIds = asStringIds(existing.fuelTransactionIds);
   const uberIds = asStringIds(existing.uberPaymentIds);
   const boltIds = asStringIds(existing.boltOrderIds);
+  const boltEarningIds = asStringIds(existing.boltEarningIds);
   const expenseIds = asStringIds(existing.driverExpenseIds);
 
   await db.$transaction(async (tx) => {
@@ -394,6 +416,12 @@ export async function deletePaymentReport(
     if (boltIds.length) {
       await tx.boltOrder.updateMany({
         where: { tenantId, id: { in: boltIds } },
+        data: { isPaid: false, paymentDate: null },
+      });
+    }
+    if (boltEarningIds.length) {
+      await tx.boltDriverEarning.updateMany({
+        where: { tenantId, id: { in: boltEarningIds } },
         data: { isPaid: false, paymentDate: null },
       });
     }
@@ -454,6 +482,7 @@ export async function confirmDriverPayment(
         fuelTransactionIds: ids.fuelTransactionIds,
         uberPaymentIds: ids.uberPaymentIds,
         boltOrderIds: ids.boltOrderIds,
+        boltEarningIds: ids.boltEarningIds,
         driverExpenseIds: ids.driverExpenseIds,
         detailsJson: calculation.detalhes as unknown as Prisma.InputJsonValue,
         warningsJson: calculation.warnings as unknown as Prisma.InputJsonValue,
@@ -510,6 +539,17 @@ export async function confirmDriverPayment(
         where: {
           tenantId,
           id: { in: ids.boltOrderIds },
+          isPaid: false,
+        },
+        data: { isPaid: true, paymentDate: paidAt },
+      });
+    }
+
+    if (ids.boltEarningIds.length) {
+      await tx.boltDriverEarning.updateMany({
+        where: {
+          tenantId,
+          id: { in: ids.boltEarningIds },
           isPaid: false,
         },
         data: { isPaid: true, paymentDate: paidAt },

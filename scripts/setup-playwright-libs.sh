@@ -21,6 +21,8 @@ PKGS=(
   fonts-liberation fonts-dejavu-core fonts-freefont-ttf fontconfig fontconfig-config
   libgtk-3-0 libgdk-pixbuf2.0-0 libglib2.0-0 libepoxy0 libcairo-gobject2
   libxcursor1 libxinerama1 libwayland-cursor0 libwayland-egl1
+  # Firefox (Playwright) — além do Chromium
+  libpangocairo-1.0-0 libpangoft2-1.0-0 libdbus-glib-1-2 libxt6
 )
 
 echo "==> apt-get download (${#PKGS[@]} packages) → $DEBDIR"

@@ -2,6 +2,7 @@
 
 import {
   Car,
+  Euro,
   Globe,
   Info,
   Key,
@@ -84,6 +85,7 @@ export function UserListCard({
   canDelete,
   canToggle,
   canDetails,
+  canPaidPayments,
   canVehicles,
   canImpersonate,
   canContaCorrente,
@@ -93,6 +95,7 @@ export function UserListCard({
   onDelete,
   onToggleStatus,
   onDetails,
+  onPaidPayments,
   onVehicles,
   onImpersonate,
   onCredentialsAction,
@@ -102,6 +105,7 @@ export function UserListCard({
   canDelete?: boolean;
   canToggle?: boolean;
   canDetails?: boolean;
+  canPaidPayments?: boolean;
   canVehicles?: boolean;
   canImpersonate?: boolean;
   canContaCorrente?: boolean;
@@ -111,6 +115,7 @@ export function UserListCard({
   onDelete?: () => void;
   onToggleStatus?: () => void;
   onDetails?: () => void;
+  onPaidPayments?: () => void;
   onVehicles?: () => void;
   onImpersonate?: () => void;
   onCredentialsAction?: () => void;
@@ -164,6 +169,19 @@ export function UserListCard({
           >
             <Info size={15} />
             Details
+          </button>
+        ) : null}
+
+        {canPaidPayments ? (
+          <button
+            type="button"
+            title="Pagamentos pagos"
+            aria-label="Pagamentos pagos"
+            disabled={!onPaidPayments}
+            onClick={onPaidPayments}
+            className="inline-flex items-center justify-center rounded-lg bg-emerald-600 p-2 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-35"
+          >
+            <Euro size={16} strokeWidth={2.25} />
           </button>
         ) : null}
 

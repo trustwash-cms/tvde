@@ -20,6 +20,7 @@ import { USER_DELETE_CONFIRMATION_EMAIL_TEMPLATE } from './user-delete-confirmat
 import { TWO_FA_EMAIL_TEMPLATE } from './two-fa-email-template';
 import { STRIPE_PAYMENT_EMAIL_TEMPLATE } from './stripe-payment-email-template';
 import { PAYMENT_REPORT_EMAIL_TEMPLATE } from './payment-report-email-template';
+import { PAYMENT_REPORT_IVA6_EMAIL_TEMPLATE } from './payment-report-iva6-email-template';
 import { buildBaseEmailVariables } from './email-design-tokens';
 
 export const EMAIL_TEMPLATE_KEYS = {
@@ -39,6 +40,7 @@ export const EMAIL_TEMPLATE_KEYS = {
   bookingConfirmation: 'booking_confirmation',
   ecommerceOrderConfirmation: 'ecommerce_order_confirmation',
   paymentReport: 'payment_report',
+  paymentReportIva6: 'payment_report_iva6',
 } as const;
 
 export type EmailTemplateKey = (typeof EMAIL_TEMPLATE_KEYS)[keyof typeof EMAIL_TEMPLATE_KEYS];
@@ -193,6 +195,11 @@ const DEFAULT_TEMPLATES: Record<
     subject: PAYMENT_REPORT_EMAIL_TEMPLATE.subject,
     htmlBody: PAYMENT_REPORT_EMAIL_TEMPLATE.htmlBody,
     variables: [...PAYMENT_REPORT_EMAIL_TEMPLATE.variables],
+  },
+  payment_report_iva6: {
+    subject: PAYMENT_REPORT_IVA6_EMAIL_TEMPLATE.subject,
+    htmlBody: PAYMENT_REPORT_IVA6_EMAIL_TEMPLATE.htmlBody,
+    variables: [...PAYMENT_REPORT_IVA6_EMAIL_TEMPLATE.variables],
   },
 };
 

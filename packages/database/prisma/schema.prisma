@@ -81,6 +81,7 @@ model Tenant {
   boltDrivers               BoltDriver[]
   boltVehicles              BoltVehicle[]
   boltSyncLogs              BoltSyncLog[]
+  boltDriverEarnings        BoltDriverEarning[]
   userDocuments             UserDocument[]
   userVehicles              UserVehicle[]
   viaVerdeMovements         ViaVerdeMovement[]
@@ -300,6 +301,7 @@ model User {
   fuelTransactionsImported         FuelTransaction[] @relation("FuelTransactionImportedBy")
   uberPayments                     UberPayment[] @relation("UberPaymentUser")
   uberPaymentsImported             UberPayment[] @relation("UberPaymentImportedBy")
+  boltDriverEarningsImported       BoltDriverEarning[] @relation("BoltDriverEarningImportedBy")
   paymentReports                   PaymentReport[] @relation("PaymentReportUser")
   paymentReportsCreated            PaymentReport[] @relation("PaymentReportCreatedBy")
   paymentReportAttachmentsUploaded PaymentReportAttachment[]
@@ -2751,9 +2753,10 @@ model BoltOrder {
   tip                    Decimal? @map("tip") @db.Decimal(12, 2)
   /** order_price.net_earnings — após comissão Bolt */
   netEarnings            Decimal? @map("net_earnings") @db.Decimal(12, 2)
-  /**
-   * Valor a pagar ao motorista: net_earnings + tip + toll_fee.
-   * Preferir este campo no calculador de pagamentos (não ride_price).
+/**
+   * Valor a pagar ao motorista = order_price.net_earnings (Fleet «Ganhos líquidos» /
+   * «Pagamento previsto»). NÃO somar tip+toll: esses campos aparecem no CSV como
+   * decomposição, mas o líquido oficial da Fleet é só net_earnings.
    */
   payoutAmount           Decimal? @map("payout_amount") @db.Decimal(12, 2)
   /** Incluído num payment_report (não voltar a somar até apagar o relatório). */
@@ -2858,6 +2861,37 @@ model BoltSyncLog {
   @@index([workspaceId, startedAt])
   @@index([tenantId])
   @@map("bolt_sync_logs")
+}
+
+/**
+ * CSV Fleet «Ganhos por motorista» — Ganhos líquidos / Pagamento previsto.
+ * Preferir no calculador de pagamentos em vez da soma de bolt_orders (API).
+ */
+model BoltDriverEarning {
+  id                 String    @id @default(uuid()) @db.Uuid
+  tenantId           String    @map("tenant_id") @db.Uuid
+  driverUuid         String    @map("driver_uuid")
+  driverName         String?   @map("driver_name")
+  periodStart        DateTime  @map("period_start") @db.Date
+  periodEnd          DateTime  @map("period_end") @db.Date
+  /** Pagamento previsto / Ganhos líquidos do CSV */
+  netAmount          Decimal   @map("net_amount") @db.Decimal(12, 2)
+  grossTotal         Decimal?  @map("gross_total") @db.Decimal(12, 2)
+  tips               Decimal?  @db.Decimal(12, 2)
+  cancellationFees   Decimal?  @map("cancellation_fees") @db.Decimal(12, 2)
+  sourceFilename     String?   @map("source_filename")
+  isPaid             Boolean   @default(false) @map("is_paid")
+  paymentDate        DateTime? @map("payment_date")
+  importedByUserId   String?   @map("imported_by_user_id") @db.Uuid
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  tenant     Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  importedBy User?  @relation("BoltDriverEarningImportedBy", fields: [importedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([tenantId, driverUuid, periodStart, periodEnd])
+  @@index([tenantId, periodStart, periodEnd])
+  @@index([tenantId, isPaid])
+  @@map("bolt_driver_earnings")
 }
 
 enum PortalKind {
@@ -3018,6 +3052,7 @@ model PaymentReport {
   fuelTransactionIds      Json      @default("[]") @map("fuel_transaction_ids")
   uberPaymentIds          Json      @default("[]") @map("uber_payment_ids")
   boltOrderIds            Json      @default("[]") @map("bolt_order_ids")
+  boltEarningIds          Json      @default("[]") @map("bolt_earning_ids")
   driverExpenseIds        Json      @default("[]") @map("driver_expense_ids")
   detailsJson             Json?     @map("details_json")
   warningsJson            Json?     @map("warnings_json")
@@ -3026,6 +3061,10 @@ model PaymentReport {
   lastSentAt              DateTime? @map("last_sent_at")
   emailSent               Boolean   @default(false) @map("email_sent")
   whatsappSent            Boolean   @default(false) @map("whatsapp_sent")
+  /** IVA 6% sobre receitas — uso interno superadmin (não visível ao motorista) */
+  adminIvaReceitas6       Decimal?  @map("admin_iva_receitas_6") @db.Decimal(12, 2)
+  adminIvaReceitasSentAt  DateTime? @map("admin_iva_receitas_sent_at")
+  adminIvaReceitasSentTo  String?   @map("admin_iva_receitas_sent_to") @db.VarChar(255)
   notificationDebug       Json?     @map("notification_debug")
   createdAt               DateTime  @default(now()) @map("created_at")
   updatedAt               DateTime  @updatedAt @map("updated_at")

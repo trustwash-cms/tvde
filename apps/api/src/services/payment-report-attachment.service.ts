@@ -5,6 +5,7 @@ import {
   buildPaymentReceiptStorageKey,
   deletePaymentReceiptDir,
   deletePaymentReceiptFile,
+  paymentReceiptFileExists,
   savePaymentReceiptFile,
 } from './payment-report-attachment-storage.service';
 
@@ -26,6 +27,7 @@ export type PaymentReportAttachmentRow = {
   sizeBytes: string;
   uploadedByUserId: string;
   createdAt: string;
+  fileAvailable: boolean;
 };
 
 function serializeAttachment(row: {
@@ -46,6 +48,7 @@ function serializeAttachment(row: {
     sizeBytes: row.sizeBytes.toString(),
     uploadedByUserId: row.uploadedByUserId,
     createdAt: row.createdAt.toISOString(),
+    fileAvailable: row.storageKey ? paymentReceiptFileExists(row.storageKey) : false,
   };
 }
 

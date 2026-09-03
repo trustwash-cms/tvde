@@ -114,6 +114,8 @@ export interface PaymentCalculationIds {
   fuelTransactionIds: string[];
   uberPaymentIds: string[];
   boltOrderIds: string[];
+  /** CSV «Ganhos por motorista» (líquidos Fleet) */
+  boltEarningIds: string[];
   /** Lançamentos de conta corrente aplicados neste cálculo */
   driverExpenseIds: string[];
 }
