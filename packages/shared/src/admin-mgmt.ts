@@ -1,6 +1,13 @@
 export const ADMIN_MGMT_MODULE_KEY = 'admin_mgmt';
 export const ADMIN_MGMT_MODULE_NAME = 'Gestão Administrativa';
 
+/** Emissão de Recibos Verdes (AT). Sem sessão redirecciona para login NIF. */
+export const PORTAL_DAS_FINANCAS_EMITIR_URL =
+  'https://irs.portaldasfinancas.gov.pt/recibos/portal/emitir';
+
+/** @deprecated Use PORTAL_DAS_FINANCAS_EMITIR_URL */
+export const PORTAL_DAS_FINANCAS_LOGIN_URL = PORTAL_DAS_FINANCAS_EMITIR_URL;
+
 export const ADMIN_MGMT_VENCIMENTO_ORIGENS = [
   'seguro',
   'contrato',

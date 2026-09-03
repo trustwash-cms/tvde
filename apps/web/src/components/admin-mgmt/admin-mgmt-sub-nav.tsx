@@ -12,6 +12,7 @@ const ITEMS = [
   { href: WEB_ROUTES.dashboard.adminMgmt.seguros, label: 'Seguros' },
   { href: WEB_ROUTES.dashboard.adminMgmt.contratos, label: 'Contratos' },
   { href: WEB_ROUTES.dashboard.adminMgmt.segurancaSocial, label: 'Segurança Social' },
+  { href: WEB_ROUTES.dashboard.adminMgmt.recibosVerdes, label: 'Recibos Verdes' },
   { href: WEB_ROUTES.dashboard.adminMgmt.faturas, label: 'Faturas' },
   { href: WEB_ROUTES.dashboard.adminMgmt.prestacoes, label: 'Prestações' },
   { href: WEB_ROUTES.dashboard.adminMgmt.clientes, label: 'Clientes' },

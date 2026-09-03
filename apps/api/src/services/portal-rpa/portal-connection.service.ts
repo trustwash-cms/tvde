@@ -91,7 +91,7 @@ function isTransientPortalNetworkError(message: string): boolean {
 }
 
 /** Portais onde tentamos login silencioso (email+password) quando a sessão expira. Uber pode pedir OTP SMS. */
-const SILENT_RELOGIN_PORTALS = new Set<PortalKind>(['via_verde']);
+const SILENT_RELOGIN_PORTALS = new Set<PortalKind>(['via_verde', 'recibos_verdes']);
 
 async function attemptSilentPortalRelogin(
   db: PrismaClient,
@@ -858,6 +858,7 @@ export async function listUberPortalReports(
 function portalSyncTimeoutMs(portal: PortalKind, syncScope?: MyPrioSyncScope): number {
   if (portal === 'uber') return 900_000;
   if (portal === 'via_verde') return 180_000;
+  if (portal === 'recibos_verdes') return 120_000;
   if (portal === 'myprio') return syncScope === 'both' ? 240_000 : 120_000;
   return 90_000;
 }
@@ -1715,6 +1716,31 @@ async function runPortalJob(db: PrismaClient, jobId: string, actorUserId: string
             status: 'failed',
             completedAt: new Date(),
             message: syncResult.message,
+          },
+        });
+        return;
+      }
+
+      if (portal === 'recibos_verdes') {
+        const message =
+          syncResult.warnings?.join(' ') || 'Sessão AT válida na página Emitir.';
+        await db.portalConnection.update({
+          where: { id: connection.id },
+          data: {
+            status: 'connected',
+            lastSyncAt: new Date(),
+            lastError: null,
+            activeJobId: null,
+            ...(refreshedStorage ? { sessionStateEncrypted: encrypt(refreshedStorage) } : {}),
+          },
+        });
+        await db.portalSyncJob.update({
+          where: { id: jobId },
+          data: {
+            status: 'completed',
+            completedAt: new Date(),
+            message,
+            resultJson: { ...jobMeta, sessionOk: true } as unknown as Prisma.InputJsonValue,
           },
         });
         return;
@@ -2809,7 +2835,7 @@ export async function refreshAllPortalSessions(db: PrismaClient) {
         },
         {
           status: 'expired',
-          portal: { in: ['via_verde', 'uber'] },
+          portal: { in: ['via_verde', 'uber', 'recibos_verdes'] },
           usernameEncrypted: { not: null },
           passwordEncrypted: { not: null },
         },
@@ -2988,7 +3014,9 @@ export async function runDailyPortalAutoSyncs(db: PrismaClient) {
         ? ['via_verde']
         : portal === 'uber'
           ? ['pagamentos', 'uber']
-          : ['eletricidade', 'combustivel'];
+          : portal === 'recibos_verdes'
+            ? ['admin_mgmt']
+            : ['eletricidade', 'combustivel'];
     const moduleOn = await tenantHasEnabledModule(db, connection.tenantId, moduleKeys);
     if (!moduleOn) {
       results.push({ portal, tenantId: connection.tenantId, ok: true, skipped: 'módulo inactivo' });

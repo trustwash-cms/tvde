@@ -2864,6 +2864,7 @@ enum PortalKind {
   via_verde
   myprio
   uber
+  recibos_verdes
 }
 
 enum PortalConnectionStatus {

@@ -1,11 +1,25 @@
-export const PORTAL_KINDS = ['via_verde', 'myprio', 'uber'] as const;
+export const PORTAL_KINDS = ['via_verde', 'myprio', 'uber', 'recibos_verdes'] as const;
 export type PortalKind = (typeof PORTAL_KINDS)[number];
 
 export const PORTAL_KIND_LABELS: Record<PortalKind, string> = {
   via_verde: 'Via Verde',
   myprio: 'MyPRIO',
   uber: 'Uber',
+  recibos_verdes: 'Recibos Verdes',
 };
+
+export function portalUsernameFieldLabel(portal: PortalKind): string {
+  switch (portal) {
+    case 'via_verde':
+      return 'Email';
+    case 'uber':
+      return 'Telefone ou email';
+    case 'myprio':
+      return 'Nº utilizador MyPRIO';
+    case 'recibos_verdes':
+      return 'NIF';
+  }
+}
 
 /** Sync MyPRIO: Electric, Frota ou ambos num único browser (pagamentos). */
 export const MYPRIO_SYNC_SCOPES = ['electric', 'fleet', 'both'] as const;
@@ -50,7 +64,7 @@ export interface PortalConnectionPublic {
   lastSyncAt: string | null;
   lastError: string | null;
   isEnabled: boolean;
-  /** Sync automático diário (Via Verde / MyPRIO / Uber). Default false — o sync manual não muda. */
+  /** Sync automático diário (Via Verde / MyPRIO). Recibos Verdes só guarda sessão. */
   autoSyncEnabled: boolean;
   activeJobId: string | null;
   /** Tipo do job activo (connect / sync / refresh) — evita misturar spinner de sync com login */

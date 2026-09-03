@@ -165,6 +165,15 @@ export async function ingestPortalDownloadedFiles(
   const summaries: Array<{ inserted: number; skipped: number; failed: number; message?: string }> = [];
   const seenHashes = new Set<string>();
 
+  if (portal === 'recibos_verdes') {
+    return {
+      inserted: 0,
+      skipped: 0,
+      failed: 0,
+      message: 'Sessão AT válida. Use import CSV para os recibos.',
+    };
+  }
+
   for (const file of files) {
     if (portal === 'via_verde') {
       summaries.push(

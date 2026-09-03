@@ -6,6 +6,7 @@ import {
   MYPRIO_SYNC_SCOPE_LABELS,
   PORTAL_CONNECTION_STATUS_LABELS,
   PORTAL_KIND_LABELS,
+  portalUsernameFieldLabel,
   type MyPrioSyncScope,
   type PortalConnectionPublic,
   type PortalKind,
@@ -161,6 +162,9 @@ function phaseMessage(phase: PanelPhase, portalLabel: string, syncLabel?: string
     case 'submitting_password':
       return 'A confirmar a password na Uber…';
     case 'syncing':
+      if (portalLabel === 'Recibos Verdes') {
+        return 'A verificar sessão no Portal das Finanças…';
+      }
       return `A sincronizar ${syncLabel || portalLabel}… a descarregar dados do portal.`;
     default:
       return null;
@@ -202,7 +206,12 @@ export function PortalConnectionPanel({
 
   const portalLabel = PORTAL_KIND_LABELS[portal];
   const syncLabel = syncScope ? MYPRIO_SYNC_SCOPE_LABELS[syncScope] : portalLabel;
-  const syncButtonLabel = syncScope ? `Sincronizar ${syncLabel}` : 'Sincronizar';
+  const syncButtonLabel =
+    portal === 'recibos_verdes'
+      ? 'Verificar sessão'
+      : syncScope
+        ? `Sincronizar ${syncLabel}`
+        : 'Sincronizar';
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const otpSubmitStartedAt = useRef<number | null>(null);
@@ -974,14 +983,16 @@ export function PortalConnectionPanel({
           </p>
           {connection?.lastSyncAt ? (
             <p className="mt-0.5 text-xs text-slate-400">
-              Último sync: {new Date(connection.lastSyncAt).toLocaleString('pt-PT')}
+              {portal === 'recibos_verdes' ? 'Última verificação' : 'Último sync'}:{' '}
+              {new Date(connection.lastSyncAt).toLocaleString('pt-PT')}
             </p>
           ) : null}
           {(connection?.usernameMasked ||
             connection?.hasPassword ||
             connection?.hasSession ||
             status !== 'disconnected') &&
-          portal !== 'uber' ? (
+          portal !== 'uber' &&
+          portal !== 'recibos_verdes' ? (
             <label className="mt-3 flex items-start gap-2 text-sm text-slate-700">
               <input
                 type="checkbox"
@@ -1250,17 +1261,12 @@ export function PortalConnectionPanel({
               ) : null}
               <p className="text-xs text-slate-500">
                 A password fica guardada encriptada neste tenant. Pode esquecê-la a qualquer momento.
+                {portal === 'recibos_verdes'
+                  ? ' O login usa o separador NIF; os cookies da AT ficam guardados para evitar novo login.'
+                  : ''}
               </p>
               <label className="block text-sm">
-                <span className="text-slate-600">
-                  {portal === 'via_verde'
-                    ? 'Email'
-                    : portal === 'uber'
-                      ? 'Telefone ou email'
-                      : portal === 'myprio'
-                        ? 'Nº utilizador MyPRIO'
-                        : 'Utilizador'}
-                </span>
+                <span className="text-slate-600">{portalUsernameFieldLabel(portal)}</span>
                 <AntiAutofillInput
                   id={`portal-${portal}-username`}
                   name={`portal-${portal}-username`}
@@ -1268,8 +1274,10 @@ export function PortalConnectionPanel({
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   required
-                  inputMode={portal === 'myprio' ? 'numeric' : undefined}
-                  placeholder={portal === 'myprio' ? 'ex. 610871' : undefined}
+                  inputMode={portal === 'myprio' || portal === 'recibos_verdes' ? 'numeric' : undefined}
+                  placeholder={
+                    portal === 'myprio' ? 'ex. 610871' : portal === 'recibos_verdes' ? 'NIF (9 dígitos)' : undefined
+                  }
                   disabled={busy}
                 />
               </label>

@@ -3,6 +3,7 @@ import type { PortalAdapter, PortalLoginPhase, PortalSyncPhase } from './types';
 import { viaVerdeAdapter } from './via-verde.adapter';
 import { myprioAdapter } from './myprio.adapter';
 import { uberAdapter } from './uber.adapter';
+import { recibosVerdesAdapter } from './recibos-verdes.adapter';
 
 const mockStorage = JSON.stringify({
   cookies: [],
@@ -13,7 +14,7 @@ function mockAdapter(portal: PortalKind): PortalAdapter {
   return {
     portal,
     async login(_page, _username, _password): Promise<PortalLoginPhase> {
-      if (portal === 'via_verde') {
+      if (portal === 'via_verde' || portal === 'recibos_verdes') {
         return { status: 'connected', storageState: mockStorage };
       }
       return {
@@ -27,6 +28,13 @@ function mockAdapter(portal: PortalKind): PortalAdapter {
       return { status: 'connected', storageState: mockStorage };
     },
     async sync(): Promise<PortalSyncPhase> {
+      if (portal === 'recibos_verdes') {
+        return {
+          status: 'ok',
+          files: [],
+          warnings: ['Modo mock: sessão AT simulada. Importação CSV mantém-se.'],
+        };
+      }
       return {
         status: 'failed',
         message:
@@ -48,6 +56,8 @@ export function getPortalAdapter(portal: PortalKind, mock: boolean): PortalAdapt
       return myprioAdapter;
     case 'uber':
       return uberAdapter;
+    case 'recibos_verdes':
+      return recibosVerdesAdapter;
     default:
       return mockAdapter(portal);
   }

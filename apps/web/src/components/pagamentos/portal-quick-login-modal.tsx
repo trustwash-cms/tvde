@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { PORTAL_KIND_LABELS, type PortalKind } from '@tvde/shared';
+import { PORTAL_KIND_LABELS, portalUsernameFieldLabel, type PortalKind } from '@tvde/shared';
 import { Modal } from '@/components/modal';
 import { AntiAutofillInput, AutofillDecoys } from '@/components/anti-autofill';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
@@ -424,13 +424,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
           )}
           <label className="block text-sm">
             <span className="text-slate-600">
-              {portal === 'via_verde'
-                ? 'Email'
-                : portal === 'uber'
-                  ? 'Telefone ou email'
-                  : portal === 'myprio'
-                    ? 'Nº utilizador MyPRIO'
-                    : 'Utilizador'}
+              {portal ? portalUsernameFieldLabel(portal) : 'Utilizador'}
             </span>
             <AntiAutofillInput
               className="input mt-1 w-full"
@@ -438,7 +432,7 @@ export function PortalQuickLoginModal({ open, portal, onClose, onSuccess }: Prop
               onChange={(e) => setUsername(e.target.value)}
               required
               disabled={busy}
-              inputMode={portal === 'myprio' ? 'numeric' : undefined}
+              inputMode={portal === 'myprio' || portal === 'recibos_verdes' ? 'numeric' : undefined}
             />
           </label>
           <label className="block text-sm">

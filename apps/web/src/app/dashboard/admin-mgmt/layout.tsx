@@ -16,7 +16,7 @@ export default function AdminMgmtLayout({ children }: { children: React.ReactNod
           <div>
             <h1 className="text-xl font-semibold text-slate-900">{ADMIN_MGMT_MODULE_NAME}</h1>
             <p className="mt-1 text-sm text-slate-500">
-              Seguros, contratos, pessoal, fiscal e alertas de vencimentos.
+              Seguros, contratos, recibos verdes, fiscal e alertas de vencimentos.
             </p>
           </div>
           <WorkspaceSelector workspaces={workspaces} workspaceId={workspaceId} onChange={setWorkspaceId} />
