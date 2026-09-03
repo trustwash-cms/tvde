@@ -587,6 +587,204 @@ async function fillEmissaoDateThenTipo(
   return filledDate;
 }
 
+/** Motivo de Emissão → «Pagamento dos bens ou dos serviços» (como na fatura TVDE real). */
+async function selectMotivoPagamentoBensServicos(page: Page): Promise<boolean> {
+  const target = 'Pagamento dos bens ou dos serviços';
+  const ok = await page
+    .evaluate(
+      `(label) => {
+        const textOf = (el) => (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+        // Radio / label
+        const labels = Array.from(document.querySelectorAll('label, span, div, li, mat-radio-button'));
+        const hit = labels.find((el) => textOf(el) === label || textOf(el).includes(label));
+        if (hit) {
+          const input = hit.querySelector('input[type="radio"]') || hit.closest('label')?.querySelector('input');
+          if (input) {
+            input.click();
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'radio';
+          }
+          if (typeof hit.click === 'function') {
+            hit.click();
+            return 'click';
+          }
+        }
+        // Select
+        const selects = Array.from(document.querySelectorAll('select'));
+        for (const sel of selects) {
+          const opts = Array.from(sel.options);
+          const match = opts.find((o) => textOf(o).includes(label));
+          if (match) {
+            sel.value = match.value;
+            sel.dispatchEvent(new Event('input', { bubbles: true }));
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'select';
+          }
+        }
+        return false;
+      }`,
+      target
+    )
+    .catch(() => false);
+
+  if (ok) {
+    await page.waitForTimeout(400);
+    return true;
+  }
+
+  const loc = page.getByText(/pagamento dos bens ou dos serviços/i).first();
+  if (await isVisible(loc)) {
+    await loc.click({ force: true }).catch(() => undefined);
+    await page.waitForTimeout(400);
+    return true;
+  }
+  return false;
+}
+
+async function clickAdicionarProduto(page: Page): Promise<boolean> {
+  const btn = await findInScopes(page, (s) =>
+    s
+      .getByRole('button', { name: /^\s*adicionar\s*$/i })
+      .or(s.locator('button, a').filter({ hasText: /^\s*ADICIONAR\s*$/i }))
+  );
+  if (!btn) return false;
+  await btn.first().click({ force: true, timeout: 10_000 }).catch(() => undefined);
+  await page.waitForTimeout(900);
+  return pageHasText(page, /adicionar produto,? serviço ou outros/i);
+}
+
+export type RecibosVerdesLinhaInput = {
+  tipo?: 'Produto' | 'Serviço' | 'Outros';
+  tipoRef?: 'Outro' | 'EAN';
+  referencia?: string;
+  descricao: string;
+  quantidade?: string;
+  unidade?: string;
+  /** Preço unitário sem IVA (ex. "390,64") */
+  precoUnitarioSemIva: string;
+  /** Ex.: "0%" ou "6% - Taxa Reduzida - Continente" */
+  taxaIva?: string;
+  /** Ex.: "IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA" */
+  motivoIsencao?: string;
+};
+
+/**
+ * Modal «Adicionar Produto, Serviço ou Outros».
+ * Valores de referência da fatura TVDE real (Fatura-Recibo):
+ * Tipo=Serviço, Tipo Ref=Outro, Unidade=Unidade, IVA 0% + Art.53.º n.º1 CIVA.
+ */
+async function fillAdicionarProdutoModal(
+  page: Page,
+  linha: RecibosVerdesLinhaInput
+): Promise<boolean> {
+  if (!(await pageHasText(page, /adicionar produto,? serviço ou outros/i))) return false;
+
+  const tipo = linha.tipo ?? 'Serviço';
+  const tipoRef = linha.tipoRef ?? 'Outro';
+  const descricao = linha.descricao;
+  const quantidade = linha.quantidade ?? '1';
+  const preco = linha.precoUnitarioSemIva;
+  const motivoIsencao =
+    linha.motivoIsencao ?? 'IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA';
+
+  const pickNearLabel = async (labelRe: RegExp, optionRe: RegExp) => {
+    const lab = page.getByText(labelRe).first();
+    if (!(await isVisible(lab))) return false;
+    const control = lab
+      .locator('xpath=following::*[self::select or @role="combobox" or self::button or self::div][1]')
+      .first();
+    if (!(await isVisible(control))) return false;
+    const tag = await control
+      .evaluate(`(el) => (el && el.tagName ? String(el.tagName).toLowerCase() : '')`)
+      .catch(() => '');
+    if (tag === 'select') {
+      await control
+        .selectOption({ label: optionRe.source.replace(/^\^\\s\*|\s\*$/g, '') })
+        .catch(async () => {
+          const opts = control.locator('option');
+          const n = await opts.count();
+          for (let i = 0; i < n; i += 1) {
+            const t = ((await opts.nth(i).innerText().catch(() => '')) || '').trim();
+            if (optionRe.test(t)) {
+              await control.selectOption({ index: i }).catch(() => undefined);
+              return;
+            }
+          }
+        });
+      return true;
+    }
+    await control.click({ force: true }).catch(() => undefined);
+    await page.waitForTimeout(300);
+    const opt = page
+      .getByRole('option', { name: optionRe })
+      .or(page.locator('mat-option, li, option, span, div').filter({ hasText: optionRe }))
+      .first();
+    if (await isVisible(opt)) {
+      await opt.click({ force: true }).catch(() => undefined);
+      return true;
+    }
+    return false;
+  };
+
+  const fillNearLabel = async (labelRe: RegExp, value: string, asTextarea = false) => {
+    const lab = page.getByText(labelRe).first();
+    if (!(await isVisible(lab))) return false;
+    const field = asTextarea
+      ? lab.locator('xpath=following::textarea[1]').first()
+      : lab.locator('xpath=following::input[not(@type="radio") and not(@type="checkbox")][1]').first();
+    if (!(await isVisible(field))) return false;
+    if (asTextarea) {
+      await field.click({ force: true }).catch(() => undefined);
+      await field.fill(value, { force: true }).catch(() => undefined);
+      await field.dispatchEvent('input').catch(() => undefined);
+      await field.dispatchEvent('change').catch(() => undefined);
+    } else {
+      await fillAngularInput(field, value);
+    }
+    return true;
+  };
+
+  // Preço s/IVA activo
+  const semIva = page.getByText(/preço unitário s\/iva/i).first();
+  if (await isVisible(semIva)) await semIva.click({ force: true }).catch(() => undefined);
+
+  await pickNearLabel(/^\s*Tipo\s*$/i, new RegExp(`^\\s*${tipo}\\s*$`, 'i'));
+  await pickNearLabel(/tipo\s*ref/i, new RegExp(tipoRef, 'i'));
+  if (linha.referencia) await fillNearLabel(/^\s*referência\s*$/i, linha.referencia);
+  await fillNearLabel(/^\s*descrição\s*$/i, descricao, true);
+  // fallback descrição
+  const ta = page.locator('textarea').first();
+  if (await isVisible(ta)) {
+    await ta.fill(descricao, { force: true }).catch(() => undefined);
+  }
+  await fillNearLabel(/^\s*quantidade\s*$/i, quantidade);
+  await pickNearLabel(/^\s*unidade\s*$/i, /Unidade/i);
+  await fillNearLabel(/preço unitário s\/iva/i, preco);
+  await pickNearLabel(/taxa\s*iva/i, /^\s*0\s*%/i);
+  await pickNearLabel(/motivo de isenção/i, /Artigo 53/i);
+
+  // Se Motivo de Isenção ainda vazio, tentar texto exacto da fatura
+  const motivoLab = page.getByText(/motivo de isenção/i).first();
+  if (await isVisible(motivoLab)) {
+    await pickNearLabel(/motivo de isenção/i, new RegExp(motivoIsencao.slice(0, 40), 'i'));
+  }
+
+  await page.waitForTimeout(400);
+  return true;
+}
+
+async function clickGuardarProduto(page: Page): Promise<boolean> {
+  const btn = await findInScopes(page, (s) =>
+    s
+      .getByRole('button', { name: /^\s*guardar\s*$/i })
+      .or(s.locator('button').filter({ hasText: /^\s*GUARDAR\s*$/i }))
+  );
+  if (!btn) return false;
+  await btn.first().click({ force: true }).catch(() => undefined);
+  await page.waitForTimeout(1000);
+  return !(await pageHasText(page, /adicionar produto,? serviço ou outros/i));
+}
+
 async function completeLogin(page: Page, username: string, password: string): Promise<PortalLoginPhase> {
   const nif = username.replace(/\s+/g, '').trim();
   if (!nif || !password) {
@@ -745,14 +943,38 @@ export const recibosVerdesAdapter: PortalAdapter = {
         };
       }
 
-      const emissaoOk = await fillEmissaoDateThenTipo(page, { tipo: 'Fatura' });
+      // Fatura real TVDE = Fatura-Recibo (não só Fatura)
+      const emissaoOk = await fillEmissaoDateThenTipo(page, { tipo: 'Fatura-Recibo' });
+      const motivoOk = await selectMotivoPagamentoBensServicos(page);
+      const addOpened = await clickAdicionarProduto(page);
+
+      let produtoOk = false;
+      if (addOpened) {
+        // Linha de exemplo alinhada à fatura 24 TVDE (valores a parametrizar depois)
+        produtoOk = await fillAdicionarProdutoModal(page, {
+          tipo: 'Serviço',
+          tipoRef: 'Outro',
+          descricao: 'OUT - TVDE Serviço',
+          quantidade: '1',
+          unidade: 'Unidade - Unidade',
+          precoUnitarioSemIva: '0,00',
+          taxaIva: '0%',
+          motivoIsencao: 'IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA',
+        });
+      }
+
+      const steps = [
+        emissaoOk ? 'data+tipo Fatura-Recibo' : 'emissão incompleta',
+        motivoOk ? 'motivo Pagamento bens/serviços' : 'motivo em falta',
+        addOpened ? 'modal ADICIONAR aberto' : 'ADICIONAR falhou',
+        produtoOk ? 'campos produto preenchidos (Guardar ainda manual)' : 'produto incompleto',
+      ];
+
       return {
         status: 'ok',
         files: [],
         warnings: [
-          emissaoOk
-            ? 'Sessão OK · Fatura ou Fatura-Recibo aberto · Emissão: data + tipo Fatura. Segue: Adquirente → Motivo → Produtos → Observações → Desconto → Totais (ainda manual / próximo passo).'
-            : 'Sessão OK · formulário Emitir Faturas aberto. Confirme data (1º) e tipo Fatura (2º) no browser se necessário.',
+          `Sessão OK · Emitir Faturas: ${steps.join(' · ')}. Próximo: Adquirente (NIF) + Guardar linha + EMITIR.`,
         ],
       };
     } catch (err) {

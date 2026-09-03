@@ -15,6 +15,7 @@ import { useWorkspaceContext } from '@/hooks/use-workspace-context';
 import { Modal } from '@/components/modal';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { AdminMgmtRecibosVerdesImport } from '@/components/admin-mgmt/admin-mgmt-recibos-verdes-import';
+import { AdminMgmtRecibosVerdesDraft } from '@/components/admin-mgmt/admin-mgmt-recibos-verdes-draft';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
 
 type ReciboVerdeRow = {
@@ -191,6 +192,8 @@ export function AdminMgmtRecibosVerdesPanel() {
 
         {canConnectPortal ? <PortalConnectionPanel portal="recibos_verdes" /> : null}
 
+        <AdminMgmtRecibosVerdesDraft />
+
         <a
           href={PORTAL_DAS_FINANCAS_EMITIR_URL}
           target="_blank"
@@ -200,9 +203,9 @@ export function AdminMgmtRecibosVerdesPanel() {
           <div>
             <p className="text-sm font-medium text-slate-900">Página Emitir (AT)</p>
             <p className="mt-0.5 text-sm text-slate-500">
-              Abre Faturas e Recibos → Emitir. Com a conta ligada, a sessão fica guardada. Fluxo de
-              emissão: Fatura ou Fatura-Recibo → data → tipo Fatura → Adquirente → Motivo → Produtos →
-              Totais. CSV: Consultar → Exportar tabela.
+              Abre Faturas e Recibos → Emitir. Conta ligada = sessão guardada. Fluxo TVDE (fatura
+              real): Fatura-Recibo → data → Motivo «Pagamento dos bens ou dos serviços» → ADICIONAR
+              (Serviço / Outro / IVA 0% Art.53.º) → Adquirente → EMITIR.
             </p>
           </div>
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-primary)] px-3 py-1.5 text-sm font-medium text-white">

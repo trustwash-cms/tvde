@@ -542,3 +542,20 @@ export {
   type RecibosVerdesImportResult,
   type RecibosVerdesCsvRowError,
 } from './recibos-verdes-import';
+export {
+  RECIBOS_VERDES_MOTIVO_EMISSAO,
+  RECIBOS_VERDES_MOTIVO_ISENCAO_IVA,
+  RECIBOS_VERDES_BASE_IRS,
+  RECIBOS_VERDES_DOCUMENTO_TIPOS,
+  RECIBOS_VERDES_LINHA_TIPOS,
+  RECIBOS_VERDES_TIPO_REF,
+  createRecibosVerdesDraftExample,
+  parsePtMoney,
+  formatPtMoney,
+  summarizeRecibosVerdesDraft,
+  type RecibosVerdesDocumentoTipo,
+  type RecibosVerdesLinhaTipo,
+  type RecibosVerdesTipoRef,
+  type RecibosVerdesDraftLinha,
+  type RecibosVerdesDraft,
+} from './recibos-verdes-draft';

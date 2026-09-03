@@ -933,15 +933,23 @@ export function PortalConnectionPanel({
     !authUiActive &&
     connection?.activeJobType !== 'connect';
   const loadingMsg = authUiActive
-    ? connection?.authChallenge === 'bot' || uberRpaLiveActive(connection)
+    ? (connection?.authChallenge === 'bot' || uberRpaLiveActive(connection)) && portal === 'uber'
       ? 'Login Uber — acompanhe o browser no ecrã RPA (stream ou noVNC).'
       : phaseMessage(
-          phase === 'syncing' || phase === 'connecting' ? 'awaiting_otp' : phase,
+          phase === 'syncing' || phase === 'connecting'
+            ? portal === 'uber' || portal === 'myprio'
+              ? 'awaiting_otp'
+              : 'connecting'
+            : phase,
           portalLabel,
           syncLabel
         ) ||
         (connection?.activeJobStatus === 'running'
-          ? 'A validar o código SMS na Uber… pode demorar até ~60s.'
+          ? portal === 'uber'
+            ? 'A validar o código SMS na Uber… pode demorar até ~60s.'
+            : portal === 'myprio'
+              ? 'A validar o código SMS no MyPRIO…'
+              : `A autenticar ${portalLabel}…`
           : dismissedAuthJobId === connection?.activeJobId
             ? 'Login pendente — use «Introduzir OTP» quando quiser ou Desligar para recomeçar.'
             : null)
