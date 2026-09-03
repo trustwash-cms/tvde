@@ -21,6 +21,30 @@ export type RecibosVerdesLinhaTipo = (typeof RECIBOS_VERDES_LINHA_TIPOS)[number]
 export const RECIBOS_VERDES_TIPO_REF = ['Outro', 'EAN'] as const;
 export type RecibosVerdesTipoRef = (typeof RECIBOS_VERDES_TIPO_REF)[number];
 
+/** Opções comuns do select Taxa IVA no Portal das Finanças. */
+export const RECIBOS_VERDES_TAXAS_IVA = [
+  '0%',
+  '6% - Taxa Reduzida - Continente',
+  '13% - Taxa Intermédia - Continente',
+  '23% - Taxa Normal - Continente',
+  '4% - Taxa Reduzida - RA Madeira',
+  '12% - Taxa Intermédia - RA Madeira',
+  '22% - Taxa Normal - RA Madeira',
+  '4% - Taxa Reduzida - RA Açores',
+  '9% - Taxa Intermédia - RA Açores',
+  '16% - Taxa Normal - RA Açores',
+] as const;
+
+export const RECIBOS_VERDES_MOTIVOS_ISENCAO = [
+  'IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA',
+  'Isento Artigo 9.º do CIVA',
+  'Isento Artigo 13.º do CIVA',
+  'Isento Artigo 14.º do CIVA',
+  'Isento Artigo 15.º do CIVA',
+  'Não sujeito ou não tributado',
+  'Outras isenções',
+] as const;
+
 export interface RecibosVerdesDraftLinha {
   tipo: RecibosVerdesLinhaTipo;
   tipoRef: RecibosVerdesTipoRef;
@@ -29,6 +53,9 @@ export interface RecibosVerdesDraftLinha {
   quantidade: string;
   unidade: string;
   precoUnitarioSemIva: string;
+  /** Taxa de desconto comercial (%) */
+  taxaDesconto: string;
+  /** Valor a descontar (€) */
   desconto: string;
   taxaIva: string;
   motivoIsencao: string;
@@ -39,15 +66,19 @@ export interface RecibosVerdesDraft {
   numeroDocumento: string;
   tipoDocumento: RecibosVerdesDocumentoTipo;
   dataEmissao: string;
+  /** Data da transação / prestação no formulário AT */
   dataPrestacao: string;
   atcud: string;
   motivoEmissao: string;
   transmitenteNome: string;
   transmitenteNif: string;
   transmitenteMorada: string;
+  transmitenteAtividade: string;
+  adquirentePais: string;
   adquirenteNome: string;
   adquirenteNif: string;
   adquirenteMorada: string;
+  observacoes: string;
   linhas: RecibosVerdesDraftLinha[];
   baseIncidenciaIrs: string;
 }
@@ -70,9 +101,12 @@ export function createRecibosVerdesDraftExample(): RecibosVerdesDraft {
     transmitenteNome: 'FERNANDO CARLOS RODRIGUES PEREIRA',
     transmitenteNif: '266187420',
     transmitenteMorada: 'R DO MIRAMAR LOTE 3 2655-309 ERICEIRA',
+    transmitenteAtividade: '',
+    adquirentePais: 'Portugal',
     adquirenteNome: 'CAMINHOS TOLERANTES UNIPESSOAL LDA',
     adquirenteNif: '515198609',
     adquirenteMorada: 'RUA LUIS PACHECO LOTE 30 6 A, 1950-244 LISBOA, PORTUGAL',
+    observacoes: '',
     linhas: [
       {
         tipo: 'Serviço',
@@ -82,6 +116,7 @@ export function createRecibosVerdesDraftExample(): RecibosVerdesDraft {
         quantidade: '1',
         unidade: 'Unidade',
         precoUnitarioSemIva: '390,64',
+        taxaDesconto: '',
         desconto: '',
         taxaIva: '0%',
         motivoIsencao: RECIBOS_VERDES_MOTIVO_ISENCAO_IVA,
