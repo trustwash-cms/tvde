@@ -200,8 +200,9 @@ export function AdminMgmtRecibosVerdesPanel() {
           <div>
             <p className="text-sm font-medium text-slate-900">Página Emitir (AT)</p>
             <p className="mt-0.5 text-sm text-slate-500">
-              Abre Faturas e Recibos → Emitir. Com a conta ligada no TVDE, a sessão fica guardada
-              para evitar novo login. Depois, use Consultar → Exportar tabela para importar o CSV.
+              Abre Faturas e Recibos → Emitir. Com a conta ligada, a sessão fica guardada. Fluxo de
+              emissão: Fatura ou Fatura-Recibo → data → tipo Fatura → Adquirente → Motivo → Produtos →
+              Totais. CSV: Consultar → Exportar tabela.
             </p>
           </div>
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-primary)] px-3 py-1.5 text-sm font-medium text-white">
