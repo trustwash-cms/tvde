@@ -544,6 +544,7 @@ export {
 } from './recibos-verdes-import';
 export {
   RECIBOS_VERDES_MOTIVO_EMISSAO,
+  RECIBOS_VERDES_MOTIVOS_EMISSAO,
   RECIBOS_VERDES_MOTIVO_ISENCAO_IVA,
   RECIBOS_VERDES_BASE_IRS,
   RECIBOS_VERDES_DOCUMENTO_TIPOS,
@@ -563,6 +564,10 @@ export {
   parsePtMoney,
   formatPtMoney,
   parseIvaPercent,
+  parseRetencaoIrsPercent,
+  parseBaseIrsIncidenciaPercent,
+  formatQuantidadeAt,
+  formatLinhaReferenciaDescricaoAt,
   lineTotalComImposto,
   summarizeRecibosVerdesDraft,
   draftHasAdquirente,

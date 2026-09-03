@@ -1,23 +1,18 @@
 import {
-  formatAdquirenteMoradaCompleta,
+  formatLinhaReferenciaDescricaoAt,
   formatPtMoney,
+  parseIvaPercent,
   summarizeRecibosVerdesDraft,
   type RecibosVerdesDraft,
 } from '@tvde/shared';
-
-function formatDatePt(value: string): string {
-  if (!value) return '';
-  const [y, m, d] = value.split('-');
-  return d && m && y ? `${d}/${m}/${y}` : value;
-}
 
 function money(value: number): string {
   return `${formatPtMoney(value)} €`;
 }
 
 /**
- * PDF rascunho à semelhança da Fatura-Recibo AT.
- * Sem nº de documento nem data de emissão (gerados só na AT).
+ * PDF rascunho alinhado ao resultado da emissão AT (Fatura-Recibo).
+ * Nº documento, data emissão e ATCUD só existem na AT — aqui ficam como placeholders.
  */
 export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   const { default: jsPDF } = await import('jspdf');
@@ -30,165 +25,200 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   const margin = 14;
   let y = 12;
 
-  const green: [number, number, number] = [34, 120, 80];
-  const slate: [number, number, number] = [51, 65, 85];
+  const blue: [number, number, number] = [0, 115, 187];
+  const slate: [number, number, number] = [51, 51, 51];
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(...slate);
-  doc.text('AT autoridade tributária e aduaneira', margin, y);
-  y += 8;
-
-  doc.setFontSize(16);
-  doc.text(`${draft.tipoDocumento}`, pageW / 2, y, { align: 'center' });
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text('RASCUNHO (não fiscal — nº e data de emissão na AT)', pageW / 2, y + 7, {
-    align: 'center',
-  });
-  if (draft.dataPrestacao) {
-    doc.text(`Data de prestação: ${formatDatePt(draft.dataPrestacao)}`, pageW / 2, y + 13, {
-      align: 'center',
-    });
-  }
-  y += 22;
+  const ensureSpace = (need: number) => {
+    if (y + need > 285) {
+      doc.addPage();
+      y = 14;
+    }
+  };
 
   const section = (title: string) => {
-    doc.setDrawColor(...green);
-    doc.setLineWidth(0.6);
-    doc.line(margin, y, pageW - margin, y);
-    y += 5;
+    ensureSpace(14);
+    doc.setFillColor(...blue);
+    doc.rect(margin, y, pageW - margin * 2, 7, 'F');
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(9);
-    doc.setTextColor(...green);
-    doc.text(title, margin, y);
-    y += 5;
+    doc.setFontSize(10);
+    doc.setTextColor(255, 255, 255);
+    doc.text(title, margin + 2, y + 4.8);
+    y += 10;
     doc.setTextColor(...slate);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
   };
 
   const kv = (label: string, value: string) => {
+    ensureSpace(12);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
+    doc.setTextColor(80);
     doc.text(label, margin, y);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
+    doc.setTextColor(...slate);
     const lines = doc.splitTextToSize(value || '—', pageW - margin * 2);
     doc.text(lines, margin, y + 4);
     y += 4 + lines.length * 4 + 2;
   };
 
-  section('DADOS DO TRANSMITENTE');
-  kv('NOME', draft.transmitenteNome);
-  kv('DOMICÍLIO', draft.transmitenteMorada);
-  kv('NÚMERO DE IDENTIFICAÇÃO FISCAL (NIF)', draft.transmitenteNif);
-
-  section('DADOS DO ADQUIRENTE');
-  kv('NOME', draft.adquirenteNome);
-  kv('SEDE OU DOMICÍLIO', formatAdquirenteMoradaCompleta(draft));
-  kv('NÚMERO DE IDENTIFICAÇÃO FISCAL', draft.adquirenteNif);
-
-  section('DADOS DA TRANSMISSÃO DE BENS OU DA PRESTAÇÃO DE SERVIÇOS');
-  doc.setFontSize(8);
-  doc.text(`Documento emitido a título de: ${draft.motivoEmissao}`, margin, y);
-  y += 4;
-  doc.text(`Data de prestação: ${formatDatePt(draft.dataPrestacao)}`, margin, y);
+  // Cabeçalho resultado
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(12);
+  doc.setTextColor(...blue);
+  doc.text('RASCUNHO · (n.º e ATCUD na emissão AT)', margin, y);
   y += 6;
+  doc.setFontSize(14);
+  doc.setTextColor(...slate);
+  doc.text(draft.tipoDocumento, margin, y);
+  y += 5;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(`Emitida a — (gerada na AT)`, margin, y);
+  y += 4;
+  doc.text('ATCUD: — (gerado na AT)', margin, y);
+  y += 4;
+  doc.text('Via de Emissão: Portal (rascunho local TVDE)', margin, y);
+  y += 4;
+  doc.text('Sem Documentos associados.', margin, y);
+  y += 8;
 
+  section('Transmitente');
+  kv('NIF', draft.transmitenteNif);
+  kv('Nome', draft.transmitenteNome);
+  kv('Domicílio fiscal / Estabelecimento estável', draft.transmitenteMorada);
+  kv('Atividade exercida', draft.transmitenteAtividade || '—');
+
+  section('Adquirente');
+  kv('País', draft.adquirentePais.toUpperCase());
+  kv('NIF', draft.adquirenteNif);
+  kv('Nome', draft.adquirenteNome);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('Morada de Cliente', margin, y);
+  y += 5;
+  kv('Morada', draft.adquirenteMorada);
+  kv('Código Postal', draft.adquirenteCodigoPostal);
+  kv('Localidade', draft.adquirenteLocalidade);
+  kv('País', draft.adquirentePais.toUpperCase());
+
+  section('Motivo de Emissão');
+  kv('Documento emitido a título de', draft.motivoEmissao);
+
+  section('Produtos, Serviços ou Outros');
   const body = draft.linhas.map((linha) => {
-    const q = Number(String(linha.quantidade).replace(',', '.')) || 1;
-    const unit =
-      Number(String(linha.precoUnitarioSemIva).replace(/\./g, '').replace(',', '.')) || 0;
-    const total = q * unit;
+    const fmt = formatLinhaReferenciaDescricaoAt(linha);
+    const ivaPct = parseIvaPercent(linha.taxaIva);
+    const ivaLabel = `${formatPtMoney(ivaPct)}%${ivaPct === 0 ? ' a)' : ''}`;
     return [
-      [linha.referencia, linha.descricao].filter(Boolean).join(' - ') || linha.descricao,
-      `${linha.quantidade} ${linha.unidade}`.trim(),
-      money(unit),
-      linha.desconto?.trim() ? linha.desconto : '-',
-      `IVA ${linha.taxaIva.startsWith('0') ? '0%' : linha.taxaIva.split(' ')[0]} a)`,
-      money(total),
+      `${fmt.linha1}\n${fmt.linha2}\n${fmt.linha3}`,
+      ivaLabel,
+      money(lineTotalFromLinha(linha)),
     ];
   });
 
   autoTable(doc, {
     startY: y,
-    head: [['Descrição', 'Qtd', 'Valor unitário', 'Desconto', 'Taxa IVA', 'Total c/Imposto']],
-    body,
-    styles: { fontSize: 8, cellPadding: 1.5, textColor: slate },
-    headStyles: { fillColor: green, textColor: 255, fontSize: 8 },
+    head: [['Referência / Descrição', 'Taxa IVA', 'Total c/Imposto']],
+    body: body.length
+      ? body
+      : [['Sem linhas', '—', '—']],
+    styles: { fontSize: 8, cellPadding: 2, textColor: slate, valign: 'top' },
+    headStyles: { fillColor: blue, textColor: 255, fontSize: 8 },
     columnStyles: {
-      0: { cellWidth: 70 },
-      1: { cellWidth: 22 },
-      2: { cellWidth: 28, halign: 'right' },
-      3: { cellWidth: 20, halign: 'center' },
-      4: { cellWidth: 22, halign: 'center' },
-      5: { cellWidth: 28, halign: 'right' },
+      0: { cellWidth: 110 },
+      1: { cellWidth: 28 },
+      2: { cellWidth: 32, halign: 'right' },
     },
     margin: { left: margin, right: margin },
   });
-
   y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 8;
 
-  section('IVA');
-  for (const row of totals.porTaxa) {
-    const motivo = row.motivo ? ` - a) ${row.motivo}` : '';
-    doc.setFontSize(8);
-    doc.text(`${row.taxa}${motivo}`, margin, y);
-    y += 4;
-    doc.text(`Valor tributável: ${money(row.valorTributavel)}`, margin, y);
-    y += 4;
-    doc.text(`Valor IVA: ${money(row.valorIva)}`, margin, y);
-    y += 6;
-  }
+  section('Taxas de IVA');
+  autoTable(doc, {
+    startY: y,
+    head: [
+      [
+        'Taxa | Motivo de isenção/não sujeição/não tributação',
+        'Valor Tributável',
+        'Valor do IVA',
+      ],
+    ],
+    body:
+      totals.porTaxa.length > 0
+        ? totals.porTaxa.map((row) => [
+            `${row.taxa}${row.motivo ? ` - a) ${row.motivo}` : ''}`,
+            money(row.valorTributavel),
+            money(row.valorIva),
+          ])
+        : [['—', '—', '—']],
+    styles: { fontSize: 8, cellPadding: 1.8, textColor: slate },
+    headStyles: { fillColor: [240, 240, 240], textColor: slate, fontSize: 7 },
+    columnStyles: {
+      0: { cellWidth: 110 },
+      1: { cellWidth: 30, halign: 'right' },
+      2: { cellWidth: 30, halign: 'right' },
+    },
+    margin: { left: margin, right: margin },
+  });
+  y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 8;
 
-  if (draft.baseIncidenciaIrs) {
+  if (draft.baseIncidenciaIrs || totals.valorIliquido > 0) {
     section('IRS');
-    doc.text(`Base de incidência: ${draft.baseIncidenciaIrs}`, margin, y);
-    y += 4;
-    doc.text(
-      `Retenção na fonte IRS: ${draft.retencaoFonteIrs || '---'}`,
-      margin,
-      y
-    );
-    y += 4;
-    doc.text(`Rendimento: ${money(totals.valorIliquido)}`, margin, y);
-    y += 8;
+    kv('Base de incidência em IRS', draft.baseIncidenciaIrs || '—');
+    kv('Retenção na fonte IRS', draft.retencaoFonteIrs || '- - -');
+    kv('Rendimento Tributável', money(totals.rendimentoTributavel));
+    kv('Valor de IRS', money(totals.valorIrs));
   }
 
   if (draft.observacoes?.trim()) {
-    section('OBSERVAÇÕES');
+    section('Observações');
     const obs = doc.splitTextToSize(draft.observacoes, pageW - margin * 2);
     doc.text(obs, margin, y);
     y += obs.length * 4 + 4;
   }
 
-  section('TOTAIS DO DOCUMENTO');
-  const totalsBlock = [
+  section(`Totais da ${draft.tipoDocumento}`);
+  kv('Data da transação', draft.dataPrestacao || '—');
+  const totalsBlock: Array<[string, string]> = [
     ['Valor ilíquido', money(totals.valorIliquido)],
     ['IVA', money(totals.valorIva)],
-    ['Imposto do Selo', '0,00 €'],
+    ['Imposto do Selo', money(totals.impostoSelo)],
     ['TOTAL DO DOCUMENTO', money(totals.totalDocumento)],
+    ['Retenção na fonte IRS', money(totals.retencaoIrs)],
     ['TOTAL A PAGAR', money(totals.totalPagar)],
   ];
   for (const [label, value] of totalsBlock) {
+    ensureSpace(6);
     doc.setFont('helvetica', label.startsWith('TOTAL') ? 'bold' : 'normal');
-    doc.text(label, pageW - margin - 70, y);
+    doc.setFontSize(9);
+    doc.text(label, margin, y);
     doc.text(value, pageW - margin, y, { align: 'right' });
     y += 5;
   }
 
-  y = Math.max(y + 10, 270);
+  y += 8;
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
-  doc.setTextColor(100);
+  doc.setTextColor(120);
   doc.text(
     'RASCUNHO LOCAL TVDE — não substitui documento emitido no Portal das Finanças.',
     pageW / 2,
-    y,
+    Math.min(y, 290),
     { align: 'center' }
   );
 
   const stamp = new Date().toISOString().slice(0, 10);
   doc.save(`rascunho-fatura-recibo-${stamp}.pdf`);
+}
+
+function lineTotalFromLinha(linha: RecibosVerdesDraft['linhas'][number]): number {
+  const q = Number(String(linha.quantidade).replace(',', '.')) || 1;
+  const unit =
+    Number(String(linha.precoUnitarioSemIva).replace(/\./g, '').replace(',', '.')) || 0;
+  const disc = Number(String(linha.desconto || '0').replace(/\./g, '').replace(',', '.')) || 0;
+  const base = Math.max(0, q * unit - disc);
+  const ivaPct = parseIvaPercent(linha.taxaIva);
+  return base + (base * ivaPct) / 100;
 }

@@ -15,6 +15,7 @@ import {
   RECIBOS_VERDES_DOCUMENTO_TIPOS,
   RECIBOS_VERDES_IMPOSTO_SELO,
   RECIBOS_VERDES_LINHA_TIPOS,
+  RECIBOS_VERDES_MOTIVOS_EMISSAO,
   RECIBOS_VERDES_MOTIVOS_ISENCAO,
   RECIBOS_VERDES_TAXAS_IVA,
   RECIBOS_VERDES_TAXAS_RETENCAO_IRS,
@@ -24,6 +25,7 @@ import {
   createRecibosVerdesDraftExample,
   createRecibosVerdesLinhaId,
   draftShowsIrsSection,
+  formatLinhaReferenciaDescricaoAt,
   formatPtMoney,
   lineTotalComImposto,
   parseIvaPercent,
@@ -478,25 +480,38 @@ export function AdminMgmtRecibosVerdesDraft({
               onChange={(e) => update('adquirenteNome', e.target.value)}
             />
           </Field>
-          <Field label="Morada">
-            <AtInput
-              value={draft.adquirenteMorada}
-              onChange={(e) => update('adquirenteMorada', e.target.value)}
-            />
-          </Field>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Código postal">
+          <div className="space-y-3 border-t pt-3" style={{ borderColor: AT_BORDER }}>
+            <p className="text-[13px] font-bold text-[#333]">Morada de Cliente</p>
+            <Field label="Morada">
               <AtInput
-                value={draft.adquirenteCodigoPostal}
-                onChange={(e) => update('adquirenteCodigoPostal', e.target.value)}
-                placeholder="1950-244"
+                value={draft.adquirenteMorada}
+                onChange={(e) => update('adquirenteMorada', e.target.value)}
               />
             </Field>
-            <Field label="Localidade">
-              <AtInput
-                value={draft.adquirenteLocalidade}
-                onChange={(e) => update('adquirenteLocalidade', e.target.value)}
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Código Postal">
+                <AtInput
+                  value={draft.adquirenteCodigoPostal}
+                  onChange={(e) => update('adquirenteCodigoPostal', e.target.value)}
+                  placeholder="1250-053"
+                />
+              </Field>
+              <Field label="Localidade">
+                <AtInput
+                  value={draft.adquirenteLocalidade}
+                  onChange={(e) => update('adquirenteLocalidade', e.target.value)}
+                />
+              </Field>
+            </div>
+            <Field label="País">
+              <AtSelect
+                value={draft.adquirentePais}
+                onChange={(e) => update('adquirentePais', e.target.value)}
+              >
+                <option value="Portugal">Portugal</option>
+                <option value="Espanha">Espanha</option>
+                <option value="Outro">Outro</option>
+              </AtSelect>
             </Field>
           </div>
         </AtSection>
@@ -507,11 +522,11 @@ export function AdminMgmtRecibosVerdesDraft({
               value={draft.motivoEmissao}
               onChange={(e) => update('motivoEmissao', e.target.value)}
             >
-              <option value="Pagamento dos bens ou dos serviços">
-                Pagamento dos bens ou dos serviços
-              </option>
-              <option value="Adiantamento">Adiantamento</option>
-              <option value="Outro">Outro</option>
+              {RECIBOS_VERDES_MOTIVOS_EMISSAO.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
             </AtSelect>
           </Field>
         </AtSection>
@@ -538,22 +553,21 @@ export function AdminMgmtRecibosVerdesDraft({
                     </td>
                   </tr>
                 ) : (
-                  draft.linhas.map((linha) => (
+                  draft.linhas.map((linha) => {
+                    const fmt = formatLinhaReferenciaDescricaoAt(linha);
+                    return (
                     <tr key={linha.id} style={{ backgroundColor: AT_ROW_BG }}>
                       <td className="border-y px-2 py-2" style={{ borderColor: '#b8d4ea' }}>
-                        <p className="font-medium text-[#333]">
-                          {[linha.referencia, linha.descricao].filter(Boolean).join(' - ') || '—'}
-                        </p>
-                        <p className="text-[12px] text-[#555]">
-                          {linha.tipo} · {linha.quantidade} {linha.unidade}
-                        </p>
+                        <p className="font-medium text-[#333]">{fmt.linha1}</p>
+                        <p className="text-[12px] text-[#555]">{fmt.linha2}</p>
+                        <p className="text-[12px] text-[#555]">{fmt.linha3}</p>
                       </td>
                       <td
                         className="border-y px-2 py-2 whitespace-nowrap"
                         style={{ borderColor: '#b8d4ea' }}
                       >
-                        {formatPtMoney(parseIvaPercent(linha.taxaIva))} %
-                        {linha.taxaIva.startsWith('0') ? ' a)' : ''}
+                        {formatPtMoney(parseIvaPercent(linha.taxaIva))}%
+                        {parseIvaPercent(linha.taxaIva) === 0 ? ' a)' : ''}
                       </td>
                       <td
                         className="border-y px-2 py-2 text-right tabular-nums"
@@ -575,7 +589,8 @@ export function AdminMgmtRecibosVerdesDraft({
                         </button>
                       </td>
                     </tr>
-                  ))
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -662,8 +677,8 @@ export function AdminMgmtRecibosVerdesDraft({
                 ))}
               </AtSelect>
             </Field>
-            {showRetencao ? (
-              <Field label="Retenção na fonte IRS">
+            <Field label="Retenção na fonte IRS">
+              {showRetencao ? (
                 <AtSelect
                   value={draft.retencaoFonteIrs}
                   onChange={(e) => update('retencaoFonteIrs', e.target.value)}
@@ -675,31 +690,196 @@ export function AdminMgmtRecibosVerdesDraft({
                     </option>
                   ))}
                 </AtSelect>
-              </Field>
-            ) : null}
+              ) : (
+                <p className="text-[13px] text-[#555]">- - -</p>
+              )}
+            </Field>
+            <div className="grid gap-3 sm:grid-cols-2 text-[13px]">
+              <div>
+                <p className="font-bold text-[#333]">Rendimento Tributável</p>
+                <p className="tabular-nums">{formatPtMoney(totals.rendimentoTributavel)} €</p>
+              </div>
+              <div>
+                <p className="font-bold text-[#333]">Valor de IRS</p>
+                <p className="tabular-nums">{formatPtMoney(totals.valorIrs)} €</p>
+              </div>
+            </div>
           </AtSection>
         ) : null}
 
-        <AtSection title="Totais do Documento">
-          <div className="ml-auto max-w-xs space-y-1.5 text-[13px]">
+        <AtSection title={`Totais da ${draft.tipoDocumento}`}>
+          <div className="space-y-1.5 text-[13px]">
+            <div className="flex justify-between gap-6">
+              <span className="font-bold text-[#333]">Data da transação</span>
+              <span>{draft.dataPrestacao || '—'}</span>
+            </div>
             <div className="flex justify-between gap-6">
               <span className="text-[#555]">Valor ilíquido</span>
-              <span className="tabular-nums font-semibold">
-                {formatPtMoney(totals.valorIliquido)} €
-              </span>
+              <span className="tabular-nums">{formatPtMoney(totals.valorIliquido)} €</span>
             </div>
             <div className="flex justify-between gap-6">
               <span className="text-[#555]">IVA</span>
-              <span className="tabular-nums font-semibold">
-                {formatPtMoney(totals.valorIva)} €
-              </span>
+              <span className="tabular-nums">{formatPtMoney(totals.valorIva)} €</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-[#555]">Imposto do Selo</span>
+              <span className="tabular-nums">{formatPtMoney(totals.impostoSelo)} €</span>
+            </div>
+            <div className="flex justify-between gap-6 font-bold">
+              <span>TOTAL DO DOCUMENTO</span>
+              <span className="tabular-nums">{formatPtMoney(totals.totalDocumento)} €</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-[#555]">Retenção na fonte IRS</span>
+              <span className="tabular-nums">{formatPtMoney(totals.retencaoIrs)} €</span>
             </div>
             <div
               className="flex justify-between gap-6 border-t pt-1.5 font-bold"
               style={{ borderColor: AT_BORDER }}
             >
-              <span>Total a pagar</span>
-              <span className="tabular-nums">{formatPtMoney(totals.totalDocumento)} €</span>
+              <span>TOTAL A PAGAR</span>
+              <span className="tabular-nums">{formatPtMoney(totals.totalPagar)} €</span>
+            </div>
+          </div>
+        </AtSection>
+
+        <AtSection title="Pré-visualização resultado (como na AT)" collapsible defaultOpen>
+          <div className="space-y-3 text-[13px] text-[#333]">
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                RASCUNHO · Emitido (local)
+              </p>
+              <p className="text-[16px] font-bold">{draft.tipoDocumento}</p>
+              <p>Emitida a — (na AT)</p>
+              <p>ATCUD: — (na AT)</p>
+              <p>Via de Emissão: Portal</p>
+              <p>Sem Documentos associados.</p>
+            </div>
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Transmitente
+              </p>
+              <p>
+                <span className="font-bold">NIF</span> {draft.transmitenteNif || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Nome</span> {draft.transmitenteNome || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Domicílio fiscal / Estabelecimento estável</span>{' '}
+                {draft.transmitenteMorada || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Atividade exercida</span>{' '}
+                {draft.transmitenteAtividade || '—'}
+              </p>
+            </div>
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Adquirente
+              </p>
+              <p>
+                <span className="font-bold">País</span> {draft.adquirentePais.toUpperCase() || '—'}
+              </p>
+              <p>
+                <span className="font-bold">NIF</span> {draft.adquirenteNif || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Nome</span> {draft.adquirenteNome || '—'}
+              </p>
+              <p className="mt-1 font-bold">Morada de Cliente</p>
+              <p>
+                <span className="font-bold">Morada</span> {draft.adquirenteMorada || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Código Postal</span>{' '}
+                {draft.adquirenteCodigoPostal || '—'}
+              </p>
+              <p>
+                <span className="font-bold">Localidade</span> {draft.adquirenteLocalidade || '—'}
+              </p>
+              <p>
+                <span className="font-bold">País</span> {draft.adquirentePais.toUpperCase() || '—'}
+              </p>
+            </div>
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Motivo de Emissão
+              </p>
+              <p>
+                <span className="font-bold">Documento emitido a título de:</span>{' '}
+                {draft.motivoEmissao}
+              </p>
+            </div>
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Produtos, Serviços ou Outros
+              </p>
+              {draft.linhas.map((linha) => {
+                const fmt = formatLinhaReferenciaDescricaoAt(linha);
+                return (
+                  <div key={linha.id} className="mb-2 border-b pb-2" style={{ borderColor: '#eee' }}>
+                    <p>{fmt.linha1}</p>
+                    <p>{fmt.linha2}</p>
+                    <p>{fmt.linha3}</p>
+                    <p>
+                      {formatPtMoney(parseIvaPercent(linha.taxaIva))}%
+                      {parseIvaPercent(linha.taxaIva) === 0 ? ' a)' : ''} ·{' '}
+                      {formatPtMoney(lineTotalComImposto(linha))} €
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Taxas de IVA
+              </p>
+              {totals.porTaxa.map((row) => (
+                <p key={`${row.taxa}|${row.motivo}`}>
+                  {row.taxa}
+                  {row.motivo ? ` - a) ${row.motivo}` : ''} · Tributável{' '}
+                  {formatPtMoney(row.valorTributavel)} € · IVA {formatPtMoney(row.valorIva)} €
+                </p>
+              ))}
+            </div>
+            {showIrs ? (
+              <div>
+                <p className="font-bold" style={{ color: AT_BLUE }}>
+                  IRS
+                </p>
+                <p>
+                  <span className="font-bold">Base de incidência em IRS</span>{' '}
+                  {draft.baseIncidenciaIrs}
+                </p>
+                <p>
+                  <span className="font-bold">Retenção na fonte IRS</span>{' '}
+                  {draft.retencaoFonteIrs || '- - -'}
+                </p>
+                <p>
+                  <span className="font-bold">Rendimento Tributável</span>{' '}
+                  {formatPtMoney(totals.rendimentoTributavel)} €
+                </p>
+                <p>
+                  <span className="font-bold">Valor de IRS</span> {formatPtMoney(totals.valorIrs)} €
+                </p>
+              </div>
+            ) : null}
+            <div>
+              <p className="font-bold" style={{ color: AT_BLUE }}>
+                Totais da {draft.tipoDocumento}
+              </p>
+              <p>
+                <span className="font-bold">Data da transação</span> {draft.dataPrestacao || '—'}
+              </p>
+              <p>
+                Valor ilíquido:{formatPtMoney(totals.valorIliquido)} € · IVA:
+                {formatPtMoney(totals.valorIva)} € · Imposto do Selo:
+                {formatPtMoney(totals.impostoSelo)} € · TOTAL DO DOCUMENTO:
+                {formatPtMoney(totals.totalDocumento)} € · Retenção na fonte IRS:
+                {formatPtMoney(totals.retencaoIrs)} € · TOTAL A PAGAR:
+                {formatPtMoney(totals.totalPagar)} €
+              </p>
             </div>
           </div>
         </AtSection>

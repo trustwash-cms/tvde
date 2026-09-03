@@ -5,11 +5,18 @@
 export const RECIBOS_VERDES_MOTIVO_EMISSAO =
   'Pagamento dos bens ou dos serviços' as const;
 
+/** Opções «Documento emitido a título de» no resultado AT. */
+export const RECIBOS_VERDES_MOTIVOS_EMISSAO = [
+  'Pagamento dos bens ou dos serviços',
+  'Adiantamento',
+  'Adiantamento para pagamento de despesas por conta e em nome do cliente',
+] as const;
+
 export const RECIBOS_VERDES_MOTIVO_ISENCAO_IVA =
   'IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA' as const;
 
 export const RECIBOS_VERDES_BASE_IRS =
-  'Sem retenção - Art.101.º, n.º1 do CIRS' as const;
+  'Dispensa de retenção - art. 101.º-B, n.º1, al. a) e b), do CIRS' as const;
 
 export const RECIBOS_VERDES_DOCUMENTO_TIPOS = ['Fatura', 'Fatura-Recibo'] as const;
 export type RecibosVerdesDocumentoTipo = (typeof RECIBOS_VERDES_DOCUMENTO_TIPOS)[number];
@@ -222,7 +229,7 @@ export function createRecibosVerdesDraftExample(): RecibosVerdesDraft {
     transmitenteNome: 'FERNANDO CARLOS RODRIGUES PEREIRA',
     transmitenteNif: '266187420',
     transmitenteMorada: 'R DO MIRAMAR LOTE 3 2655-309 ERICEIRA',
-    transmitenteAtividade: '',
+    transmitenteAtividade: 'OUTROS PRESTADORES DE SERVICOS',
     adquirentePais: 'Portugal',
     adquirenteNome: 'CAMINHOS TOLERANTES UNIPESSOAL LDA',
     adquirenteNif: '515198609',
@@ -233,8 +240,12 @@ export function createRecibosVerdesDraftExample(): RecibosVerdesDraft {
     linhas: [
       {
         ...createEmptyRecibosVerdesLinha(),
+        tipoRef: 'Outro',
         referencia: 'OUT',
+        tipo: 'Serviço',
         descricao: 'TVDE 2026 Serviço SEMANA DO 08/06 AO 14/06',
+        quantidade: '1',
+        unidade: 'Unidade',
         precoUnitarioSemIva: '390,64',
         taxaIva: '0%',
         motivoIsencao: RECIBOS_VERDES_MOTIVO_ISENCAO_IVA,
@@ -290,6 +301,40 @@ export function parseIvaPercent(taxaIva: string): number {
   return parsePtMoney(m[1]);
 }
 
+/** Extrai % de retenção IRS do texto da opção AT. */
+export function parseRetencaoIrsPercent(retencao: string): number {
+  if (!retencao.trim()) return 0;
+  const m = retencao.match(/(\d+(?:[.,]\d+)?)\s*%/);
+  if (!m) return 0;
+  return parsePtMoney(m[1]);
+}
+
+/** Base IRS com incidência parcial (25%/50%/100%). */
+export function parseBaseIrsIncidenciaPercent(base: string): number {
+  if (/Sobre 25%/i.test(base)) return 25;
+  if (/Sobre 50%/i.test(base)) return 50;
+  if (/Sobre 100%/i.test(base)) return 100;
+  return 100;
+}
+
+export function formatQuantidadeAt(quantidade: string): string {
+  const n = parsePtMoney(quantidade) || 0;
+  return n.toLocaleString('pt-PT', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
+}
+
+/** Formatação da coluna Referência/Descrição como no resultado AT. */
+export function formatLinhaReferenciaDescricaoAt(linha: RecibosVerdesDraftLinha): {
+  linha1: string;
+  linha2: string;
+  linha3: string;
+} {
+  return {
+    linha1: `${linha.tipoRef} - ${linha.referencia || '—'}`,
+    linha2: `${linha.tipo} - ${linha.descricao || '—'}`,
+    linha3: `${formatQuantidadeAt(linha.quantidade)} Unidade - ${linha.unidade || 'Unidade'}`,
+  };
+}
+
 export function lineTotalComImposto(linha: RecibosVerdesDraftLinha): number {
   const q = parsePtMoney(linha.quantidade) || 1;
   const unit = parsePtMoney(linha.precoUnitarioSemIva);
@@ -301,7 +346,11 @@ export function lineTotalComImposto(linha: RecibosVerdesDraftLinha): number {
 export function summarizeRecibosVerdesDraft(draft: RecibosVerdesDraft): {
   valorIliquido: number;
   valorIva: number;
+  impostoSelo: number;
   totalDocumento: number;
+  retencaoIrs: number;
+  valorIrs: number;
+  rendimentoTributavel: number;
   totalPagar: number;
   porTaxa: Array<{ taxa: string; motivo: string; valorTributavel: number; valorIva: number }>;
 } {
@@ -332,12 +381,30 @@ export function summarizeRecibosVerdesDraft(draft: RecibosVerdesDraft): {
     map.set(key, prev);
   }
 
-  const totalDocumento = valorIliquido + valorIva;
+  const impostoSelo = 0;
+  const totalDocumento = valorIliquido + valorIva + impostoSelo;
+
+  const hasRetencao = recibosVerdesNeedsRetencaoIrs(draft.baseIncidenciaIrs);
+  const incidenciaPct = hasRetencao
+    ? parseBaseIrsIncidenciaPercent(draft.baseIncidenciaIrs)
+    : 0;
+  const rendimentoTributavel = hasRetencao
+    ? (valorIliquido * incidenciaPct) / 100
+    : valorIliquido;
+  const taxaRet = hasRetencao ? parseRetencaoIrsPercent(draft.retencaoFonteIrs) : 0;
+  const retencaoIrs = hasRetencao ? (rendimentoTributavel * taxaRet) / 100 : 0;
+  const valorIrs = retencaoIrs;
+  const totalPagar = Math.max(0, totalDocumento - retencaoIrs);
+
   return {
     valorIliquido,
     valorIva,
+    impostoSelo,
     totalDocumento,
-    totalPagar: totalDocumento,
+    retencaoIrs,
+    valorIrs,
+    rendimentoTributavel,
+    totalPagar,
     porTaxa: Array.from(map.values()),
   };
 }
