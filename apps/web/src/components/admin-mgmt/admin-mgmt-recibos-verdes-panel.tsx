@@ -1,22 +1,28 @@
 'use client';
 
-import { FormEvent, useEffect, useState } from 'react';
-import { ExternalLink, Plus, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ExternalLink, Mail, Printer, RefreshCw, CheckCircle2 } from 'lucide-react';
 import {
   PORTAL_DAS_FINANCAS_EMITIR_URL,
   formatAdminMgmtMoney,
-  getAdminMgmtFaturaPagamentoLabel,
+  formatPtMoney,
   hasMinRole,
+  type RecibosVerdesDraft,
   type Role,
 } from '@tvde/shared';
 import { API_PATHS, apiFetch, getApiErrorMessage, getStoredToken } from '@/lib/api';
 import { withWorkspaceQuery } from '@/lib/workspace-query';
 import { useWorkspaceContext } from '@/hooks/use-workspace-context';
-import { Modal } from '@/components/modal';
 import { useConfirmDialog } from '@/hooks/use-confirm-dialog';
 import { AdminMgmtRecibosVerdesImport } from '@/components/admin-mgmt/admin-mgmt-recibos-verdes-import';
 import { AdminMgmtRecibosVerdesDraft } from '@/components/admin-mgmt/admin-mgmt-recibos-verdes-draft';
 import { PortalConnectionPanel } from '@/components/portal/portal-connection-panel';
+import {
+  loadRecibosVerdesLocalDocs,
+  upsertRecibosVerdesLocalDoc,
+  type RecibosVerdesLocalDoc,
+} from '@/lib/recibos-verdes-local';
+import { downloadRecibosVerdesDraftPdf } from '@/lib/recibos-verdes-draft-pdf';
 
 type ReciboVerdeRow = {
   id: string;
@@ -26,10 +32,6 @@ type ReciboVerdeRow = {
   dataEmissao: string;
   descricaoServico: string | null;
   valorBruto: string | null;
-  taxaRetencaoIrs: string | null;
-  valorRetencaoIrs: string | null;
-  isentoSs: boolean;
-  valorSs: string | null;
   valorLiquido: string | null;
   clienteAssociado: string | null;
 };
@@ -43,27 +45,30 @@ type FaturaImportada = {
   valorTotal: string;
   estadoPagamento: string;
   tipoDocumento: string;
+  descricaoResumo: string | null;
 };
 
-const EMPTY_FORM = {
-  prestadorNome: '',
-  prestadorNif: '',
-  numeroRecibo: '',
-  dataEmissao: '',
-  descricaoServico: '',
-  valorBruto: '',
-  taxaRetencaoIrs: '',
-  valorRetencaoIrs: '',
-  isentoSs: false,
-  valorSs: '',
-  valorLiquido: '',
-  clienteAssociado: '',
+type ListItem = {
+  key: string;
+  source: 'local' | 'importado' | 'manual';
+  referencia: string;
+  tipoDocumento: string;
+  clienteNome: string;
+  situacao: 'emitido' | 'pago' | 'pendente' | 'rascunho';
+  dataPrestacao: string;
+  totalLabel: string;
+  draft?: RecibosVerdesDraft;
+  faturaId?: string;
+  localDoc?: RecibosVerdesLocalDoc;
+  emailHint?: string;
 };
 
-function formatDatePt(value: string | null): string {
+const PAGE_SIZE = 10;
+const AT_BLUE = '#0073bb';
+
+function formatDateIso(value: string | null): string {
   if (!value) return '—';
-  const [y, m, d] = value.split('-');
-  return d && m && y ? `${d}/${m}/${y}` : value;
+  return value.slice(0, 10);
 }
 
 export function AdminMgmtRecibosVerdesPanel() {
@@ -72,15 +77,23 @@ export function AdminMgmtRecibosVerdesPanel() {
   const [role, setRole] = useState<Role | null>(null);
   const [rows, setRows] = useState<ReciboVerdeRow[]>([]);
   const [importados, setImportados] = useState<FaturaImportada[]>([]);
+  const [localDocs, setLocalDocs] = useState<RecibosVerdesLocalDoc[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const [reuseSeed, setReuseSeed] = useState<RecibosVerdesDraft | null>(null);
+  const [draftKey, setDraftKey] = useState(0);
+  const [openMenu, setOpenMenu] = useState<string | null>(null);
+
+  function refreshLocal() {
+    if (!workspaceId) return;
+    setLocalDocs(loadRecibosVerdesLocalDocs(workspaceId));
+  }
 
   function load() {
     if (!workspaceId) return;
     setLoading(true);
+    refreshLocal();
     Promise.all([
       apiFetch<ReciboVerdeRow[]>(
         withWorkspaceQuery(API_PATHS.adminMgmt.recibosVerdes, workspaceId),
@@ -114,53 +127,111 @@ export function AdminMgmtRecibosVerdesPanel() {
 
   const canConnectPortal = role ? hasMinRole(role, 'superadmin') : false;
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    if (!workspaceId) return;
-    setSaving(true);
-    setError('');
-    const res = await apiFetch(
-      API_PATHS.adminMgmt.recibosVerdes,
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId,
-          ...form,
-          prestadorNome: form.prestadorNome.trim(),
-          prestadorNif: form.prestadorNif.trim() || null,
-          numeroRecibo: form.numeroRecibo.trim() || null,
-          descricaoServico: form.descricaoServico.trim() || null,
-          clienteAssociado: form.clienteAssociado.trim() || null,
-        }),
-      },
-      getStoredToken()
+  const listItems = useMemo<ListItem[]>(() => {
+    const local: ListItem[] = localDocs.map((d) => ({
+      key: `local-${d.id}`,
+      source: 'local',
+      referencia: d.referencia,
+      tipoDocumento: d.tipoDocumento,
+      clienteNome: d.clienteNome || '—',
+      situacao: d.situacao === 'pago' ? 'pago' : d.situacao === 'rascunho' ? 'rascunho' : 'emitido',
+      dataPrestacao: d.dataPrestacao,
+      totalLabel: `${formatPtMoney(d.total)} €`,
+      draft: d.draft,
+      localDoc: d,
+    }));
+
+    const imported: ListItem[] = importados.map((f) => ({
+      key: `imp-${f.id}`,
+      source: 'importado',
+      referencia: f.numero,
+      tipoDocumento: 'FATURA-RECIBO',
+      clienteNome: f.clienteNome,
+      situacao: f.estadoPagamento === 'pago' ? 'pago' : 'emitido',
+      dataPrestacao: f.dataEmissao,
+      totalLabel: formatAdminMgmtMoney(f.valorTotal) ?? '—',
+      faturaId: f.id,
+      emailHint: undefined,
+    }));
+
+    const manual: ListItem[] = rows.map((r) => ({
+      key: `man-${r.id}`,
+      source: 'manual',
+      referencia: r.numeroRecibo || r.id.slice(0, 8),
+      tipoDocumento: 'RECIBO VERDE',
+      clienteNome: r.clienteAssociado || '—',
+      situacao: 'emitido',
+      dataPrestacao: r.dataEmissao,
+      totalLabel: formatAdminMgmtMoney(r.valorLiquido ?? r.valorBruto) ?? '—',
+    }));
+
+    return [...local, ...imported, ...manual].sort((a, b) =>
+      formatDateIso(b.dataPrestacao).localeCompare(formatDateIso(a.dataPrestacao))
     );
-    setSaving(false);
-    if (res.success) {
-      setModalOpen(false);
-      setForm(EMPTY_FORM);
-      load();
-    } else {
-      setError(getApiErrorMessage(res));
+  }, [localDocs, importados, rows]);
+
+  const totalPages = Math.max(1, Math.ceil(listItems.length / PAGE_SIZE));
+  const pageItems = listItems.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
+
+  async function markPago(item: ListItem) {
+    if (!workspaceId) return;
+    if (item.source === 'importado' && item.faturaId) {
+      const ok = await confirm({
+        title: 'Marcar como pago',
+        message: `Marcar ${item.referencia} como pago?`,
+        confirmLabel: 'Pago',
+      });
+      if (!ok) return;
+      const res = await apiFetch(
+        API_PATHS.adminMgmt.faturaMarkPaid(item.faturaId),
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId,
+            dataPagamento: new Date().toISOString().slice(0, 10),
+            metodoPagamento: 'transferencia',
+          }),
+        },
+        getStoredToken()
+      );
+      if (res.success) load();
+      else setError(getApiErrorMessage(res));
+      return;
+    }
+    if (item.source === 'local' && item.localDoc) {
+      upsertRecibosVerdesLocalDoc(workspaceId, { ...item.localDoc, situacao: 'pago' });
+      refreshLocal();
     }
   }
 
-  async function remove(row: ReciboVerdeRow) {
-    if (!workspaceId) return;
-    const ok = await confirm({
-      title: 'Eliminar recibo verde',
-      message: `Eliminar o recibo ${row.numeroRecibo || row.prestadorNome}?`,
-      confirmLabel: 'Eliminar',
-      variant: 'danger',
-    });
-    if (!ok) return;
-    const res = await apiFetch(
-      withWorkspaceQuery(API_PATHS.adminMgmt.reciboVerdeById(row.id), workspaceId),
-      { method: 'DELETE' },
-      getStoredToken()
+  async function imprimir(item: ListItem) {
+    if (item.draft) {
+      await downloadRecibosVerdesDraftPdf(item.draft);
+      return;
+    }
+    setError('Impressão disponível para rascunhos locais (Emitir PDF).');
+  }
+
+  function reutilizar(item: ListItem) {
+    if (item.draft) {
+      setReuseSeed(structuredClone(item.draft));
+      setDraftKey((k) => k + 1);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setError('Reutilizar disponível para documentos gerados neste rascunho.');
+  }
+
+  function emailDoc(item: ListItem) {
+    const subject = encodeURIComponent(`${item.tipoDocumento} ${item.referencia}`);
+    const body = encodeURIComponent(
+      `Segue o documento ${item.referencia} (${item.tipoDocumento}) — total ${item.totalLabel}.`
     );
-    if (res.success) load();
-    else setError(getApiErrorMessage(res));
+    window.location.href = `mailto:?subject=${subject}&body=${body}`;
   }
 
   if (!workspaceId) {
@@ -173,26 +244,21 @@ export function AdminMgmtRecibosVerdesPanel() {
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-slate-900">Recibos Verdes</h2>
-          <div className="flex flex-wrap items-center gap-2">
-            <AdminMgmtRecibosVerdesImport
-              workspaceId={workspaceId}
-              onImported={() => load()}
-              onError={setError}
-            />
-            <button
-              type="button"
-              className="btn-primary inline-flex items-center gap-2 text-sm"
-              onClick={() => setModalOpen(true)}
-            >
-              <Plus size={14} />
-              Novo recibo
-            </button>
-          </div>
+          <AdminMgmtRecibosVerdesImport
+            workspaceId={workspaceId}
+            onImported={() => load()}
+            onError={setError}
+          />
         </div>
 
         {canConnectPortal ? <PortalConnectionPanel portal="recibos_verdes" /> : null}
 
-        <AdminMgmtRecibosVerdesDraft />
+        <AdminMgmtRecibosVerdesDraft
+          key={draftKey}
+          workspaceId={workspaceId}
+          initialDraft={reuseSeed}
+          onLocalDocsChange={refreshLocal}
+        />
 
         <a
           href={PORTAL_DAS_FINANCAS_EMITIR_URL}
@@ -203,9 +269,7 @@ export function AdminMgmtRecibosVerdesPanel() {
           <div>
             <p className="text-sm font-medium text-slate-900">Página Emitir (AT)</p>
             <p className="mt-0.5 text-sm text-slate-500">
-              Abre Faturas e Recibos → Emitir. Conta ligada = sessão guardada. Fluxo TVDE (fatura
-              real): Fatura-Recibo → data → Motivo «Pagamento dos bens ou dos serviços» → ADICIONAR
-              (Serviço / Outro / IVA 0% Art.53.º) → Adquirente → EMITIR.
+              Abre Faturas e Recibos → Emitir. Conta ligada = sessão guardada.
             </p>
           </div>
           <span className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--color-primary)] px-3 py-1.5 text-sm font-medium text-white">
@@ -216,272 +280,170 @@ export function AdminMgmtRecibosVerdesPanel() {
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-        {loading ? (
-          <p className="text-sm text-slate-500">A carregar…</p>
-        ) : (
-          <>
-            {importados.length > 0 ? (
-              <div className="space-y-2">
-                <h3 className="text-sm font-medium text-slate-700">Importados da AT</h3>
-                <div className="overflow-x-auto rounded-lg border border-slate-100">
-                  <table className="w-full min-w-[640px] text-sm">
+        <div className="overflow-hidden border bg-white" style={{ borderColor: '#d0d0d0' }}>
+          <div
+            className="px-3 py-2 text-[14px] font-bold text-white"
+            style={{ backgroundColor: AT_BLUE }}
+          >
+            Documentos emitidos / importados
+          </div>
+          <div className="p-3">
+            {loading ? (
+              <p className="text-sm text-slate-500">A carregar…</p>
+            ) : listItems.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                Ainda sem documentos. Gere um rascunho (Emitir PDF) ou importe o CSV da AT.
+              </p>
+            ) : (
+              <>
+                <div className="mb-2 flex items-center justify-between gap-2 text-[12px] text-slate-500">
+                  <span>
+                    {listItems.length} documento(s) · página {page}/{totalPages}
+                  </span>
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      className="rounded border px-2 py-0.5 disabled:opacity-40"
+                      disabled={page <= 1}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded border px-2 py-0.5 disabled:opacity-40"
+                      disabled={page >= totalPages}
+                      onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                    >
+                      Seguinte
+                    </button>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[720px] text-[13px]">
                     <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50 text-left text-slate-500">
-                        <th className="px-3 py-2 font-medium">Referência</th>
-                        <th className="px-3 py-2 font-medium">Cliente</th>
-                        <th className="px-3 py-2 font-medium">Emissão</th>
-                        <th className="px-3 py-2 font-medium">Total</th>
-                        <th className="px-3 py-2 font-medium">Estado</th>
+                      <tr className="text-left text-[#777]">
+                        <th className="pb-2 font-medium">Referência</th>
+                        <th className="pb-2 font-medium">Situação</th>
+                        <th className="pb-2 font-medium">Data de Prestação</th>
+                        <th className="pb-2 text-right font-medium">Total c/ Impostos</th>
+                        <th className="pb-2 text-right font-medium">Ações</th>
+                      </tr>
+                      <tr>
+                        <td colSpan={5} className="h-px" style={{ backgroundColor: AT_BLUE }} />
                       </tr>
                     </thead>
                     <tbody>
-                      {importados.map((f) => (
-                        <tr key={f.id} className="border-b border-slate-50">
-                          <td className="px-3 py-2 font-mono text-xs text-slate-800">{f.numero}</td>
-                          <td className="px-3 py-2">
-                            <p>{f.clienteNome}</p>
-                            {f.clienteNif ? (
-                              <p className="text-xs text-slate-400">NIF {f.clienteNif}</p>
-                            ) : null}
+                      {pageItems.map((item) => (
+                        <tr key={item.key} className="border-b border-slate-100">
+                          <td className="py-3 pr-2 align-top">
+                            <p className="font-bold" style={{ color: AT_BLUE }}>
+                              {item.referencia}
+                            </p>
+                            <p className="font-bold uppercase text-[#333]">{item.tipoDocumento}</p>
+                            <p className="text-[#333]">{item.clienteNome}</p>
                           </td>
-                          <td className="px-3 py-2 whitespace-nowrap">{formatDatePt(f.dataEmissao)}</td>
-                          <td className="px-3 py-2 tabular-nums">
-                            {formatAdminMgmtMoney(f.valorTotal) ?? '—'}
-                          </td>
-                          <td className="px-3 py-2">
+                          <td className="py-3 pr-2 align-top">
                             <span
-                              className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
-                                f.estadoPagamento === 'pago'
-                                  ? 'bg-green-100 text-green-800'
-                                  : 'bg-amber-100 text-amber-800'
+                              className={`inline-flex rounded px-2 py-0.5 text-[11px] font-bold uppercase ${
+                                item.situacao === 'pago'
+                                  ? 'border border-green-500 text-green-700'
+                                  : item.situacao === 'rascunho'
+                                    ? 'border border-amber-400 text-amber-700'
+                                    : 'border border-green-500 text-green-700'
                               }`}
                             >
-                              {getAdminMgmtFaturaPagamentoLabel(f.estadoPagamento)}
+                              {item.situacao === 'pago'
+                                ? 'Pago'
+                                : item.situacao === 'rascunho'
+                                  ? 'Rascunho'
+                                  : 'Emitido'}
                             </span>
                           </td>
+                          <td className="py-3 pr-2 align-top whitespace-nowrap">
+                            {formatDateIso(item.dataPrestacao)}
+                          </td>
+                          <td className="py-3 pr-2 align-top text-right tabular-nums">
+                            {item.totalLabel}
+                          </td>
+                          <td className="relative py-3 align-top text-right">
+                            <div className="inline-flex overflow-hidden rounded border bg-[#f7f7f7]" style={{ borderColor: '#ccc' }}>
+                              <button
+                                type="button"
+                                className="px-3 py-1 text-[12px] font-semibold uppercase"
+                                onClick={() => setOpenMenu(openMenu === item.key ? null : item.key)}
+                              >
+                                Ver
+                              </button>
+                              <button
+                                type="button"
+                                className="border-l px-1.5 py-1"
+                                style={{ borderColor: '#ccc' }}
+                                onClick={() => setOpenMenu(openMenu === item.key ? null : item.key)}
+                              >
+                                <ChevronDown size={14} />
+                              </button>
+                            </div>
+                            {openMenu === item.key ? (
+                              <div
+                                className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded border bg-white text-left shadow-lg"
+                                style={{ borderColor: '#ccc' }}
+                              >
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-[12px] hover:bg-slate-50"
+                                  onClick={() => {
+                                    setOpenMenu(null);
+                                    reutilizar(item);
+                                  }}
+                                >
+                                  <RefreshCw size={12} /> Reutilizar
+                                </button>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-[12px] hover:bg-slate-50"
+                                  onClick={() => {
+                                    setOpenMenu(null);
+                                    emailDoc(item);
+                                  }}
+                                >
+                                  <Mail size={12} /> Email
+                                </button>
+                                <button
+                                  type="button"
+                                  className="flex w-full items-center gap-2 px-3 py-2 text-[12px] hover:bg-slate-50"
+                                  onClick={() => {
+                                    setOpenMenu(null);
+                                    void imprimir(item);
+                                  }}
+                                >
+                                  <Printer size={12} /> Imprimir
+                                </button>
+                                {item.situacao !== 'pago' ? (
+                                  <button
+                                    type="button"
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-[12px] hover:bg-slate-50"
+                                    onClick={() => {
+                                      setOpenMenu(null);
+                                      void markPago(item);
+                                    }}
+                                  >
+                                    <CheckCircle2 size={12} /> Pago
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-              </div>
-            ) : null}
-
-            <div className="space-y-2">
-              {importados.length > 0 ? (
-                <h3 className="text-sm font-medium text-slate-700">Registos manuais</h3>
-              ) : null}
-              {rows.length === 0 ? (
-                <p className="text-sm text-slate-500">
-                  {importados.length > 0
-                    ? 'Sem registos manuais.'
-                    : 'Ainda sem recibos verdes neste workspace. Abra o Portal das Finanças, emita ou exporte, e importe o CSV — ou adicione um recibo manualmente.'}
-                </p>
-              ) : (
-                <div className="overflow-x-auto rounded-lg border border-slate-100">
-                  <table className="w-full min-w-[720px] text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-100 bg-slate-50 text-left text-slate-500">
-                        <th className="px-3 py-2 font-medium">N.º / Prestador</th>
-                        <th className="px-3 py-2 font-medium">Emissão</th>
-                        <th className="px-3 py-2 font-medium">Cliente</th>
-                        <th className="px-3 py-2 font-medium">Bruto</th>
-                        <th className="px-3 py-2 font-medium">Líquido</th>
-                        <th className="px-3 py-2 text-right font-medium">Acções</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((row) => (
-                        <tr key={row.id} className="border-b border-slate-50">
-                          <td className="px-3 py-2">
-                            <p className="font-medium text-slate-900">
-                              {row.numeroRecibo || 'Sem número'}
-                            </p>
-                            <p className="text-xs text-slate-500">
-                              {row.prestadorNome}
-                              {row.prestadorNif ? ` · NIF ${row.prestadorNif}` : ''}
-                            </p>
-                          </td>
-                          <td className="px-3 py-2 whitespace-nowrap text-slate-600">
-                            {formatDatePt(row.dataEmissao)}
-                          </td>
-                          <td className="px-3 py-2 text-slate-600">
-                            {row.clienteAssociado || '—'}
-                          </td>
-                          <td className="px-3 py-2 tabular-nums">
-                            {formatAdminMgmtMoney(row.valorBruto) ?? '—'}
-                          </td>
-                          <td className="px-3 py-2 tabular-nums">
-                            {formatAdminMgmtMoney(row.valorLiquido) ?? '—'}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <button
-                              type="button"
-                              className="rounded-lg p-1.5 text-red-600 hover:bg-red-50"
-                              title="Eliminar"
-                              onClick={() => void remove(row)}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-          </>
-        )}
+              </>
+            )}
+          </div>
+        </div>
       </div>
-
-      <Modal
-        open={modalOpen}
-        onClose={() => {
-          if (saving) return;
-          setModalOpen(false);
-          setForm(EMPTY_FORM);
-        }}
-        title="Novo recibo verde"
-        panelClassName="max-w-lg"
-      >
-        <form className="space-y-3" onSubmit={(e) => void submit(e)}>
-          <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Prestador</span>
-            <input
-              className="input w-full"
-              required
-              value={form.prestadorNome}
-              onChange={(e) => setForm((f) => ({ ...f, prestadorNome: e.target.value }))}
-            />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">NIF prestador</span>
-              <input
-                className="input w-full"
-                value={form.prestadorNif}
-                onChange={(e) => setForm((f) => ({ ...f, prestadorNif: e.target.value }))}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">N.º recibo</span>
-              <input
-                className="input w-full"
-                value={form.numeroRecibo}
-                onChange={(e) => setForm((f) => ({ ...f, numeroRecibo: e.target.value }))}
-              />
-            </label>
-          </div>
-          <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Data de emissão</span>
-            <input
-              type="date"
-              className="input w-full"
-              required
-              value={form.dataEmissao}
-              onChange={(e) => setForm((f) => ({ ...f, dataEmissao: e.target.value }))}
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Cliente associado</span>
-            <input
-              className="input w-full"
-              value={form.clienteAssociado}
-              onChange={(e) => setForm((f) => ({ ...f, clienteAssociado: e.target.value }))}
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-slate-600">Descrição do serviço</span>
-            <textarea
-              className="input w-full"
-              rows={2}
-              value={form.descricaoServico}
-              onChange={(e) => setForm((f) => ({ ...f, descricaoServico: e.target.value }))}
-            />
-          </label>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">Valor bruto (€)</span>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                className="input w-full"
-                value={form.valorBruto}
-                onChange={(e) => setForm((f) => ({ ...f, valorBruto: e.target.value }))}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">Valor líquido (€)</span>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                className="input w-full"
-                value={form.valorLiquido}
-                onChange={(e) => setForm((f) => ({ ...f, valorLiquido: e.target.value }))}
-              />
-            </label>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">Retenção IRS (€)</span>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                className="input w-full"
-                value={form.valorRetencaoIrs}
-                onChange={(e) => setForm((f) => ({ ...f, valorRetencaoIrs: e.target.value }))}
-              />
-            </label>
-            <label className="block text-sm">
-              <span className="mb-1 block text-slate-600">Segurança Social (€)</span>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                className="input w-full"
-                disabled={form.isentoSs}
-                value={form.valorSs}
-                onChange={(e) => setForm((f) => ({ ...f, valorSs: e.target.value }))}
-              />
-            </label>
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="rounded border-slate-300"
-              checked={form.isentoSs}
-              onChange={(e) =>
-                setForm((f) => ({
-                  ...f,
-                  isentoSs: e.target.checked,
-                  valorSs: e.target.checked ? '' : f.valorSs,
-                }))
-              }
-            />
-            Isento de Segurança Social
-          </label>
-          <div className="flex justify-end gap-2 border-t border-slate-100 pt-3">
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={saving}
-              onClick={() => {
-                setModalOpen(false);
-                setForm(EMPTY_FORM);
-              }}
-            >
-              Cancelar
-            </button>
-            <button type="submit" className="btn-primary" disabled={saving}>
-              {saving ? 'A gravar…' : 'Gravar'}
-            </button>
-          </div>
-        </form>
-      </Modal>
     </>
   );
 }

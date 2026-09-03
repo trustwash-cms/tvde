@@ -1,4 +1,5 @@
 import {
+  formatAdquirenteMoradaCompleta,
   formatPtMoney,
   summarizeRecibosVerdesDraft,
   type RecibosVerdesDraft,
@@ -15,8 +16,8 @@ function money(value: number): string {
 }
 
 /**
- * PDF rascunho à semelhança da Fatura-Recibo AT (layout simplificado).
- * Não é documento fiscal — só para alinhar campos antes do Playwright na AT.
+ * PDF rascunho à semelhança da Fatura-Recibo AT.
+ * Sem nº de documento nem data de emissão (gerados só na AT).
  */
 export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   const { default: jsPDF } = await import('jspdf');
@@ -32,7 +33,6 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   const green: [number, number, number] = [34, 120, 80];
   const slate: [number, number, number] = [51, 65, 85];
 
-  // Cabeçalho
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   doc.setTextColor(...slate);
@@ -43,20 +43,15 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   doc.text(`${draft.tipoDocumento}`, pageW / 2, y, { align: 'center' });
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text(`<${draft.numeroDocumento}>`, pageW / 2, y + 6, { align: 'center' });
-  doc.text(`emitida em ${formatDatePt(draft.dataEmissao)}`, pageW / 2, y + 11, { align: 'center' });
-  doc.setFont('helvetica', 'bold');
-  doc.text('RASCUNHO (não fiscal)', pageW / 2, y + 16, { align: 'center' });
-
-  // ATCUD + QR placeholder
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8);
-  doc.text(`ATCUD: ${draft.atcud}`, pageW - margin, y, { align: 'right' });
-  doc.setDrawColor(...slate);
-  doc.rect(pageW - margin - 22, y + 3, 22, 22);
-  doc.setFontSize(7);
-  doc.text('QR', pageW - margin - 11, y + 15, { align: 'center' });
-  y += 28;
+  doc.text('RASCUNHO (não fiscal — nº e data de emissão na AT)', pageW / 2, y + 7, {
+    align: 'center',
+  });
+  if (draft.dataPrestacao) {
+    doc.text(`Data de prestação: ${formatDatePt(draft.dataPrestacao)}`, pageW / 2, y + 13, {
+      align: 'center',
+    });
+  }
+  y += 22;
 
   const section = (title: string) => {
     doc.setDrawColor(...green);
@@ -91,32 +86,27 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
 
   section('DADOS DO ADQUIRENTE');
   kv('NOME', draft.adquirenteNome);
-  kv('SEDE OU DOMICÍLIO', draft.adquirenteMorada);
+  kv('SEDE OU DOMICÍLIO', formatAdquirenteMoradaCompleta(draft));
   kv('NÚMERO DE IDENTIFICAÇÃO FISCAL', draft.adquirenteNif);
 
   section('DADOS DA TRANSMISSÃO DE BENS OU DA PRESTAÇÃO DE SERVIÇOS');
   doc.setFontSize(8);
-  doc.text(
-    `Documento emitido a título de: ${draft.motivoEmissao}`,
-    margin,
-    y
-  );
+  doc.text(`Documento emitido a título de: ${draft.motivoEmissao}`, margin, y);
   y += 4;
   doc.text(`Data de prestação: ${formatDatePt(draft.dataPrestacao)}`, margin, y);
   y += 6;
 
   const body = draft.linhas.map((linha) => {
     const q = Number(String(linha.quantidade).replace(',', '.')) || 1;
-    const unit = Number(
-      String(linha.precoUnitarioSemIva).replace(/\./g, '').replace(',', '.')
-    ) || 0;
+    const unit =
+      Number(String(linha.precoUnitarioSemIva).replace(/\./g, '').replace(',', '.')) || 0;
     const total = q * unit;
     return [
-      linha.descricao,
+      [linha.referencia, linha.descricao].filter(Boolean).join(' - ') || linha.descricao,
       `${linha.quantidade} ${linha.unidade}`.trim(),
       money(unit),
       linha.desconto?.trim() ? linha.desconto : '-',
-      `IVA ${linha.taxaIva} a)`,
+      `IVA ${linha.taxaIva.startsWith('0') ? '0%' : linha.taxaIva.split(' ')[0]} a)`,
       money(total),
     ];
   });
@@ -141,26 +131,37 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 8;
 
   section('IVA');
-  doc.setFontSize(8);
-  const motivo =
-    draft.linhas[0]?.motivoIsencao ||
-    'IVA - Regime de isenção - Artigo 53.º n.º 1 do CIVA';
-  doc.text(`0,00% - a) ${motivo}`, margin, y);
-  y += 4;
-  doc.text(`Valor tributável: ${money(totals.valorIliquido)}`, margin, y);
-  y += 4;
-  doc.text(`Valor IVA: ${money(totals.valorIva)}`, margin, y);
-  y += 7;
+  for (const row of totals.porTaxa) {
+    const motivo = row.motivo ? ` - a) ${row.motivo}` : '';
+    doc.setFontSize(8);
+    doc.text(`${row.taxa}${motivo}`, margin, y);
+    y += 4;
+    doc.text(`Valor tributável: ${money(row.valorTributavel)}`, margin, y);
+    y += 4;
+    doc.text(`Valor IVA: ${money(row.valorIva)}`, margin, y);
+    y += 6;
+  }
 
-  section('IRS');
-  doc.text(`Base de incidência: ${draft.baseIncidenciaIrs}`, margin, y);
-  y += 4;
-  doc.text('Retenção na fonte IRS: ---', margin, y);
-  y += 4;
-  doc.text(`Rendimento: ${money(totals.valorIliquido)}`, margin, y);
-  y += 4;
-  doc.text('Valor IRS: 0,00 €', margin, y);
-  y += 8;
+  if (draft.baseIncidenciaIrs) {
+    section('IRS');
+    doc.text(`Base de incidência: ${draft.baseIncidenciaIrs}`, margin, y);
+    y += 4;
+    doc.text(
+      `Retenção na fonte IRS: ${draft.retencaoFonteIrs || '---'}`,
+      margin,
+      y
+    );
+    y += 4;
+    doc.text(`Rendimento: ${money(totals.valorIliquido)}`, margin, y);
+    y += 8;
+  }
+
+  if (draft.observacoes?.trim()) {
+    section('OBSERVAÇÕES');
+    const obs = doc.splitTextToSize(draft.observacoes, pageW - margin * 2);
+    doc.text(obs, margin, y);
+    y += obs.length * 4 + 4;
+  }
 
   section('TOTAIS DO DOCUMENTO');
   const totalsBlock = [
@@ -168,7 +169,6 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
     ['IVA', money(totals.valorIva)],
     ['Imposto do Selo', '0,00 €'],
     ['TOTAL DO DOCUMENTO', money(totals.totalDocumento)],
-    ['Retenção na fonte IRS', '0,00 €'],
     ['TOTAL A PAGAR', money(totals.totalPagar)],
   ];
   for (const [label, value] of totalsBlock) {
@@ -188,7 +188,6 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
     y,
     { align: 'center' }
   );
-  doc.text(`ATCUD: ${draft.atcud} · Página 1 de 1`, pageW / 2, y + 4, { align: 'center' });
 
   const stamp = new Date().toISOString().slice(0, 10);
   doc.save(`rascunho-fatura-recibo-${stamp}.pdf`);
