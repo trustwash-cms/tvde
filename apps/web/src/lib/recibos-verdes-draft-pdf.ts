@@ -85,10 +85,14 @@ export async function downloadRecibosVerdesDraftPdf(draft: RecibosVerdesDraft) {
   y += 8;
 
   section('Transmitente');
-  kv('NIF', draft.transmitenteNif);
-  kv('Nome', draft.transmitenteNome);
-  kv('Domicílio fiscal / Estabelecimento estável', draft.transmitenteMorada);
-  kv('Atividade exercida', draft.transmitenteAtividade || '—');
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(9);
+  doc.text(
+    'Conta autenticada no Portal das Finanças (login) — preenchido automaticamente na AT.',
+    margin,
+    y
+  );
+  y += 8;
 
   section('Adquirente');
   kv('País', draft.adquirentePais.toUpperCase());

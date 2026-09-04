@@ -35,15 +35,18 @@ import {
   type RecibosVerdesDraft,
   type RecibosVerdesDraftLinha,
 } from '@tvde/shared';
-import { downloadRecibosVerdesDraftPdf } from '@/lib/recibos-verdes-draft-pdf';
+import { API_PATHS, apiFetch, getStoredToken } from '@/lib/api';
+import { withWorkspaceQuery } from '@/lib/workspace-query';
 import {
+  findAdquirenteLocal,
   loadRecibosVerdesCatalog,
-  loadTransmitenteLocal,
-  saveTransmitenteLocal,
+  parseMoradaPt,
+  upsertAdquirenteLocal,
   upsertRecibosVerdesCatalogItem,
   upsertRecibosVerdesLocalDoc,
   type RecibosVerdesLocalDoc,
 } from '@/lib/recibos-verdes-local';
+import { downloadRecibosVerdesDraftPdf } from '@/lib/recibos-verdes-draft-pdf';
 
 const AT_BLUE = '#0073bb';
 const AT_BORDER = '#d0d0d0';
@@ -188,24 +191,15 @@ export function AdminMgmtRecibosVerdesDraft({
   const [catalog, setCatalog] = useState<RecibosVerdesCatalogItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [nifLookupMsg, setNifLookupMsg] = useState('');
+  const [nifLookingUp, setNifLookingUp] = useState(false);
   const [modalLinha, setModalLinha] = useState<RecibosVerdesDraftLinha | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saveToCatalog, setSaveToCatalog] = useState(true);
 
   useEffect(() => {
     setCatalog(loadRecibosVerdesCatalog(workspaceId));
-    if (initialDraft) return;
-    const saved = loadTransmitenteLocal(workspaceId);
-    if (saved) {
-      setDraft((prev) => ({
-        ...prev,
-        transmitenteNome: prev.transmitenteNome || saved.nome,
-        transmitenteNif: prev.transmitenteNif || saved.nif,
-        transmitenteMorada: prev.transmitenteMorada || saved.morada,
-        transmitenteAtividade: prev.transmitenteAtividade || saved.atividade,
-      }));
-    }
-  }, [workspaceId, initialDraft]);
+  }, [workspaceId]);
 
   const totals = useMemo(() => summarizeRecibosVerdesDraft(draft), [draft]);
   const showIrs = draftShowsIrsSection(draft);
@@ -215,13 +209,81 @@ export function AdminMgmtRecibosVerdesDraft({
     setDraft((prev) => ({ ...prev, [key]: value }));
   }
 
-  function persistTransmitente(next: RecibosVerdesDraft) {
-    saveTransmitenteLocal(workspaceId, {
-      nome: next.transmitenteNome,
-      nif: next.transmitenteNif,
-      morada: next.transmitenteMorada,
-      atividade: next.transmitenteAtividade,
-    });
+  function applyAdquirente(data: {
+    nif: string;
+    nome: string;
+    pais?: string;
+    morada?: string;
+    codigoPostal?: string;
+    localidade?: string;
+  }) {
+    const parsed = parseMoradaPt(data.morada || '');
+    setDraft((prev) => ({
+      ...prev,
+      adquirenteNif: data.nif.replace(/\D/g, ''),
+      adquirenteNome: data.nome || prev.adquirenteNome,
+      adquirentePais: data.pais || prev.adquirentePais || 'Portugal',
+      adquirenteMorada: parsed.morada || data.morada || prev.adquirenteMorada,
+      adquirenteCodigoPostal:
+        data.codigoPostal || parsed.codigoPostal || prev.adquirenteCodigoPostal,
+      adquirenteLocalidade:
+        data.localidade || parsed.localidade || prev.adquirenteLocalidade,
+    }));
+  }
+
+  async function procurarAdquirentePorNif(nifRaw?: string) {
+    const nif = (nifRaw ?? draft.adquirenteNif).replace(/\D/g, '');
+    if (nif.length < 9) {
+      setNifLookupMsg('Introduza um NIF com 9 dígitos.');
+      return;
+    }
+    setNifLookingUp(true);
+    setNifLookupMsg('');
+
+    const local = findAdquirenteLocal(workspaceId, nif);
+    if (local) {
+      applyAdquirente(local);
+      setNifLookingUp(false);
+      setNifLookupMsg('Dados preenchidos a partir de referência local. Pode alterar se estiverem incorrectos.');
+      return;
+    }
+
+    const res = await apiFetch<{
+      module: Array<{ nome: string; nif: string | null; morada: string | null }>;
+      crm: Array<{ nome: string; nif: string | null; morada: string | null }>;
+      billing: Array<{ nome: string; nif: string | null; morada: string | null }>;
+    }>(
+      withWorkspaceQuery(API_PATHS.adminMgmt.clienteLookup, workspaceId, { q: nif }),
+      {},
+      getStoredToken()
+    );
+    setNifLookingUp(false);
+
+    const hit =
+      res.data?.module.find((c) => (c.nif || '').replace(/\D/g, '') === nif) ||
+      res.data?.billing.find((c) => (c.nif || '').replace(/\D/g, '') === nif) ||
+      res.data?.crm.find((c) => (c.nif || '').replace(/\D/g, '') === nif) ||
+      res.data?.module[0] ||
+      res.data?.billing[0] ||
+      res.data?.crm[0];
+
+    if (hit) {
+      applyAdquirente({
+        nif,
+        nome: hit.nome,
+        morada: hit.morada || '',
+        pais: 'Portugal',
+      });
+      setNifLookupMsg(
+        'Dados preenchidos a partir dos clientes do workspace. Pode alterar se estiverem incorrectos.'
+      );
+      return;
+    }
+
+    setDraft((prev) => ({ ...prev, adquirenteNif: nif }));
+    setNifLookupMsg(
+      'NIF não encontrado localmente. Preencha os dados do cliente (como na AT após procurar).'
+    );
   }
 
   function openAddLinha() {
@@ -284,7 +346,16 @@ export function AdminMgmtRecibosVerdesDraft({
     setBusy(true);
     setError('');
     try {
-      persistTransmitente(draft);
+      if (draft.adquirenteNif.trim() && draft.adquirenteNome.trim()) {
+        upsertAdquirenteLocal(workspaceId, {
+          nif: draft.adquirenteNif,
+          nome: draft.adquirenteNome,
+          pais: draft.adquirentePais || 'Portugal',
+          morada: draft.adquirenteMorada,
+          codigoPostal: draft.adquirenteCodigoPostal,
+          localidade: draft.adquirenteLocalidade,
+        });
+      }
       await downloadRecibosVerdesDraftPdf(draft);
       const doc: RecibosVerdesLocalDoc = {
         id: `rv_${Date.now().toString(36)}`,
@@ -313,8 +384,8 @@ export function AdminMgmtRecibosVerdesDraft({
         className="border-b bg-[#fff8e6] px-4 py-2 text-[12px] text-[#7a5c00]"
         style={{ borderColor: '#f0e0a8' }}
       >
-        Rascunho local — não emite no Portal das Finanças. Transmitente = os seus dados; Adquirente =
-        cliente da fatura.
+        Rascunho local — não emite no Portal das Finanças. O transmitente é a conta AT ligada (login).
+        Preencha o Adquirente (cliente) — ao indicar o NIF, tentamos preencher o resto.
       </div>
 
       <div className="space-y-4 bg-white p-4 sm:p-5">
@@ -335,19 +406,8 @@ export function AdminMgmtRecibosVerdesDraft({
               className="rounded-[3px] border bg-white px-4 py-1.5 text-[13px] font-semibold uppercase tracking-wide text-[#444] hover:bg-[#f5f5f5]"
               style={{ borderColor: AT_BORDER }}
               onClick={() => {
-                const saved = loadTransmitenteLocal(workspaceId);
-                setDraft(
-                  createBlankRecibosVerdesDraft(
-                    saved
-                      ? {
-                          transmitenteNome: saved.nome,
-                          transmitenteNif: saved.nif,
-                          transmitenteMorada: saved.morada,
-                          transmitenteAtividade: saved.atividade,
-                        }
-                      : undefined
-                  )
-                );
+                setDraft(createBlankRecibosVerdesDraft());
+                setNifLookupMsg('');
                 setError('');
               }}
             >
@@ -406,57 +466,13 @@ export function AdminMgmtRecibosVerdesDraft({
           </div>
         </AtSection>
 
-        <AtSection title="Transmitente">
-          <p className="text-[12px] text-[#666]">
-            Os seus dados (login / prestador). Guardados localmente neste workspace.
-          </p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="NIF">
-              <AtInput
-                value={draft.transmitenteNif}
-                onChange={(e) => {
-                  const next = { ...draft, transmitenteNif: e.target.value };
-                  setDraft(next);
-                  persistTransmitente(next);
-                }}
-              />
-            </Field>
-            <Field label="Nome">
-              <AtInput
-                value={draft.transmitenteNome}
-                onChange={(e) => {
-                  const next = { ...draft, transmitenteNome: e.target.value };
-                  setDraft(next);
-                  persistTransmitente(next);
-                }}
-              />
-            </Field>
-          </div>
-          <Field label="Domicílio fiscal / Estabelecimento estável">
-            <AtInput
-              value={draft.transmitenteMorada}
-              onChange={(e) => {
-                const next = { ...draft, transmitenteMorada: e.target.value };
-                setDraft(next);
-                persistTransmitente(next);
-              }}
-            />
-          </Field>
-          <Field label="Atividade exercida">
-            <AtInput
-              value={draft.transmitenteAtividade}
-              onChange={(e) => {
-                const next = { ...draft, transmitenteAtividade: e.target.value };
-                setDraft(next);
-                persistTransmitente(next);
-              }}
-            />
-          </Field>
-        </AtSection>
-
         <AtSection title="Adquirente">
-          <p className="text-[12px] text-[#666]">Cliente a quem vai passar a fatura.</p>
-          <div className="grid gap-3 sm:grid-cols-[1fr_160px]">
+          <p className="text-[12px] text-[#666]">
+            Cliente a quem vai passar a fatura. Ao preencher o NIF (9 dígitos) ou clicar em Procurar,
+            os restantes campos são preenchidos automaticamente quando existirem — pode corrigir
+            depois.
+          </p>
+          <div className="grid gap-3 sm:grid-cols-[1fr_160px_auto]">
             <Field label="País" hint>
               <AtSelect
                 value={draft.adquirentePais}
@@ -470,10 +486,34 @@ export function AdminMgmtRecibosVerdesDraft({
             <Field label="NIF">
               <AtInput
                 value={draft.adquirenteNif}
-                onChange={(e) => update('adquirenteNif', e.target.value)}
+                inputMode="numeric"
+                maxLength={9}
+                onChange={(e) => {
+                  const nif = e.target.value.replace(/\D/g, '').slice(0, 9);
+                  update('adquirenteNif', nif);
+                  setNifLookupMsg('');
+                  if (nif.length === 9) void procurarAdquirentePorNif(nif);
+                }}
+                onBlur={() => {
+                  if (draft.adquirenteNif.replace(/\D/g, '').length === 9) {
+                    void procurarAdquirentePorNif();
+                  }
+                }}
               />
             </Field>
+            <div className="flex items-end">
+              <button
+                type="button"
+                disabled={nifLookingUp}
+                className="rounded-[3px] border bg-white px-4 py-1.5 text-[12px] font-semibold uppercase tracking-wide text-[#444] disabled:opacity-60"
+                style={{ borderColor: AT_BORDER }}
+                onClick={() => void procurarAdquirentePorNif()}
+              >
+                {nifLookingUp ? '…' : 'Procurar'}
+              </button>
+            </div>
           </div>
+          {nifLookupMsg ? <p className="text-[12px] text-[#555]">{nifLookupMsg}</p> : null}
           <Field label="Nome">
             <AtInput
               value={draft.adquirenteNome}
@@ -759,19 +799,8 @@ export function AdminMgmtRecibosVerdesDraft({
               <p className="font-bold" style={{ color: AT_BLUE }}>
                 Transmitente
               </p>
-              <p>
-                <span className="font-bold">NIF</span> {draft.transmitenteNif || '—'}
-              </p>
-              <p>
-                <span className="font-bold">Nome</span> {draft.transmitenteNome || '—'}
-              </p>
-              <p>
-                <span className="font-bold">Domicílio fiscal / Estabelecimento estável</span>{' '}
-                {draft.transmitenteMorada || '—'}
-              </p>
-              <p>
-                <span className="font-bold">Atividade exercida</span>{' '}
-                {draft.transmitenteAtividade || '—'}
+              <p className="text-[#666]">
+                Conta autenticada no Portal das Finanças (login) — não se edita no rascunho.
               </p>
             </div>
             <div>

@@ -1,7 +1,7 @@
 import type { RecibosVerdesCatalogItem, RecibosVerdesDraft } from '@tvde/shared';
 
 const CATALOG_PREFIX = 'tvde.rv.catalog.';
-const TRANSMITENTE_PREFIX = 'tvde.rv.transmitente.';
+const ADQUIRENTE_PREFIX = 'tvde.rv.adquirentes.';
 const LOCAL_DOCS_PREFIX = 'tvde.rv.local-docs.';
 
 function readJson<T>(key: string, fallback: T): T {
@@ -48,19 +48,60 @@ export function upsertRecibosVerdesCatalogItem(
   return next;
 }
 
-export type TransmitenteLocal = {
-  nome: string;
+export type AdquirenteLocal = {
   nif: string;
+  nome: string;
+  pais: string;
   morada: string;
-  atividade: string;
+  codigoPostal: string;
+  localidade: string;
+  updatedAt: string;
 };
 
-export function loadTransmitenteLocal(workspaceId: string): TransmitenteLocal | null {
-  return readJson<TransmitenteLocal | null>(`${TRANSMITENTE_PREFIX}${workspaceId}`, null);
+export function loadAdquirentesLocal(workspaceId: string): AdquirenteLocal[] {
+  return readJson(`${ADQUIRENTE_PREFIX}${workspaceId}`, []);
 }
 
-export function saveTransmitenteLocal(workspaceId: string, data: TransmitenteLocal) {
-  writeJson(`${TRANSMITENTE_PREFIX}${workspaceId}`, data);
+export function findAdquirenteLocal(
+  workspaceId: string,
+  nif: string
+): AdquirenteLocal | null {
+  const normalized = nif.replace(/\D/g, '');
+  if (!normalized) return null;
+  return (
+    loadAdquirentesLocal(workspaceId).find((a) => a.nif.replace(/\D/g, '') === normalized) ??
+    null
+  );
+}
+
+export function upsertAdquirenteLocal(
+  workspaceId: string,
+  item: Omit<AdquirenteLocal, 'updatedAt'>
+): AdquirenteLocal[] {
+  const list = loadAdquirentesLocal(workspaceId);
+  const nif = item.nif.replace(/\D/g, '');
+  const nextItem: AdquirenteLocal = { ...item, nif, updatedAt: new Date().toISOString() };
+  const idx = list.findIndex((a) => a.nif.replace(/\D/g, '') === nif);
+  const next = [...list];
+  if (idx >= 0) next[idx] = nextItem;
+  else next.unshift(nextItem);
+  writeJson(`${ADQUIRENTE_PREFIX}${workspaceId}`, next);
+  return next;
+}
+
+/** Tenta extrair CP e localidade de uma morada numa só linha. */
+export function parseMoradaPt(moradaRaw: string): {
+  morada: string;
+  codigoPostal: string;
+  localidade: string;
+} {
+  const morada = moradaRaw.trim();
+  if (!morada) return { morada: '', codigoPostal: '', localidade: '' };
+  const m = morada.match(/^(.*?)\s+(\d{4}-\d{3})\s+(.+)$/);
+  if (m) {
+    return { morada: m[1].trim(), codigoPostal: m[2], localidade: m[3].trim() };
+  }
+  return { morada, codigoPostal: '', localidade: '' };
 }
 
 export type RecibosVerdesLocalDoc = {
